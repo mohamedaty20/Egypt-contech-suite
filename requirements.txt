@@ -1,5 +1,13 @@
 nicegui
 fastapi
 uvicorn
-requests
+pandas
+numpy
+openpyxl
+plotly
+matplotlib
+qrcode
+pypdf
+reportlab
 python-dotenv
+google-genai
