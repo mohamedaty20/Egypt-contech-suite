@@ -204,15 +204,18 @@ def main_page():
         engineer_input = ui.input(label='Engineer Name', value='Eng. Mohamed Abd Al Aty').classes('w-full mb-2')
         
         logo_status = ui.label('Logo: Not uploaded').classes('text-xs text-amber-400 mb-1')
-        logo_upload = ui.upload(label='Upload Company Logo', auto_upload=False).props('flat dark').classes('w-full mb-2')
         logo_bytes_holder = {'bytes': None}
-        def process_logo():
-            if logo_upload.files:
-                logo_bytes_holder['bytes'] = logo_upload.files[0].read()
-                logo_status.set_text(f'✅ Logo Loaded: {logo_upload.files[0].name}')
+        
+        def handle_logo_upload(e):
+            try:
+                logo_bytes_holder['bytes'] = e.content.read()
+                logo_status.set_text(f'✅ Logo Loaded: {e.name}')
                 logo_status.classes(replace='text-xs text-emerald-400 mb-1')
                 ui.notify('Company logo loaded successfully!', type='positive')
-        ui.button('Confirm Logo', on_click=process_logo).classes('bg-slate-700 text-white text-xs w-full mb-2')
+            except Exception as ex:
+                ui.notify(f'Error reading logo: {str(ex)}', type='negative')
+
+        ui.upload(label='Upload Company Logo', auto_upload=True, on_upload=handle_logo_upload).props('flat dark').classes('w-full mb-2')
 
     # --- TABS / SCREENS NAVIGATION ---
     with ui.tabs().classes('w-full text-[#00BFFF]') as tabs:
@@ -363,26 +366,21 @@ def main_page():
             ).classes('w-full mb-4')
 
             audit_status_label = ui.label('Status: No file uploaded yet').classes('text-xs text-amber-400 font-semibold mb-2')
-            audit_file_upload = ui.upload(label='Select PDF or Image File', auto_upload=False).props('flat dark').classes('w-full mb-2 bg-[#1E293B] rounded-lg')
             uploaded_file_data = {'bytes': None, 'name': None, 'type': None}
 
-            def process_audit_file():
+            def handle_audit_upload(e):
                 try:
-                    if not audit_file_upload.files:
-                        ui.notify('Please select a file from your device first!', type='warning')
-                        return
-                    file = audit_file_upload.files[0]
-                    uploaded_file_data['bytes'] = file.read()
-                    uploaded_file_data['name'] = file.name
-                    uploaded_file_data['type'] = 'application/pdf' if file.name.lower().endswith('.pdf') else 'image/jpeg'
+                    uploaded_file_data['bytes'] = e.content.read()
+                    uploaded_file_data['name'] = e.name
+                    uploaded_file_data['type'] = 'application/pdf' if e.name.lower().endswith('.pdf') else 'image/jpeg'
                     
-                    audit_status_label.set_text(f'✅ File Ready: {file.name}')
+                    audit_status_label.set_text(f'✅ File Ready: {e.name}')
                     audit_status_label.classes(replace='text-xs text-emerald-400 font-semibold mb-2')
-                    ui.notify(f'Successfully loaded: {file.name}', type='positive')
+                    ui.notify(f'Successfully loaded: {e.name}', type='positive')
                 except Exception as ex:
                     ui.notify(f'Error reading file: {str(ex)}', type='negative')
 
-            ui.button('Confirm & Load File Into Memory', on_click=process_audit_file).classes('bg-slate-700 text-white font-bold text-xs mb-4 w-full')
+            ui.upload(label='Select PDF or Image File', auto_upload=True, on_upload=handle_audit_upload).props('flat dark').classes('w-full mb-4 bg-[#1E293B] rounded-lg')
 
             audit_output_container = ui.column().classes('w-full')
 
@@ -391,7 +389,7 @@ def main_page():
                     ui.notify('Gemini API key missing in .env!', type='negative')
                     return
                 if not uploaded_file_data['bytes']:
-                    ui.notify('Please upload and confirm a file first!', type='warning')
+                    ui.notify('Please upload a file first!', type='warning')
                     return
 
                 audit_output_container.clear()
@@ -435,31 +433,26 @@ def main_page():
             ui.markdown('Upload site defect photos for automated classification and repair protocols conforming to ECP 203, ECP 104, Sika, and Fosroc standards.')
             
             defect_status_label = ui.label('Status: No file uploaded yet').classes('text-xs text-amber-400 font-semibold mb-2')
-            defect_file_upload = ui.upload(label='Select Site Defect Photo (JPG/PNG)', auto_upload=False).props('flat dark').classes('w-full mb-2 bg-[#1E293B] rounded-lg')
             defect_file_data = {'bytes': None, 'type': None}
 
-            def process_defect_file():
+            def handle_defect_upload(e):
                 try:
-                    if not defect_file_upload.files:
-                        ui.notify('Please select a file from your device first!', type='warning')
-                        return
-                    file = defect_file_upload.files[0]
-                    defect_file_data['bytes'] = file.read()
+                    defect_file_data['bytes'] = e.content.read()
                     defect_file_data['type'] = 'image/jpeg'
                     
-                    defect_status_label.set_text(f'✅ File Ready: {file.name}')
+                    defect_status_label.set_text(f'✅ File Ready: {e.name}')
                     defect_status_label.classes(replace='text-xs text-emerald-400 font-semibold mb-2')
-                    ui.notify(f'Successfully loaded defect image: {file.name}', type='positive')
+                    ui.notify(f'Successfully loaded defect image: {e.name}', type='positive')
                 except Exception as ex:
                     ui.notify(f'Error reading file: {str(ex)}', type='negative')
 
-            ui.button('Confirm & Load Defect Image', on_click=process_defect_file).classes('bg-slate-700 text-white font-bold text-xs mb-4 w-full')
+            ui.upload(label='Select Site Defect Photo (JPG/PNG)', auto_upload=True, on_upload=handle_defect_upload).props('flat dark').classes('w-full mb-4 bg-[#1E293B] rounded-lg')
 
             defect_output = ui.column().classes('w-full')
 
             def run_defect_diagnosis():
                 if not client or not defect_file_data['bytes']:
-                    ui.notify('API key missing or image not confirmed!', type='negative')
+                    ui.notify('API key missing or image not uploaded!', type='negative')
                     return
                 defect_output.clear()
                 with defect_output:
