@@ -2,6 +2,7 @@ import io
 import datetime
 import os
 import re
+import uuid
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -47,14 +48,16 @@ ui.add_head_html('''
         background-color: #031338 !important;
         color: #FFFFFF !important;
         font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        margin: 0;
+        padding: 0;
     }
     .custom-card {
         background-color: #1B2A4A;
         border: 1px solid #FF8C00;
-        border-radius: 10px;
-        padding: 20px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.3);
-        margin-bottom: 15px;
+        border-radius: 8px;
+        padding: 24px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+        margin-bottom: 20px;
     }
     .primary-btn {
         background-color: #000000 !important;
@@ -62,6 +65,7 @@ ui.add_head_html('''
         border: 2px solid #FF8C00 !important;
         font-weight: 700 !important;
         border-radius: 6px !important;
+        padding: 8px 16px;
     }
     .primary-btn:hover {
         background-color: #1E222D !important;
@@ -73,7 +77,25 @@ ui.add_head_html('''
         color: #FFFFFF !important;
         border: 1px solid #FF8C00 !important;
         border-radius: 4px;
-        padding: 6px;
+        padding: 8px;
+    }
+    /* Fix Quasar Dropdown Menu Contrast */
+    .q-menu, .q-popover {
+        background-color: #1B2A4A !important;
+        color: #FFFFFF !important;
+        border: 1px solid #FF8C00 !important;
+    }
+    .q-item {
+        color: #FFFFFF !important;
+    }
+    .q-item:hover {
+        background-color: #000000 !important;
+        color: #FF8C00 !important;
+    }
+    /* Instant Tab Transitions (No sliding) */
+    .q-tab-panel {
+        animation: none !important;
+        transition: none !important;
     }
 </style>
 ''', shared=True)
@@ -101,51 +123,69 @@ def format_markdown_for_reportlab(text):
     cleaned = re.sub(r'^\s*[\*\-]\s+', '&bull; ', cleaned, flags=re.MULTILINE)
     return cleaned
 
-def build_pdf_header(story, doc_title, subtitle, logo_bytes, engineer, project, location, rep_date):
+def build_pdf_header(story, doc_title, subtitle, logo_bytes, engineer, project, location, rep_date, ticket_id, unique_hash):
     styles = getSampleStyleSheet()
-    title_style = ParagraphStyle("DocTitle", parent=styles["Heading1"], fontSize=14, textColor=colors.HexColor("#1B2A4A"), spaceAfter=4, alignment=1, fontName="Helvetica-Bold")
-    sub_style = ParagraphStyle("DocSub", parent=styles["Normal"], fontSize=9, textColor=colors.HexColor("#444444"), spaceAfter=8, alignment=1, fontName="Helvetica-Bold")
-    meta_style = ParagraphStyle("MetaStyle", parent=styles["Normal"], fontSize=8, textColor=colors.HexColor("#222222"), leading=11, fontName="Helvetica")
+    title_style = ParagraphStyle("DocTitle", parent=styles["Heading1"], fontSize=16, textColor=colors.HexColor("#1B2A4A"), spaceAfter=4, alignment=0, fontName="Helvetica-Bold")
+    sub_style = ParagraphStyle("DocSub", parent=styles["Normal"], fontSize=10, textColor=colors.HexColor("#FF8C00"), spaceAfter=8, alignment=0, fontName="Helvetica-Bold")
+    meta_style = ParagraphStyle("MetaStyle", parent=styles["Normal"], fontSize=8, textColor=colors.HexColor("#333333"), leading=12, fontName="Helvetica")
 
+    header_table_data = []
+    
+    meta_html = f"""
+    <b>Project Name:</b> {project}<br/>
+    <b>Structural Element / Location:</b> {location}<br/>
+    <b>Engineer in Charge:</b> {engineer}<br/>
+    <b>Audit Date:</b> {rep_date} &nbsp;|&nbsp; <b>Batch Ticket ID:</b> {ticket_id}<br/>
+    <b>Verification UID:</b> <font color="#CC0000"><b>{unique_hash}</b></font><br/>
+    <b>Governing Standards:</b> ECP 203, ECP 202, ECP 104, ASTM, AASHTO, BS, EN, ISO
+    """
+    
     if logo_bytes:
         try:
-            story.append(ReportLabImage(io.BytesIO(logo_bytes), width=80, height=30))
-            story.append(Spacer(1, 4))
+            logo_img = ReportLabImage(io.BytesIO(logo_bytes), width=90, height=35)
+            header_table_data = [[Paragraph(f"<b>{doc_title}</b>", title_style), logo_img],
+                                 [Paragraph(subtitle, sub_style), ""],
+                                 [Paragraph(meta_html, meta_style), ""]]
+            t_head = Table(header_table_data, colWidths=[400, 140])
+            t_head.setStyle(TableStyle([
+                ('VALIGN', (0,0), (-1,-1), 'TOP'),
+                ('ALIGN', (1,0), (1,-1), 'RIGHT'),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 0),
+            ]))
+            story.append(t_head)
         except Exception:
-            pass
+            story.append(Paragraph(doc_title, title_style))
+            story.append(Paragraph(subtitle, sub_style))
+            story.append(Paragraph(meta_html, meta_style))
+    else:
+        story.append(Paragraph(doc_title, title_style))
+        story.append(Paragraph(subtitle, sub_style))
+        story.append(Paragraph(meta_html, meta_style))
 
-    story.append(Paragraph(format_markdown_for_reportlab(doc_title), title_style))
-    story.append(Paragraph(format_markdown_for_reportlab(subtitle), sub_style))
-    story.append(HRFlowable(width="100%", thickness=1.5, color=colors.HexColor("#1B2A4A"), spaceAfter=6))
-
-    meta_html = f"""
-    <b>Project:</b> {project} &nbsp;&nbsp;|&nbsp;&nbsp; <b>Location:</b> {location}<br/>
-    <b>Engineer:</b> {engineer} &nbsp;&nbsp;|&nbsp;&nbsp; <b>Date:</b> {rep_date} &nbsp;&nbsp;|&nbsp;&nbsp; <b>Governing Codes:</b> ECP 203, ECP 202, ECP 104, ASTM, AASHTO, BS, EN, ISO
-    """
-    story.append(Paragraph(meta_html, meta_style))
-    story.append(Spacer(1, 8))
+    story.append(Spacer(1, 6))
+    story.append(HRFlowable(width="100%", thickness=2, color=colors.HexColor("#1B2A4A"), spaceAfter=12))
 
 def build_pdf_footer_and_signatures(story, qr_img_buffer):
     styles = getSampleStyleSheet()
     body_style = ParagraphStyle("BodyStyle", parent=styles["Normal"], fontSize=8, textColor=colors.HexColor("#222222"), leading=10, fontName="Helvetica")
-    sec_style = ParagraphStyle("SecTitle", parent=styles["Heading2"], fontSize=10, textColor=colors.HexColor("#1B2A4A"), spaceBefore=8, spaceAfter=4, fontName="Helvetica-Bold")
+    sec_style = ParagraphStyle("SecTitle", parent=styles["Heading2"], fontSize=10, textColor=colors.HexColor("#1B2A4A"), spaceBefore=10, spaceAfter=6, fontName="Helvetica-Bold")
 
-    story.append(Spacer(1, 8))
-    story.append(Paragraph("<b>Engineering Approvals & Multi-Standard Compliance Sign-Off</b>", sec_style))
+    story.append(Spacer(1, 10))
+    story.append(Paragraph("<b>Corporate Engineering Approvals & Compliance Sign-Off</b>", sec_style))
     
-    qr_lab_img = ReportLabImage(qr_img_buffer, width=45, height=45)
-    sign_cell_1 = Paragraph("<b>Prepared By:</b><br/>Engineer Sign:<br/>___________________", body_style)
-    sign_cell_2 = Paragraph("<b>QA/QC Checked:</b><br/>Inspector Sign:<br/>___________________", body_style)
-    sign_cell_3 = Paragraph("<b>Consultant Approved:</b><br/>Stamp & Sign:<br/>___________________", body_style)
-    qr_cell = [Paragraph("<b>QR Verify:</b>", body_style), qr_lab_img]
+    qr_lab_img = ReportLabImage(qr_img_buffer, width=50, height=50)
+    sign_cell_1 = Paragraph("<b>Prepared By:</b><br/>QA/QC Engineer:<br/><br/>_________________________", body_style)
+    sign_cell_2 = Paragraph("<b>Technical Director:</b><br/>Chief Engineer:<br/><br/>_________________________", body_style)
+    sign_cell_3 = Paragraph("<b>Client / Consultant:</b><br/>Official Stamp & Sign:<br/><br/>_________________________", body_style)
+    qr_cell = [Paragraph("<b>Secure QR Verification:</b>", body_style), qr_lab_img]
 
-    t_sign = Table([[sign_cell_1, sign_cell_2, sign_cell_3, qr_cell]], colWidths=[130, 130, 130, 100])
+    t_sign = Table([[sign_cell_1, sign_cell_2, sign_cell_3, qr_cell]], colWidths=[135, 135, 135, 105])
     t_sign.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F5F7FA")),
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F8FAFC")),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#CCCCCC")),
-        ("TOPPADDING", (0, 0), (-1, -1), 5),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
         ("ALIGN", (3, 0), (3, 0), "CENTER"),
     ]))
     story.append(t_sign)
@@ -155,13 +195,13 @@ def build_pdf_footer_and_signatures(story, qr_img_buffer):
 def main_page():
     # Top Header & Ticker
     with ui.row().classes('w-full items-center justify-between bg-[#1B2A4A] px-6 py-3 rounded-lg border border-[#FF8C00] mb-4'):
-        ui.label('🏗️ Multi-Disciplinary Civil, Geotechnical & Pavement Engineering Auditor').classes('text-xl font-bold text-white')
-        ui.label('Made by Eng. Mohamed Abd Al Aty').classes('text-sm text-[#00BFFF] font-semibold')
+        ui.label('Multi-Disciplinary Civil, Geotechnical & Pavement Engineering Auditor').classes('text-xl font-bold text-white')
+        ui.label('Eng. Mohamed Abd Al Aty').classes('text-sm text-[#00BFFF] font-semibold')
 
     ticker_html = """
     <div style="overflow: hidden; white-space: nowrap; background-color: #FF8C00; color: #031338; padding: 6px 0; font-weight: bold; font-size: 13px; margin-bottom: 15px; border-radius: 4px;">
       <div style="display: inline-block; padding-left: 100%; animation: marquee 25s linear infinite;">
-        🚀 Core Compliance Active: ECP 203, ECP 202, ECP 104, ASTM, AASHTO, BS, EN, ISO &nbsp;&nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;&nbsp; ⚠️ Multi-Disciplinary Engineering & Geotechnical QA/QC Verifier &nbsp;&nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;&nbsp; 🏗️ Active Site Inspection Portal
+        Core Compliance Active: ECP 203, ECP 202, ECP 104, ASTM, AASHTO, BS, EN, ISO &nbsp;&nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;&nbsp; Multi-Disciplinary Engineering & Geotechnical QA/QC Verifier &nbsp;&nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;&nbsp; Active Site Inspection Portal
       </div>
     </div>
     <style>
@@ -209,7 +249,7 @@ def main_page():
         async def handle_logo_upload(e):
             try:
                 logo_bytes_holder['bytes'] = await e.file.read()
-                logo_status.set_text(f'✅ Logo Loaded: {e.file.name}')
+                logo_status.set_text(f'Logo Loaded: {e.file.name}')
                 logo_status.classes(replace='text-xs text-emerald-400 mb-1')
                 ui.notify('Company logo loaded successfully!', type='positive')
             except Exception as ex:
@@ -219,17 +259,17 @@ def main_page():
 
     # --- TABS / SCREENS NAVIGATION ---
     with ui.tabs().classes('w-full text-[#00BFFF]') as tabs:
-        t_dash = ui.tab('📊 Concrete Verifier Dashboard', icon='dashboard')
-        t_audit = ui.tab('🤖 AI Multi-Standard Auditor', icon='psychology')
-        t_defect = ui.tab('🔍 Defect Diagnostic', icon='search')
-        t_chat = ui.tab('💬 AI Chatbot', icon='chat')
-        t_handbook = ui.tab('📖 Technical Codes Handbook', icon='book')
+        t_dash = ui.tab('Concrete Verifier Dashboard')
+        t_audit = ui.tab('AI Multi-Standard Auditor')
+        t_defect = ui.tab('Defect Diagnostic')
+        t_chat = ui.tab('AI Chatbot')
+        t_handbook = ui.tab('Technical Codes Handbook')
 
     with ui.tab_panels(tabs, value=t_dash).classes('w-full bg-transparent'):
         
         # --- TAB 1: CONCRETE VERIFIER DASHBOARD ---
         with ui.tab_panel(t_dash):
-            ui.label('1. Input Cube Crushing Results (N/mm²)').classes('text-xl font-bold text-white mb-3')
+            ui.label('Concrete Cube Crushing & Statistical Compliance Dashboard').classes('text-2xl font-bold text-white mb-4')
             
             with ui.row().classes('w-full gap-4 mb-4'):
                 with ui.column().classes('custom-card flex-1'):
@@ -276,7 +316,7 @@ def main_page():
 
                 with result_output_area:
                     with ui.column().classes('custom-card w-full'):
-                        ui.label('Evaluation Results & Statistical Compliance (ECP 203)').classes('text-lg font-bold text-white')
+                        ui.label('Statistical Evaluation Results & Compliance (ECP 203)').classes('text-xl font-bold text-white mb-2')
                         
                         if s28:
                             color = 'green' if s28['pass'] else 'red'
@@ -294,26 +334,62 @@ def main_page():
                         except ValueError:
                             pass
 
-                # Export Options (PDF & CSV)
+                        # Interactive Plotly Chart for Professional Visualization
+                        stages = ['7-Day', '14-Day', '28-Day', 'Target Grade']
+                        means = [
+                            s7['mean'] if s7 else 0,
+                            s14['mean'] if s14 else 0,
+                            s28['mean'] if s28 else 0,
+                            fcu_val
+                        ]
+                        
+                        fig = go.Figure(data=[
+                            go.Bar(x=stages, y=means, marker_color=['#00BFFF', '#00BFFF', '#FF8C00', '#22C55E'])
+                        ])
+                        fig.update_layout(
+                            title='Concrete Strength Evolution vs. Target Grade',
+                            template='plotly_dark',
+                            paper_bgcolor='#1B2A4A',
+                            plot_bgcolor='#1B2A4A',
+                            margin=dict(t=40, b=20, l=40, r=20),
+                            height=300
+                        )
+                        ui.plotly(fig).classes('w-full mt-4')
+
+                # Export Options (PDF & CSV with Unique QR / UID)
                 with export_buttons_area:
+                    unique_uid = f"ECP-{uuid.uuid4().hex[:8].upper()}"
+
                     def download_pdf_report():
                         try:
                             buffer = io.BytesIO()
                             doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=36, leftMargin=36, topMargin=36, bottomMargin=36)
                             story = []
                             rep_date = datetime.date.today().strftime('%Y-%m-%d')
-                            qr_buf = generate_qr_code(f"ECP 203 Audit - {project_name_input.value} - {rep_date}")
+                            qr_buf = generate_qr_code(f"UID: {unique_uid} | ECP 203 Audit - {project_name_input.value} - {rep_date}")
 
-                            build_pdf_header(story, "CONCRETE CUBE STATISTICAL COMPLIANCE REPORT", "ECP 203 & ASTM Quality Assurance Verification", logo_bytes_holder['bytes'], engineer_input.value, project_name_input.value, pour_location_input.value, rep_date)
+                            build_pdf_header(
+                                story, 
+                                "CONCRETE CUBE STATISTICAL COMPLIANCE REPORT", 
+                                "Official ECP 203 & ASTM Quality Assurance Verification", 
+                                logo_bytes_holder['bytes'], 
+                                engineer_input.value, 
+                                project_name_input.value, 
+                                pour_location_input.value, 
+                                rep_date,
+                                ticket_input.value,
+                                unique_uid
+                            )
                             
                             styles = getSampleStyleSheet()
-                            body_style = ParagraphStyle("Body", parent=styles["Normal"], fontSize=9, textColor=colors.HexColor("#222222"), leading=12)
+                            body_style = ParagraphStyle("Body", parent=styles["Normal"], fontSize=9, textColor=colors.HexColor("#222222"), leading=14)
                             
                             summary_text = f"""
-                            <b>Specified Grade (fcu):</b> {fcu_input.value} N/mm²<br/>
-                            <b>Mixer Truck No:</b> {truck_input.value} | <b>Batch Ticket ID:</b> {ticket_input.value}<br/>
-                            <b>28-Day Characteristic Strength:</b> {s28['fcu']:.2f} N/mm² ({'PASS' if s28['pass'] else 'FAIL'})<br/>
-                            <b>Cement Content:</b> {cement_input.value} kg/m³ | <b>Water Content:</b> {water_input.value} kg/m³
+                            <b>Specified Grade ($f_{{cu}}$):</b> {fcu_input.value} N/mm²<br/>
+                            <b>Mixer Truck No:</b> {truck_input.value} &nbsp;|&nbsp; <b>Batch Ticket ID:</b> {ticket_input.value}<br/>
+                            <b>Cement Content:</b> {cement_input.value} kg/m³ &nbsp;|&nbsp; <b>Free Water Content:</b> {water_input.value} kg/m³<br/>
+                            <b>28-Day Characteristic Strength:</b> {s28['fcu']:.2f} N/mm² &nbsp;|&nbsp; <b>Verdict:</b> {'PASS' if s28['pass'] else 'FAIL'}<br/>
+                            <b>Statistical Mean:</b> {s28['mean']:.2f} N/mm² &nbsp;|&nbsp; <b>Standard Deviation ($\sigma$):</b> {s28['std']:.2f}
                             """
                             story.append(Paragraph(summary_text, body_style))
                             story.append(Spacer(1, 10))
@@ -322,13 +398,13 @@ def main_page():
                             doc.build(story)
                             buffer.seek(0)
                             ui.download(buffer.getvalue(), filename=f"Concrete_Audit_Report_{ticket_input.value}.pdf")
-                            ui.notify('PDF Report downloaded successfully!', type='positive')
+                            ui.notify('Official PDF Report downloaded successfully!', type='positive')
                         except Exception as e:
                             ui.notify(f'PDF Generation Error: {str(e)}', type='negative')
 
                     def download_csv_export():
                         df = pd.DataFrame({
-                            "Parameter": ["Project", "Location", "Specified fcu", "28-Day Characteristic fcu", "Status", "Truck No", "Ticket ID", "Engineer"],
+                            "Audit Parameter": ["Project Name", "Location", "Specified fcu", "28-Day Characteristic fcu", "Compliance Verdict", "Truck No", "Batch Ticket ID", "Engineer", "Verification UID"],
                             "Value": [
                                 project_name_input.value, 
                                 pour_location_input.value, 
@@ -337,21 +413,22 @@ def main_page():
                                 "PASS" if s28 and s28['pass'] else "FAIL", 
                                 truck_input.value, 
                                 ticket_input.value, 
-                                engineer_input.value
+                                engineer_input.value,
+                                unique_uid
                             ]
                         })
                         csv_data = df.to_csv(index=False).encode('utf-8')
                         ui.download(csv_data, filename=f"Concrete_Summary_{ticket_input.value}.csv")
                         ui.notify('CSV Summary downloaded successfully!', type='positive')
 
-                    ui.button('📥 Download Official PDF Report', on_click=download_pdf_report).classes('primary-btn flex-1')
-                    ui.button('📊 Export CSV Summary', on_click=download_csv_export).classes('primary-btn flex-1')
+                    ui.button('Download Official PDF Report', on_click=download_pdf_report).classes('primary-btn flex-1')
+                    ui.button('Export CSV Summary', on_click=download_csv_export).classes('primary-btn flex-1')
 
             ui.button('Run Compliance & Statistical Audit', on_click=run_verification).classes('primary-btn q-my-md')
 
         # --- TAB 2: AI MULTI-STANDARD AUDITOR ---
         with ui.tab_panel(t_audit):
-            ui.label('🤖 AI Multi-Standard Engineering Auditor').classes('text-xl font-bold text-white mb-2')
+            ui.label('AI Multi-Standard Engineering Auditor').classes('text-2xl font-bold text-white mb-2')
             ui.markdown('Upload any PDF specification, mix design, or image to audit against **ECP 203, 202, 104, ASTM, AASHTO, BS, EN, and ISO**.')
             
             audit_focus = ui.select(
@@ -374,7 +451,7 @@ def main_page():
                     uploaded_file_data['name'] = e.file.name
                     uploaded_file_data['type'] = 'application/pdf' if e.file.name.lower().endswith('.pdf') else 'image/jpeg'
                     
-                    audit_status_label.set_text(f'✅ File Ready: {e.file.name}')
+                    audit_status_label.set_text(f'File Ready: {e.file.name}')
                     audit_status_label.classes(replace='text-xs text-emerald-400 font-semibold mb-2')
                     ui.notify(f'Successfully loaded: {e.file.name}', type='positive')
                 except Exception as ex:
@@ -418,7 +495,7 @@ def main_page():
                     audit_output_container.clear()
                     with audit_output_container:
                         with ui.column().classes('custom-card w-full'):
-                            ui.label('Audit Findings & Compliance Breakdown').classes('text-lg font-bold text-white')
+                            ui.label('Audit Findings & Compliance Breakdown').classes('text-xl font-bold text-white mb-2')
                             ui.markdown(response.text)
                 except Exception as ex:
                     audit_output_container.clear()
@@ -429,7 +506,7 @@ def main_page():
 
         # --- TAB 3: DEFECT DIAGNOSTIC ---
         with ui.tab_panel(t_defect):
-            ui.label('🔍 AI Crack, Pavement & Geotechnical Defect Diagnostic').classes('text-xl font-bold text-white mb-2')
+            ui.label('AI Crack, Pavement & Geotechnical Defect Diagnostic').classes('text-2xl font-bold text-white mb-2')
             ui.markdown('Upload site defect photos for automated classification and repair protocols conforming to ECP 203, ECP 104, Sika, and Fosroc standards.')
             
             defect_status_label = ui.label('Status: No file uploaded yet').classes('text-xs text-amber-400 font-semibold mb-2')
@@ -440,7 +517,7 @@ def main_page():
                     defect_file_data['bytes'] = await e.file.read()
                     defect_file_data['type'] = 'image/jpeg'
                     
-                    defect_status_label.set_text(f'✅ File Ready: {e.file.name}')
+                    defect_status_label.set_text(f'File Ready: {e.file.name}')
                     defect_status_label.classes(replace='text-xs text-emerald-400 font-semibold mb-2')
                     ui.notify(f'Successfully loaded defect image: {e.file.name}', type='positive')
                 except Exception as ex:
@@ -472,7 +549,7 @@ def main_page():
                     defect_output.clear()
                     with defect_output:
                         with ui.column().classes('custom-card w-full'):
-                            ui.label('Forensic Diagnosis & Repair Protocol').classes('text-lg font-bold text-white')
+                            ui.label('Forensic Diagnosis & Repair Protocol').classes('text-xl font-bold text-white mb-2')
                             ui.markdown(response.text)
                 except Exception as ex:
                     defect_output.clear()
@@ -483,7 +560,7 @@ def main_page():
 
         # --- TAB 4: AI CHATBOT ---
         with ui.tab_panel(t_chat):
-            ui.label('💬 Core-Code Intelligent Assistant Chatbot').classes('text-xl font-bold text-white mb-2')
+            ui.label('Core-Code Intelligent Assistant Chatbot').classes('text-2xl font-bold text-white mb-2')
             ui.markdown('Ask any engineering, mix design, geotechnical, or pavement question based strictly on core codes (ECP 203, ECP 202, ECP 104, ASTM, AASHTO, BS, EN, ISO).')
 
             chat_container = ui.column().classes('custom-card w-full h-96 overflow-y-auto mb-4')
@@ -510,7 +587,7 @@ def main_page():
                 render_chat()
 
                 if not client:
-                    chat_messages.append({"role": "assistant", "content": "⚠️ GEMINI_API_KEY is not configured."})
+                    chat_messages.append({"role": "assistant", "content": "GEMINI_API_KEY is not configured."})
                     render_chat()
                     return
 
@@ -526,7 +603,7 @@ def main_page():
 
         # --- TAB 5: TECHNICAL HANDBOOK ---
         with ui.tab_panel(t_handbook):
-            ui.label('📖 Multi-Standard Civil Engineering Technical Handbook').classes('text-xl font-bold text-white mb-4')
+            ui.label('Multi-Standard Civil Engineering Technical Handbook').classes('text-2xl font-bold text-white mb-4')
             
             with ui.tabs().classes('w-full text-[#00BFFF]') as hb_tabs:
                 h1 = ui.tab('ECP 203 & Concrete')
@@ -587,15 +664,14 @@ def main_page():
                     * **ISO Quality Management:** ISO 9001 (Quality Management Systems in Construction), ISO 14001 (Environmental Management), ISO 45001 (Occupational Health & Safety).
                     ''')
 
-    # --- PROFESSIONAL FOOTER BAR ---
+    # --- PROFESSIONAL COMPACT FULL-WIDTH FOOTER BAR ---
     ui.markdown('''
-    <div style="background-color: #1B2A4A; border-top: 2px solid #FF8C00; padding: 15px; margin-top: 30px; text-align: center; color: #FFFFFF; font-size: 12px; border-radius: 6px;">
-        <b>🏗️ Multi-Standard Engineering Quality Assurance Portal</b><br>
-        Automated compliance verification across ECP 203, ECP 202, ECP 104, ASTM, AASHTO, BS, EN, and ISO standards.<br>
-        <b>Official Direct Contacts & Professional Network:</b><br>
-        🔗 Connect on LinkedIn: <a href="https://www.linkedin.com/in/mohamed-abdalaty" target="_blank" style="color: #00BFFF; text-decoration: underline;">Mohamed Abd Al Aty</a> &nbsp;|&nbsp; ✉️ Direct Email: <a href="mailto:mohamedabdalaty63@gmail.com" style="color: #00BFFF; text-decoration: underline;">mohamedabdalaty63@gmail.com</a><br>
-        <i>Specialized in Geotechnical QA/QC, Civil Engineering Standards & Automated Compliance.</i><br>
-        © 2026 Eng. Mohamed Abd Al Aty. All rights reserved. Designed for ECP 203, ECP 202, ECP 104, ASTM, AASHTO, BS, EN & ISO compliance.
+    <div style="width: 100%; background-color: #1B2A4A; border-top: 2px solid #FF8C00; padding: 10px 20px; margin-top: 40px; text-align: center; color: #FFFFFF; font-size: 11px; box-sizing: border-box;">
+        <b>Multi-Standard Engineering Quality Assurance Portal</b> &nbsp;|&nbsp; Automated compliance verification across ECP 203, ECP 202, ECP 104, ASTM, AASHTO, BS, EN, and ISO standards.<br>
+        <b>Official Direct Contacts & Professional Network:</b> 
+        LinkedIn: <a href="https://www.linkedin.com/in/mohamed-abdalaty" target="_blank" style="color: #00BFFF; text-decoration: underline;">Mohamed Abd Al Aty</a> &nbsp;|&nbsp; 
+        Email: <a href="mailto:mohamedabdalaty63@gmail.com" style="color: #00BFFF; text-decoration: underline;">mohamedabdalaty63@gmail.com</a><br>
+        <i>Specialized in Geotechnical QA/QC, Civil Engineering Standards & Automated Compliance.</i> &copy; 2026 Eng. Mohamed Abd Al Aty. All rights reserved.
     </div>
     ''')
 
