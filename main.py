@@ -454,4 +454,5 @@ def main_page():
                     ui.markdown('### International Standards (ASTM, AASHTO, BS, EN, ISO)\n- ASTM C39 / D1557, AASHTO LRFD specifications, Eurocode 2 / BS EN 1992.')
 
 
+import os
 ui.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)), title='Multi-Standard Engineering Auditor', favicon='🏗️', reload=False)
