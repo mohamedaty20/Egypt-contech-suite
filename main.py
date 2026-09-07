@@ -135,7 +135,6 @@ def clean_for_reportlab(text):
     if not text:
         return ""
     text = str(text)
-    # Strip LaTeX delimiters and clean formatting artifacts completely
     text = text.replace('$', '').replace('\\ge', '>=').replace('\\le', '<=')
     text = text.replace('\\frac', ' ').replace('\\sum', 'Sum').replace('\\sigma', 'sigma')
     text = text.replace('\\max', 'Max').replace('\\bar', ' ').replace('{', '').replace('}', '')
@@ -149,10 +148,8 @@ def clean_for_reportlab(text):
 def clean_ai_text(text):
     if not text:
         return ""
-    # Remove markdown/LaTeX artifacts, unwanted asterisks, slashes, and f-string variable leaks
     text = text.replace('$', '').replace('\\times', '*').replace('\\ge', '>=').replace('\\le', '<=')
     text = text.replace('****', '**').replace('//', '/').replace('{cu}', 'f_cu')
-    # Clean rogue backslashes while keeping normal text intact
     text = re.sub(r'\\([a-zA-Z]+)', r'\1', text)
     return text
 
@@ -225,6 +222,62 @@ def main_page():
     # Ensure root container takes full width
     ui.query('body').style('width: 100vw; height: 100vh; overflow-x: hidden;')
     
+    # --- SIDEBAR CONFIGURATION (Defined safely at the root page level) ---
+    supp_code_select = None
+    sidebar = ui.left_drawer().classes('bg-[#1B2A4A] text-white p-4').style('width: 340px;')
+    with sidebar:
+        with ui.row().classes('w-full items-center justify-between mb-2'):
+            ui.label('PROJECT METADATA').classes('text-white font-bold text-base')
+            ui.button(icon='menu', on_click=sidebar.toggle).classes('primary-btn p-1 text-xs')
+            
+        project_name_input = ui.input(label='Project Name', value='Highway Expansion Project').classes('w-full mb-2')
+        pour_location_input = ui.input(label='Structural Element / Chainage', value='Highway Section Ch. 12+500').classes('w-full mb-4')
+
+        ui.label('Governing Standards Core').classes('text-white font-bold text-sm mb-1')
+        ui.markdown('*ECP 203, ECP 202, ECP 104, ASTM, AASHTO, BS, EN, ISO*')
+        
+        supp_code_select = ui.select(
+            label='Supplementary Standard',
+            options=[
+                "None (Strictly Core)",
+                "ACI 318-25 — Structural Concrete",
+                "IBC — International Building Code",
+                "BS EN 1992 / Eurocode 2 + UK Annex",
+                "AASHTO LRFD Bridge Design"
+            ],
+            value="None (Strictly Core)"
+        ).classes('w-full mb-4')
+
+        fcu_input = ui.number(label='Specified 28-Day Grade f_cu (N/mm2)', value=30.0, step=5.0).classes('w-full mb-4')
+        
+        ui.label('Batch Plant & Site Logs').classes('text-white font-bold text-sm mb-2')
+        truck_input = ui.input(label='Mixer Truck No.', value='TRK-104').classes('w-full mb-2')
+        ticket_input = ui.input(label='Batch Ticket ID', value='BT-99482').classes('w-full mb-4')
+
+        ui.label('Mix Design Parameters').classes('text-white font-bold text-sm mb-2')
+        cement_input = ui.input(label='Cement Content (kg/m3)', value='350.0').classes('w-full mb-2')
+        water_input = ui.input(label='Free Water Content (kg/m3)', value='150.0').classes('w-full mb-4')
+        
+        engineer_input = ui.input(label='Engineer Name', value='Eng. Mohamed Abd Al Aty').classes('w-full mb-2')
+        
+        logo_status = ui.label('Logo: Not uploaded').classes('text-xs text-amber-400 mb-1')
+        logo_bytes_holder = {'bytes': None}
+        
+        async def handle_logo_upload(e):
+            try:
+                logo_bytes_holder['bytes'] = await e.file.read()
+                logo_status.set_text(f'Logo Loaded: {e.file.name}')
+                logo_status.classes(replace='text-xs text-emerald-400 mb-1')
+                ui.notify('Company logo loaded successfully!', type='positive')
+            except Exception as ex:
+                ui.notify(f'Error reading logo: {str(ex)}', type='negative')
+
+        ui.upload(label='Upload Company Logo', auto_upload=True, on_upload=handle_logo_upload).props('flat dark').classes('w-full mb-2')
+
+    # Sidebar toggle floating button if closed
+    ui.button(icon='menu', on_click=sidebar.toggle).classes('fixed top-4 left-4 z-50 bg-[#1B2A4A] text-white border border-[#FF8C00] p-2 rounded shadow-lg')
+
+    # Main Column Container
     with ui.column().classes('w-full min-h-screen p-4 bg-[#031338]'):
         with ui.row().classes('w-full items-center justify-between bg-[#1B2A4A] px-6 py-4 rounded-lg border border-[#FF8C00] mb-4 shadow-lg'):
             ui.label('Multi-Disciplinary Civil, Geotechnical & Pavement Engineering Auditor').classes('text-3xl font-bold text-white')
@@ -241,61 +294,6 @@ def main_page():
         </style>
         """
         ui.add_head_html(ticker_html)
-
-        # --- SIDEBAR CONFIGURATION ---
-        supp_code_select = None
-        sidebar = ui.left_drawer().classes('bg-[#1B2A4A] text-white p-4').style('width: 340px;')
-        with sidebar:
-            with ui.row().classes('w-full items-center justify-between mb-2'):
-                ui.label('PROJECT METADATA').classes('text-white font-bold text-base')
-                ui.button(icon='menu', on_click=sidebar.toggle).classes('primary-btn p-1 text-xs')
-                
-            project_name_input = ui.input(label='Project Name', value='Highway Expansion Project').classes('w-full mb-2')
-            pour_location_input = ui.input(label='Structural Element / Chainage', value='Highway Section Ch. 12+500').classes('w-full mb-4')
-
-            ui.label('Governing Standards Core').classes('text-white font-bold text-sm mb-1')
-            ui.markdown('*ECP 203, ECP 202, ECP 104, ASTM, AASHTO, BS, EN, ISO*')
-            
-            supp_code_select = ui.select(
-                label='Supplementary Standard',
-                options=[
-                    "None (Strictly Core)",
-                    "ACI 318-25 — Structural Concrete",
-                    "IBC — International Building Code",
-                    "BS EN 1992 / Eurocode 2 + UK Annex",
-                    "AASHTO LRFD Bridge Design"
-                ],
-                value="None (Strictly Core)"
-            ).classes('w-full mb-4')
-
-            fcu_input = ui.number(label='Specified 28-Day Grade f_cu (N/mm2)', value=30.0, step=5.0).classes('w-full mb-4')
-            
-            ui.label('Batch Plant & Site Logs').classes('text-white font-bold text-sm mb-2')
-            truck_input = ui.input(label='Mixer Truck No.', value='TRK-104').classes('w-full mb-2')
-            ticket_input = ui.input(label='Batch Ticket ID', value='BT-99482').classes('w-full mb-4')
-
-            ui.label('Mix Design Parameters').classes('text-white font-bold text-sm mb-2')
-            cement_input = ui.input(label='Cement Content (kg/m3)', value='350.0').classes('w-full mb-2')
-            water_input = ui.input(label='Free Water Content (kg/m3)', value='150.0').classes('w-full mb-4')
-            
-            engineer_input = ui.input(label='Engineer Name', value='Eng. Mohamed Abd Al Aty').classes('w-full mb-2')
-            
-            logo_status = ui.label('Logo: Not uploaded').classes('text-xs text-amber-400 mb-1')
-            logo_bytes_holder = {'bytes': None}
-            
-            async def handle_logo_upload(e):
-                try:
-                    logo_bytes_holder['bytes'] = await e.file.read()
-                    logo_status.set_text(f'Logo Loaded: {e.file.name}')
-                    logo_status.classes(replace='text-xs text-emerald-400 mb-1')
-                    ui.notify('Company logo loaded successfully!', type='positive')
-                except Exception as ex:
-                    ui.notify(f'Error reading logo: {str(ex)}', type='negative')
-
-            ui.upload(label='Upload Company Logo', auto_upload=True, on_upload=handle_logo_upload).props('flat dark').classes('w-full mb-2')
-
-        # Sidebar toggle floating button if closed
-        ui.button(icon='menu', on_click=sidebar.toggle).classes('fixed top-4 left-4 z-50 bg-[#1B2A4A] text-white border border-[#FF8C00] p-2 rounded shadow-lg')
 
         # --- TABS NAVIGATION ---
         with ui.tabs().classes('w-full text-white bg-[#1B2A4A] rounded-lg') as tabs:
@@ -484,7 +482,7 @@ def main_page():
                 export_buttons_area = ui.row().classes('w-full gap-4 mt-4')
 
                 ui.button('Run AI Statistical Calculation & Verification', on_click=run_verification).classes('primary-btn q-my-md')
-                run_verification() # Initial render
+                run_verification()
 
             # --- TAB 2: AI MULTI-STANDARD AUDITOR ---
             with ui.tab_panel(t_audit):
