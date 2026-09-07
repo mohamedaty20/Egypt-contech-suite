@@ -37,12 +37,11 @@ load_dotenv()
 api_key = os.getenv("GEMINI_API_KEY")
 client = genai.Client(api_key=api_key) if api_key else None
 
-# --- CUSTOM TAILWIND & DARK THEME STYLING (Issue 7 Fixed: Scrollbar removed) ---
+# --- CUSTOM TAILWIND & DARK THEME STYLING ---
 app.native.window_args = {"resizable": True}
 
 ui.add_head_html('''
 <style>
-    /* Completely remove ugly scrollbars across all browsers */
     ::-webkit-scrollbar {
         display: none !important;
         width: 0px !important;
@@ -117,7 +116,7 @@ ui.add_head_html('''
 </style>
 ''', shared=True)
 
-# --- PDF & EXPORT GENERATION HELPERS (Issues 2 & 3 Fixed: Cleaned Markdown Artifacts) ---
+# --- PDF & EXPORT GENERATION HELPERS ---
 def generate_qr_code(data_str):
     qr = qrcode.QRCode(version=1, box_size=5, border=1)
     qr.add_data(data_str)
@@ -132,7 +131,6 @@ def clean_for_reportlab(text):
     if not text:
         return ""
     text = str(text)
-    # Strip raw markdown table syntax lines like |---| or |:---:| or l:-----
     text = re.sub(r'\|?\s*[:-]+[:?-]*\s*\|?', '', text)
     text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
     text = text.replace('$', '').replace('\\ge', '>=').replace('\\le', '<=')
@@ -144,7 +142,6 @@ def clean_for_reportlab(text):
 def clean_ai_text(text):
     if not text:
         return ""
-    # Remove raw markdown table formatting lines from UI text outputs
     lines = text.split('\n')
     cleaned_lines = []
     for line in lines:
@@ -219,12 +216,10 @@ def build_pdf_footer_and_signatures(story, qr_img_buffer):
 # --- MAIN APP LAYOUT ---
 @ui.page('/')
 def main_page():
-    # Issue 4 Fixed: Enlarged main title size to text-3xl font-bold
     with ui.row().classes('w-full items-center justify-between bg-[#1B2A4A] px-6 py-4 rounded-lg border border-[#FF8C00] mb-4 shadow-lg'):
         ui.label('Multi-Disciplinary Civil, Geotechnical & Pavement Engineering Auditor').classes('text-3xl font-bold text-white')
         ui.label('Eng. Mohamed Abd Al Aty').classes('text-base text-[#00BFFF] font-semibold')
 
-    # Issue 1 Fixed: Ticker text explicitly white (`color: #FFFFFF;`) on dark navy/orange banner
     ticker_html = """
     <div style="overflow: hidden; white-space: nowrap; background-color: #1B2A4A; color: #FFFFFF; padding: 8px 0; font-weight: bold; font-size: 13px; margin-bottom: 15px; border-radius: 4px; border: 1px solid #FF8C00;">
       <div style="display: inline-block; padding-left: 100%; animation: marquee 28s linear infinite;">
@@ -295,7 +290,7 @@ def main_page():
 
     with ui.tab_panels(tabs, value=t_dash).classes('w-full bg-transparent'):
         
-        # --- TAB 1: CONCRETE CALCULATION SHEET & VERIFIER (Issues 5 & 6 Fixed) ---
+        # --- TAB 1: CONCRETE CALCULATION SHEET & VERIFIER ---
         with ui.tab_panel(t_dash):
             ui.label('Comprehensive Concrete Cube Calculation Sheet & Statistical Verifier (ECP 203)').classes('text-2xl font-bold text-white mb-4')
             
@@ -310,7 +305,6 @@ def main_page():
                     ui.label('28-Day Cubes (Comma Separated N/mm2)').classes('font-bold text-white text-sm')
                     c28_input = ui.input(value='32.5, 34.0, 31.0, 35.5, 29.0, 33.0').classes('w-full')
 
-            # Issue 5 Fixed: Stage selector with immediate reactive callback
             def run_verification():
                 result_output_area.clear()
                 export_buttons_area.clear()
@@ -344,7 +338,6 @@ def main_page():
                             verdict_text = 'PASS — FULLY COMPLIANT' if s28['pass'] else 'FAIL — NON-COMPLIANT WITH ECP 203 LIMITS'
                             ui.markdown(f"### Overall 28-Day Compliance Verdict: :{color}[**{verdict_text}**]")
                             
-                            # Issue 6 Fixed: Comprehensive calculation proof and formulas displayed directly in UI
                             ui.markdown(f"""
                             #### Step-by-Step Mathematical Formulation & Statistical Proof (28-Day)
                             * **Specified Characteristic Strength ($f_{{cu}}$):** `{fcu_val:.2f} N/mm²`
@@ -407,7 +400,6 @@ def main_page():
                         except ValueError:
                             pass
 
-                        # Charts
                         stages = ['7-Day', '14-Day', '28-Day', 'Target Grade']
                         means = [
                             s7['mean'] if s7 else 0,
@@ -434,7 +426,6 @@ def main_page():
                         )
                         ui.plotly(fig).classes('w-full mt-4')
 
-                # Issue 6 Fixed: Comprehensive PDF export containing full tables and calculations
                 with export_buttons_area:
                     unique_uid = f"ECP-{uuid.uuid4().hex[:8].upper()}"
 
@@ -474,7 +465,6 @@ def main_page():
                             story.append(Paragraph(summary_html, body_style))
                             story.append(Spacer(1, 8))
 
-                            # Add detailed 28-day sample table to PDF
                             if s28:
                                 pdf_table_data = [["Specimen", "Crushing Load (N/mm²)", "Deviation from Mean", "Status"]]
                                 for idx, val in enumerate(s28['values'], 1):
@@ -527,7 +517,6 @@ def main_page():
                     ui.button('Download Official Calculation PDF', on_click=download_pdf_report).classes('primary-btn flex-1')
                     ui.button('Export Calculation CSV', on_click=download_csv_export).classes('primary-btn flex-1')
 
-            # Issue 5 Fixed: Stage selector with on_change reactive listener
             stage_selector = ui.select(
                 label='Select Stage to Display Table & Details',
                 options=['All Stages', '7-Day Stage', '14-Day Stage', '28-Day Stage'],
@@ -545,6 +534,7 @@ def main_page():
                     return []
 
             ui.button('Run Statistical Calculation & Verification', on_click=run_verification).classes('primary-btn q-my-md')
+            run_verification() # Initial render
 
         # --- TAB 2: AI MULTI-STANDARD AUDITOR ---
         with ui.tab_panel(t_audit):
