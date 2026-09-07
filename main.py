@@ -326,7 +326,16 @@ def main_page():
                     def download_csv_export():
                         df = pd.DataFrame({
                             "Parameter": ["Project", "Location", "Specified fcu", "28-Day Characteristic fcu", "Status", "Truck No", "Ticket ID", "Engineer"],
-                            "Value": [project_name_input.value, pour_location_input.value, fcu_input.value, f=f"{s28['fcu']:.2f}" if s28 else "N/A", "PASS" if s28 and s28['pass'] else "FAIL", truck_input.value, ticket_input.value, engineer_input.value]
+                            "Value": [
+                                project_name_input.value, 
+                                pour_location_input.value, 
+                                str(fcu_input.value), 
+                                f"{s28['fcu']:.2f}" if s28 else "N/A", 
+                                "PASS" if s28 and s28['pass'] else "FAIL", 
+                                truck_input.value, 
+                                ticket_input.value, 
+                                engineer_input.value
+                            ]
                         })
                         csv_data = df.to_csv(index=False).encode('utf-8')
                         ui.download(csv_data, filename=f"Concrete_Summary_{ticket_input.value}.csv")
