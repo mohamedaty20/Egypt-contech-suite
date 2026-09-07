@@ -3,7 +3,6 @@ import datetime
 import os
 import uuid
 import re
-import json
 import asyncio
 import numpy as np
 import pandas as pd
@@ -34,12 +33,11 @@ from reportlab.platypus import (
     Image as ReportLabImage,
 )
 
-# Load environment variables securely from .env
 load_dotenv()
 api_key = os.getenv("GEMINI_API_KEY")
 client = genai.Client(api_key=api_key) if api_key else None
 
-GEMINI_MODEL = "gemini-3.5-flash-lite"  # DO NOT CHANGE
+GEMINI_MODEL = "gemini-3.5-flash-lite"
 
 PAGE_WIDTH, PAGE_HEIGHT = A4
 MARGIN = 32
@@ -66,7 +64,7 @@ ui.add_head_html('''
         overflow-x: hidden;
     }
 
-    /* Sidebar styling - solid dark navy */
+    /* Sidebar - solid dark navy */
     .sidebar-container {
         background: #0b1a3a !important;
         border-right: 2px solid rgba(255, 140, 0, 0.4) !important;
@@ -86,7 +84,7 @@ ui.add_head_html('''
         background-color: rgba(13, 26, 53, 0.8) !important;
     }
 
-    /* Output without containers */
+    /* Output no containers */
     .output-card {
         background: transparent !important;
         border: none !important;
@@ -111,7 +109,7 @@ ui.add_head_html('''
         box-sizing: border-box;
     }
 
-    /* Buttons - sleek rounded */
+    /* Buttons */
     .primary-btn, .q-btn {
         background: linear-gradient(135deg, #1a1a1a 0%, #333333 100%) !important;
         color: #FFFFFF !important;
@@ -135,7 +133,7 @@ ui.add_head_html('''
         transform: translateY(0px) !important;
     }
 
-    /* Upload buttons - glass */
+    /* Upload */
     .q-uploader {
         background: rgba(13, 26, 53, 0.6) !important;
         backdrop-filter: blur(8px) !important;
@@ -211,7 +209,6 @@ ui.add_head_html('''
         text-decoration: underline;
     }
 
-    /* Markdown */
     .markdown-body {
         font-size: 14px;
         line-height: 1.7;
@@ -301,13 +298,29 @@ ui.add_head_html('''
         margin-top: 4px;
     }
 
-    /* Tabs - modern */
+    /* Tabs - modern, scrollable */
     .q-tabs {
         border-radius: 14px !important;
         overflow: hidden !important;
         background: rgba(13, 26, 53, 0.6) !important;
         backdrop-filter: blur(8px) !important;
         padding: 4px !important;
+    }
+    .q-tabs__content {
+        overflow-x: auto !important;
+        flex-wrap: nowrap !important;
+        scrollbar-width: thin;
+        scrollbar-color: #FF8C00 transparent;
+    }
+    .q-tabs__content::-webkit-scrollbar {
+        height: 4px;
+    }
+    .q-tabs__content::-webkit-scrollbar-thumb {
+        background: #FF8C00;
+        border-radius: 2px;
+    }
+    .q-tabs__content::-webkit-scrollbar-track {
+        background: transparent;
     }
     .q-tab {
         color: #A9B6D0 !important;
@@ -316,6 +329,8 @@ ui.add_head_html('''
         border-radius: 10px !important;
         margin: 2px !important;
         padding: 8px 16px !important;
+        white-space: nowrap;
+        flex-shrink: 0;
     }
     .q-tab:hover {
         color: #FFFFFF !important;
@@ -331,7 +346,6 @@ ui.add_head_html('''
         border-radius: 2px !important;
     }
 
-    /* Chat messages - no containers */
     .chat-message {
         padding: 8px 0;
         border-bottom: 1px solid rgba(255,255,255,0.05);
@@ -354,6 +368,7 @@ ui.add_head_html('''
         padding-left: 8px;
     }
 
+    /* Responsive */
     @media (max-width: 768px) {
         .markdown-body table {
             font-size: 11px !important;
@@ -382,14 +397,48 @@ ui.add_head_html('''
             padding: 14px 12px !important;
         }
         .q-tabs__content {
-            flex-wrap: wrap !important;
+            flex-wrap: nowrap !important;
         }
         .q-tab {
-            padding: 6px 10px !important;
             font-size: 12px !important;
+            padding: 6px 10px !important;
         }
         .q-uploader {
             font-size: 12px !important;
+        }
+        /* Ensure tables scroll horizontally on mobile */
+        .markdown-body {
+            overflow-x: auto;
+        }
+        .markdown-body table {
+            display: block;
+            overflow-x: auto;
+            white-space: nowrap;
+        }
+        .markdown-body table td, .markdown-body table th {
+            white-space: normal !important;
+        }
+        .markdown-body {
+            overflow-x: auto;
+        }
+    }
+
+    /* Main title larger */
+    .main-title {
+        font-size: 3.8rem !important;
+        font-weight: 900 !important;
+        letter-spacing: -0.02em;
+    }
+    .sub-title {
+        color: #FFFFFF !important;
+        font-weight: 500;
+    }
+    @media (max-width: 768px) {
+        .main-title {
+            font-size: 2.2rem !important;
+        }
+        .sub-title {
+            font-size: 1rem !important;
         }
     }
 </style>
@@ -412,7 +461,6 @@ _LATEX_SIMPLE = {
 
 
 def sanitize_ai_markdown(text: str) -> str:
-    """Turns whatever the model returns into clean, renderable markdown."""
     if not text:
         return ""
     text = str(text)
@@ -446,7 +494,6 @@ def sanitize_ai_markdown(text: str) -> str:
 
 
 def inline_md_to_reportlab(text: str) -> str:
-    """Convert sanitized markdown inline into ReportLab mini-HTML."""
     text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
     text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
     text = re.sub(r'(?<!\*)\*([^*\n]+?)\*(?!\*)', r'<i>\1</i>', text)
@@ -478,7 +525,6 @@ def build_pdf_styles():
 
 
 def markdown_to_pdf_flowables(raw_text: str, styles: dict, avail_width: float = USABLE_WIDTH):
-    """Parses sanitized markdown into real ReportLab flowables."""
     text = sanitize_ai_markdown(raw_text)
     lines = text.split('\n')
     flowables = []
@@ -652,7 +698,6 @@ def build_pdf_footer_and_signatures(story, styles, qr_img_buffer):
 
 
 def build_report_pdf(doc_title, subtitle, body_markdown, meta, logo_bytes, extra_flowables_before_body=None):
-    """One shared, consistent builder used by every export button in the app."""
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=MARGIN, leftMargin=MARGIN,
                              topMargin=MARGIN, bottomMargin=MARGIN)
@@ -716,12 +761,10 @@ NO_LATEX_RULE = (
 
 
 async def call_gemini(contents, system_instruction=None, temperature=0.1, timeout=60):
-    """Every Gemini call in the app funnels through here with a timeout."""
     cfg_kwargs = {"temperature": temperature}
     if system_instruction:
         cfg_kwargs["system_instruction"] = system_instruction
     config = types.GenerateContentConfig(**cfg_kwargs)
-    # Use asyncio.wait_for to enforce timeout
     try:
         response = await asyncio.wait_for(
             run.io_bound(
@@ -741,53 +784,42 @@ async def call_gemini(contents, system_instruction=None, temperature=0.1, timeou
 # BOQ CALCULATION ENGINE (Python, not AI)
 # =====================================================================================
 
-# Predefined unit rates (EGP) - typical Egyptian market rates (approximate)
 UNIT_RATES = {
-    # Architectural
-    "Flooring (Ceramic)": 150,  # per m2
+    "Flooring (Ceramic)": 150,
     "Flooring (Marble)": 500,
     "Flooring (Tiles)": 200,
-    "Wall Finishing (Paint)": 30,  # per m2
+    "Wall Finishing (Paint)": 30,
     "Wall Finishing (Plaster)": 80,
     "Ceiling (Paint)": 25,
     "Ceiling (Gypsum Board)": 120,
-    "Skirting (Ceramic)": 60,  # per linear meter
+    "Skirting (Ceramic)": 60,
     "Skirting (Marble)": 200,
-    "Doors (Wood)": 3000,  # per unit
-    "Windows (Aluminum)": 2000,  # per unit
-    "Partitions (Gypsum)": 150,  # per m2
-    # Structural
-    "Concrete (C30/37)": 2500,  # per m3
+    "Doors (Wood)": 3000,
+    "Windows (Aluminum)": 2000,
+    "Partitions (Gypsum)": 150,
+    "Concrete (C30/37)": 2500,
     "Concrete (C25/30)": 2200,
     "Concrete (C40/50)": 3000,
-    "Rebar (Grade 400)": 15000,  # per ton
+    "Rebar (Grade 400)": 15000,
     "Rebar (Grade 600)": 18000,
-    "Formwork": 300,  # per m2
-    "Excavation": 200,  # per m3
-    "Backfill": 150,  # per m3
-    "Foundation Concrete": 2800,  # per m3
+    "Formwork": 300,
+    "Excavation": 200,
+    "Backfill": 150,
+    "Foundation Concrete": 2800,
 }
 
 def compute_boq(extracted_items, wastage_percent=5):
-    """
-    Compute costs based on extracted items.
-    extracted_items: list of dicts with keys: item, unit, quantity (extracted by AI)
-    Returns a DataFrame with full cost details.
-    """
     rows = []
     for it in extracted_items:
         item_name = it.get('item', 'Unknown')
         unit = it.get('unit', '')
         quantity = float(it.get('quantity', 0))
-        # Find unit rate
         rate = UNIT_RATES.get(item_name, 0)
         if rate == 0:
-            # try fuzzy matching
             for key in UNIT_RATES:
                 if key.lower() in item_name.lower() or item_name.lower() in key.lower():
                     rate = UNIT_RATES[key]
                     break
-        # Apply wastage to quantity
         qty_with_waste = quantity * (1 + wastage_percent / 100)
         total = qty_with_waste * rate
         rows.append({
@@ -803,12 +835,6 @@ def compute_boq(extracted_items, wastage_percent=5):
 
 
 def parse_ai_extraction(text):
-    """
-    Parse AI output to extract items, units, quantities.
-    Expects a markdown table with columns: Item, Unit, Quantity (or similar).
-    Returns list of dicts.
-    """
-    # Find all tables in markdown
     lines = text.split('\n')
     items = []
     in_table = False
@@ -817,22 +843,18 @@ def parse_ai_extraction(text):
         if '|' in line:
             cells = [c.strip() for c in line.strip('|').split('|')]
             if not in_table:
-                # Check if it's a header (contains typical headers)
                 if any('item' in c.lower() or 'quantity' in c.lower() or 'unit' in c.lower() for c in cells):
                     header = cells
                     in_table = True
                 continue
             else:
-                # Check if it's a separator row
                 if all(re.match(r'^[\s:|-]+$', c) for c in cells):
                     continue
-                # Data row
                 if header:
                     row_dict = {}
                     for idx, col_name in enumerate(header):
                         if idx < len(cells):
                             row_dict[col_name] = cells[idx]
-                    # Extract item, unit, quantity
                     item = row_dict.get('Item', row_dict.get('item', ''))
                     unit = row_dict.get('Unit', row_dict.get('unit', ''))
                     qty_str = row_dict.get('Quantity', row_dict.get('quantity', '0'))
@@ -854,7 +876,7 @@ def parse_ai_extraction(text):
 def main_page():
     ui.query('body').style('width: 100vw; height: 100vh; overflow-x: hidden;')
 
-    # ---------------- SIDEBAR ---------------- (Solid dark navy)
+    # ---------------- SIDEBAR ----------------
     sidebar = ui.left_drawer().classes('sidebar-container').style('width: 380px;')
     with sidebar:
         with ui.row().classes('w-full items-center justify-between mb-4 p-2'):
@@ -916,10 +938,10 @@ def main_page():
 
     # ---------------- MAIN COLUMN ----------------
     with ui.column().classes('w-full min-h-screen p-4 bg-[#031338]'):
-        # Title block
+        # Title block - updated styles
         with ui.column().classes('w-full bg-[#0d1a35] px-6 py-4 rounded-xl border border-[#FF8C00] shadow-lg mb-4'):
-            ui.label('SMART EGY-CIVIL AI AUDITOR').classes('text-3xl font-extrabold text-white tracking-wide')
-            ui.label('Intelligent General Civil, Geotechnical & Structural Compliance Engine').classes('text-lg text-[#4FC3F7] font-medium mt-1')
+            ui.label('SMART EGY-CIVIL AI AUDITOR').classes('main-title text-white')
+            ui.label('Intelligent General Civil, Geotechnical & Structural Compliance Engine').classes('sub-title text-lg font-medium mt-1')
             ui.label('Lead Technical Auditor: Eng. Mohamed Abd Al Aty').classes('text-base text-[#A9B6D0] font-semibold mt-1')
             ui.label('Next-generation automated civil engineering and quality intelligence, precision-calibrated for the Egyptian Code of Practice.').classes('text-sm text-[#A9B6D0] mt-1 italic')
 
@@ -935,18 +957,18 @@ def main_page():
         </div>
         ''')
 
+        # Tabs - removed "Technical Codes Handbook"
         with ui.tabs().classes('w-full text-white bg-[#0d1a35] rounded-lg') as tabs:
             t_dash = ui.tab('Concrete Cube Verifier').classes('text-white font-bold')
             t_audit = ui.tab('AI Multi-Standard Auditor').classes('text-white font-bold')
             t_defect = ui.tab('Defect Diagnostic').classes('text-white font-bold')
             t_chat = ui.tab('AI Chatbot').classes('text-white font-bold')
-            t_handbook = ui.tab('Technical Codes Handbook').classes('text-white font-bold')
             t_boq = ui.tab('Professional BOQ Takeoff').classes('text-white font-bold')
 
         with ui.tab_panels(tabs, value=t_dash).classes('w-full bg-transparent mt-4'):
 
             # =========================================================================
-            # TAB 1: CONCRETE CUBE CALCULATION SHEET & VERIFIER
+            # TAB 1: CONCRETE CUBE VERIFIER
             # =========================================================================
             with ui.tab_panel(t_dash):
                 ui.label('Concrete Cube Calculation Sheet & Statistical Verifier').classes('text-2xl font-bold text-white mb-4')
@@ -1229,8 +1251,7 @@ report with clear ## section headings and real Markdown tables for any comparati
                         contents = [prompt]
                         if uploaded_file_data['type'] == 'application/pdf':
                             reader = pypdf.PdfReader(io.BytesIO(uploaded_file_data['bytes']))
-                            text = "".join([p.extract_text() or "" for p in reader.pages])
-                            # Truncate to avoid overwhelming the model
+                            text = "".join([p.extract_text() or "" for p in reader.pages[:10]])
                             if len(text) > 10000:
                                 text = text[:10000] + "\n... (truncated)"
                             contents.append(f"Extracted PDF Text:\n{text}")
@@ -1281,7 +1302,7 @@ report with clear ## section headings and real Markdown tables for any comparati
                 ui.button('Execute AI Audit & Compliance Check', on_click=run_ai_audit).classes('primary-btn')
 
             # =========================================================================
-            # TAB 3: DEFECT DIAGNOSTIC (Enhanced with chat input and product prices)
+            # TAB 3: DEFECT DIAGNOSTIC
             # =========================================================================
             with ui.tab_panel(t_defect):
                 ui.label('AI Engineering Defect Diagnostic & Repair Protocol').classes('text-2xl font-bold text-white mb-2')
@@ -1351,7 +1372,7 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                         contents.append(prompt)
                         if defect_file_data['type'] == 'application/pdf':
                             reader = pypdf.PdfReader(io.BytesIO(defect_file_data['bytes']))
-                            text = "".join([p.extract_text() or "" for p in reader.pages])
+                            text = "".join([p.extract_text() or "" for p in reader.pages[:10]])
                             if len(text) > 10000:
                                 text = text[:10000] + "\n... (truncated)"
                             contents.append(f"Extracted PDF Text (if any):\n{text}")
@@ -1403,13 +1424,12 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                 ui.button('Diagnose Defect & Get Repair Protocol', on_click=run_defect_diagnosis).classes('primary-btn')
 
             # =========================================================================
-            # TAB 4: AI CHATBOT (No containers, wide space)
+            # TAB 4: AI CHATBOT (updated description)
             # =========================================================================
             with ui.tab_panel(t_chat):
                 ui.label('Core-Code Intelligent Assistant Chatbot').classes('text-2xl font-bold text-white mb-2')
-                ui.markdown('Ask any engineering, mix design, geotechnical, or pavement question.').classes('markdown-body mb-2')
+                ui.markdown('Ask any engineering, mix design, geotechnical, or pavement question and get answers based on the Egyptian Codes (ECP 203, ECP 202, ECP 104) and international standards.').classes('markdown-body mb-2')
 
-                # Chat container: no backgrounds, just clean messages
                 chat_container = ui.column().classes('output-card w-full h-[500px] overflow-y-auto mb-4')
                 chat_messages = [{"role": "assistant", "content": "Hello! I am your Multi-Standard Engineering Assistant. How can I assist you today?"}]
 
@@ -1482,35 +1502,13 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                     ui.button('Download Chat PDF Transcript', on_click=download_chat_pdf).classes('primary-btn flex-1')
 
             # =========================================================================
-            # TAB 5: TECHNICAL HANDBOOK
-            # =========================================================================
-            with ui.tab_panel(t_handbook):
-                ui.label('Multi-Standard Civil Engineering Technical Handbook').classes('text-2xl font-bold text-white mb-4')
-                with ui.tabs().classes('w-full text-white bg-[#0d1a35] rounded-lg') as hb_tabs:
-                    h1 = ui.tab('ECP 203 & Concrete').classes('text-white font-bold')
-                    h2 = ui.tab('ECP 202 & Soils').classes('text-white font-bold')
-                    h3 = ui.tab('ECP 104 & Roads').classes('text-white font-bold')
-                    h4 = ui.tab('International Standards').classes('text-white font-bold')
-
-                with ui.tab_panels(hb_tabs, value=h1).classes('w-full bg-transparent mt-4'):
-                    with ui.tab_panel(h1):
-                        ui.markdown('### Egyptian Code for Reinforced Concrete Structures (ECP 203)').classes('markdown-body')
-                    with ui.tab_panel(h2):
-                        ui.markdown('### Egyptian Code for Soil Mechanics & Foundations (ECP 202)').classes('markdown-body')
-                    with ui.tab_panel(h3):
-                        ui.markdown('### Egyptian Code for Roads, Highways and Airfields (ECP 104)').classes('markdown-body')
-                    with ui.tab_panel(h4):
-                        ui.markdown('### International Standards (ASTM, AASHTO, BS EN, ISO)').classes('markdown-body')
-
-            # =========================================================================
-            # TAB 6: PROFESSIONAL BOQ TAKEOFF (FIXED - AI extracts, Python computes)
+            # TAB 5: PROFESSIONAL BOQ TAKEOFF (with crash fixes)
             # =========================================================================
             with ui.tab_panel(t_boq):
                 ui.label('Professional AI BOQ Takeoff & Cost Estimation').classes('text-2xl font-bold text-white mb-2')
                 ui.markdown('Upload project drawings (PDF, JPG, PNG). AI will extract quantities, and the engine will compute costs with wastage.').classes('markdown-body mb-2')
                 ui.markdown('*Designed to give accurate results with success rate near 98%, but results should be rechecked by a qualified engineer.*').classes('text-xs text-amber-400 mb-4')
 
-                # Upload
                 boq_status_label = ui.label('Status: No file uploaded yet').classes('text-xs text-amber-400 font-semibold mb-2')
                 boq_file_data = {'bytes': None, 'type': None}
 
@@ -1529,7 +1527,7 @@ Ensure all tables are proper Markdown tables with header and separator rows.
 
                 ui.upload(label='Upload Drawings (PDF/Image)', auto_upload=True, on_upload=handle_boq_upload).props('flat dark').classes('w-full mb-4')
 
-                # Two sub-tabs
+                # Sub-tabs
                 with ui.tabs().classes('w-full text-white bg-[#0d1a35] rounded-lg') as boq_sub_tabs:
                     b_arch = ui.tab('Architectural').classes('text-white font-bold')
                     b_struct = ui.tab('Structural').classes('text-white font-bold')
@@ -1559,11 +1557,10 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                             soil_type = ui.select(label='Soil Type', options=['Rock', 'Sand', 'Clay', 'Silt'], value='Sand').classes('w-full mb-2')
                             wastage_percent = ui.number(label='Wastage Allowance (%)', value=5, step=1, min=0, max=20).classes('w-full mb-2')
 
-                # Run button and outputs
                 boq_output_container = ui.column().classes('w-full')
                 boq_export_area = ui.row().classes('w-full gap-4 mt-4')
                 boq_result_holder = {'text': ''}
-                df_boq_global = None  # to hold the DataFrame for Excel export
+                df_boq_global = None
 
                 async def run_boq_takeoff():
                     nonlocal df_boq_global
@@ -1581,7 +1578,6 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                         ui.label('AI is extracting quantities from drawings... (this may take a moment)').classes('self-center text-sm')
 
                     try:
-                        # Gather parameters
                         arch_params = {
                             'total_area': total_area.value,
                             'num_floors': num_floors.value,
@@ -1602,7 +1598,6 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                         }
                         basis = code_basis_select.value
 
-                        # Build prompt - ONLY for extraction, no calculations
                         prompt = f"""
 You are a Professional Quantity Surveyor with expertise in Egyptian construction.
 Based on the uploaded project drawings and the parameters provided, extract the quantities of materials and items needed.
@@ -1645,31 +1640,34 @@ Example:
 | Rebar (Grade 400) | ton | 8.5 |
 ...
 """
-                        # Add file content (truncate PDF text)
                         contents = [prompt]
                         if boq_file_data['type'] == 'application/pdf':
-                            reader = pypdf.PdfReader(io.BytesIO(boq_file_data['bytes']))
-                            # Extract text from first 10 pages only to avoid overload
-                            pages_text = []
-                            for i, page in enumerate(reader.pages[:10]):
-                                try:
-                                    pages_text.append(page.extract_text() or "")
-                                except:
-                                    pass
-                            text = "".join(pages_text)
-                            if len(text) > 10000:
-                                text = text[:10000] + "\n... (truncated)"
-                            if text.strip():
-                                contents.append(f"Extracted Text from Drawings (first pages):\n{text}")
-                            else:
-                                contents.append("No readable text found in PDF. The AI will rely on image analysis if provided as image.")
+                            try:
+                                reader = pypdf.PdfReader(io.BytesIO(boq_file_data['bytes']))
+                                # Read first 5 pages to avoid overload
+                                pages_text = []
+                                for i, page in enumerate(reader.pages[:5]):
+                                    try:
+                                        pages_text.append(page.extract_text() or "")
+                                    except:
+                                        pass
+                                text = "".join(pages_text)
+                                if len(text) > 8000:
+                                    text = text[:8000] + "\n... (truncated)"
+                                if text.strip():
+                                    contents.append(f"Extracted Text from Drawings (first pages):\n{text}")
+                                else:
+                                    contents.append("No readable text found in PDF. The AI will rely on image analysis if provided as image.")
+                            except Exception as pdf_err:
+                                ui.notify(f'PDF reading error: {str(pdf_err)}. Trying image mode.', type='warning')
+                                # Fallback: treat as image
+                                img_part = types.Part.from_bytes(data=boq_file_data['bytes'], mime_type='application/pdf')
+                                contents.append(img_part)
                         else:
                             img_part = types.Part.from_bytes(data=boq_file_data['bytes'], mime_type=boq_file_data['type'])
                             contents.append(img_part)
 
-                        # Get AI extraction with timeout
                         extraction_text = await call_gemini(contents, temperature=0.1, timeout=90)
-                        # Parse extracted items
                         extracted_items = parse_ai_extraction(extraction_text)
 
                         if not extracted_items:
@@ -1679,14 +1677,11 @@ Example:
                                 ui.markdown('No items extracted. Ensure the drawing contains readable dimensions and labels.').classes('text-amber-400')
                             return
 
-                        # Now compute using Python
                         wastage = float(struct_params['wastage_percent'])
                         df_boq = compute_boq(extracted_items, wastage)
-                        df_boq_global = df_boq  # store for Excel export
+                        df_boq_global = df_boq
 
-                        # Generate markdown table from DataFrame
                         boq_md = df_boq.to_markdown(index=False)
-                        # Add summary
                         total_cost = df_boq['Total Cost (EGP)'].sum()
                         summary = f"\n\n**TOTAL ESTIMATED COST: {total_cost:,.2f} EGP**\n\n*Note: Unit rates are approximate market prices. Wastage of {wastage}% applied.*"
                         boq_result_holder['text'] = boq_md + summary
@@ -1717,7 +1712,6 @@ Example:
                                         ui.notify('No data to export.', type='warning')
                                         return
                                     df = df_boq_global.copy()
-                                    # Add summary row
                                     total_row = pd.DataFrame({
                                         'Item': ['TOTAL'],
                                         'Unit': [''],
@@ -1733,7 +1727,6 @@ Example:
                                         df_out.to_excel(writer, sheet_name='BOQ', index=False)
                                         workbook = writer.book
                                         worksheet = writer.sheets['BOQ']
-                                        # Auto-adjust columns
                                         for i, col in enumerate(df_out.columns):
                                             column_width = max(df_out[col].astype(str).map(len).max(), len(col)) + 2
                                             worksheet.set_column(i, i, column_width)
@@ -1753,7 +1746,7 @@ Example:
 
                 ui.button('Run Professional AI Takeoff', on_click=run_boq_takeoff).classes('primary-btn mt-4')
 
-        # ---------------- FOOTER ----------------
+        # ---------------- FOOTER (updated disclaimer) ----------------
         ui.html('''
         <div class="app-footer">
             <b>Multi-Standard Engineering Quality Assurance Portal</b> &nbsp;|&nbsp; Automated compliance verification across ECP 203, ECP 202, ECP 104, ASTM, AASHTO, BS, EN, and ISO standards.<br>
@@ -1761,7 +1754,7 @@ Example:
             LinkedIn: <a href="https://www.linkedin.com/in/mohamed-abd-al-aty-a326a1214/" target="_blank">Mohamed Abd Al Aty</a> &nbsp;|&nbsp;
             Email: <a href="mailto:mohamedabdalaty63@gmail.com">mohamedabdalaty63@gmail.com</a><br>
             <i>Specialized in QA/QC, Civil Engineering Standards &amp; Automated Compliance.</i> &copy; 2026 Eng. Mohamed Abd Al Aty. All rights reserved.<br>
-            <span style="color: #FF8C00; font-weight: 600;">⚠️ Disclaimer:</span> These AI modules have high accuracy and are specified for the Egyptian codes, but results should be rechecked by a qualified engineer before any decision-making.
+            <span style="color: #FFFFFF; font-weight: 600;">Disclaimer:</span> These AI modules have high accuracy and are specified for the Egyptian codes, but results should be rechecked by a qualified engineer before any decision-making.
         </div>
         ''')
 
