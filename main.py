@@ -30,7 +30,6 @@ from reportlab.platypus import (
     Table,
     TableStyle,
     Image as ReportLabImage,
-    PageBreak,
 )
 
 # Load environment variables securely from .env
@@ -132,9 +131,12 @@ def clean_for_reportlab(text):
     if not text:
         return ""
     text = str(text)
+    # Strip LaTeX delimiters and clean formatting artifacts completely
+    text = text.replace('$', '').replace('\\ge', '>=').replace('\\le', '<=')
+    text = text.replace('\\frac', ' ').replace('\\sum', 'Sum').replace('\\sigma', 'sigma')
+    text = text.replace('\\max', 'Max').replace('\\bar', ' ').replace('{', '').replace('}', '')
     text = re.sub(r'\|?\s*[:-]+[:?-]*\s*\|?', '', text)
     text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-    text = text.replace('$', '').replace('\\ge', '>=').replace('\\le', '<=')
     text = re.sub(r'#+\s*(.*)', r'<font color="#1B2A4A"><b>\1</b></font><br/>', text)
     text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', text)
     text = text.replace('\n', '<br/>')
@@ -143,6 +145,8 @@ def clean_for_reportlab(text):
 def clean_ai_text(text):
     if not text:
         return ""
+    # Remove raw markdown table formatting lines and LaTeX dollar signs for pristine UI display
+    text = text.replace('$', '')
     lines = text.split('\n')
     cleaned_lines = []
     for line in lines:
@@ -341,12 +345,12 @@ def main_page():
                             
                             ui.markdown(f"""
                             #### Step-by-Step Mathematical Formulation & Statistical Proof (28-Day)
-                            * **Specified Characteristic Strength ($f_{{cu}}$):** `{fcu_val:.2f} N/mm²`
-                            * **Calculated Characteristic Strength ($f_{{cu,act}}$):** $\\max(\\text{{Mean}} - k \\cdot \\sigma, 0.85 \\cdot \\text{{Mean}}) =$ **`{s28['fcu']:.2f} N/mm²`**
-                            * **Arithmetic Mean ($\\bar{{x}}$):** $\\frac{{\\sum x_i}}{{n}} = \\frac{{{sum(s28['values'])}}}{{{s28['count']}}} =$ **`{s28['mean']:.2f} N/mm²`**
-                            * **Standard Deviation ($\\sigma$):** $\\sqrt{{\\frac{{\\sum (x_i - \\bar{{x}})^2}}{{n - 1}}}} =$ **`{s28['std']:.2f} N/mm²`** (Bessel's correction $n-1 = {s28['count']}-1$)
-                            * **Safety Multiplier ($k$):** `1.91` for sample size $n = {s28['count']}$ per ECP 203 Table 8-2.
-                            * **Minimum Individual Cube Check:** `{s28['min']:.2f} N/mm²` (Required threshold $\\ge 0.85 \\times f_{{cu}} =$ `{0.85 * fcu_val:.2f} N/mm²`).
+                            * **Specified Characteristic Strength (f_cu):** `{fcu_val:.2f} N/mm²`
+                            * **Calculated Characteristic Strength (f_cu,act):** `max(Mean - k * sigma, 0.85 * Mean)` = **`{s28['fcu']:.2f} N/mm²`**
+                            * **Arithmetic Mean (Mean):** `sum(x_i) / n` = **`{s28['mean']:.2f} N/mm²`**
+                            * **Standard Deviation (sigma):** **`{s28['std']:.2f} N/mm²`** (Bessel's correction n-1 = {s28['count']}-1)
+                            * **Safety Multiplier (k):** `1.91` for sample size n = {s28['count']} per ECP 203 Table 8-2.
+                            * **Minimum Individual Cube Check:** `{s28['min']:.2f} N/mm²` (Required threshold >= `0.85 * f_cu` = `{0.85 * fcu_val:.2f} N/mm²`).
                             * **Maximum Individual Cube Recorded:** `{s28['max']:.2f} N/mm²`.
                             """)
 
@@ -395,7 +399,7 @@ def main_page():
                             wc = wat_v / cem_v if cem_v > 0 else 0
                             ui.markdown(f"""
                             **Durability & Mix Proportion Calculation Verification:**
-                            * **Water-Cement Ratio (W/C):** `{wc:.2f}` (Calculated as $\\frac{{\\text{{Water}}}}{{\\text{{Cement}}}} = \\frac{{{wat_v}}}{{{cem_v}}}$). Maximum allowable W/C under ECP 203 is `0.45`.
+                            * **Water-Cement Ratio (W/C):** `{wc:.2f}` (Calculated as `Water / Cement` = `{wat_v} / {cem_v}`). Maximum allowable W/C under ECP 203 is `0.45`.
                             * **Cement Content Compliance:** `{cem_v} kg/m³` (Minimum required for standard structural exposure is `350 kg/m³`).
                             """)
                         except ValueError:
@@ -438,11 +442,10 @@ def main_page():
                             rep_date = datetime.date.today().strftime('%Y-%m-%d')
                             qr_buf = generate_qr_code(f"UID: {unique_uid} | ECP 203 Calculation Sheet - {project_name_input.value} - {rep_date}")
 
-                            # --- PAGE 1: COVER, METADATA & EXECUTIVE SUMMARY ---
                             build_pdf_header(
                                 story, 
                                 "CONCRETE CUBE STATISTICAL CALCULATION SHEET", 
-                                "Official ECP 203 & ASTM C39 Quality Assurance & Comprehensive Calculation Report", 
+                                "Official ECP 203 & ASTM C39 Quality Assurance & Calculation Proof Report", 
                                 logo_bytes_holder['bytes'], 
                                 engineer_input.value, 
                                 project_name_input.value, 
@@ -454,31 +457,18 @@ def main_page():
                             
                             styles = getSampleStyleSheet()
                             body_style = ParagraphStyle("Body", parent=styles["Normal"], fontSize=8, textColor=colors.HexColor("#222222"), leading=12)
-                            h2_style = ParagraphStyle("H2Style", parent=styles["Heading2"], fontSize=10, textColor=colors.HexColor("#1B2A4A"), spaceBefore=10, spaceAfter=4)
                             
-                            story.append(Paragraph("<b>1. Executive Summary & Batch Specifications</b>", h2_style))
                             summary_html = f"""
-                            <b>Specified Characteristic Strength (f_cu):</b> {fcu_input.value} N/mm²<br/>
+                            <b>Specified Grade (f_cu):</b> {fcu_input.value} N/mm²<br/>
                             <b>Mixer Truck No:</b> {truck_input.value} &nbsp;|&nbsp; <b>Batch Ticket ID:</b> {ticket_input.value}<br/>
                             <b>Cement Content:</b> {cement_input.value} kg/m³ &nbsp;|&nbsp; <b>Free Water Content:</b> {water_input.value} kg/m³<br/>
                             <b>7-Day Mean Strength:</b> {s7['mean']:.2f} N/mm² ({len(c7)} cubes tested)<br/>
                             <b>14-Day Mean Strength:</b> {s14['mean']:.2f} N/mm² ({len(c14)} cubes tested)<br/>
-                            <b>28-Day Characteristic Strength (f_cu,act):</b> {s28['fcu']:.2f} N/mm² &nbsp;|&nbsp; <b>Compliance Verdict:</b> {'PASS (Fully Compliant)' if s28['pass'] else 'FAIL (Non-Compliant)'}<br/>
+                            <b>28-Day Characteristic Strength (f_cu,act):</b> {s28['fcu']:.2f} N/mm² &nbsp;|&nbsp; <b>Compliance Verdict:</b> {'PASS' if s28['pass'] else 'FAIL'}<br/>
                             <b>Statistical Mean (28-Day):</b> {s28['mean']:.2f} N/mm² &nbsp;|&nbsp; <b>Standard Deviation (sigma):</b> {s28['std']:.2f} N/mm²
                             """
                             story.append(Paragraph(summary_html, body_style))
-                            story.append(Spacer(1, 10))
-
-                            # --- PAGE 2: STATISTICAL FORMULATION & 28-DAY TABLE ---
-                            story.append(Paragraph("<b>2. Statistical Formulas & 28-Day Specimen Verification</b>", h2_style))
-                            math_explanation = """
-                            The characteristic strength $f_{cu,act}$ is calculated in accordance with Egyptian Code ECP 203 as the lower of:<br/>
-                            1. $\\text{Mean} - k \\cdot \\sigma$<br/>
-                            2. $0.85 \\cdot \\text{Mean}$<br/>
-                            Bessel's correction is applied for sample standard deviation with $n-1$ degrees of freedom. All individual cubes must satisfy $\\ge 0.85 \\times f_{cu}$.
-                            """
-                            story.append(Paragraph(math_explanation, body_style))
-                            story.append(Spacer(1, 6))
+                            story.append(Spacer(1, 8))
 
                             if s28:
                                 pdf_table_data = [["Specimen", "Crushing Load (N/mm²)", "Deviation from Mean", "Status"]]
@@ -500,65 +490,7 @@ def main_page():
                                 ]))
                                 story.append(t_pdf)
 
-                            story.append(PageBreak())
-
-                            # --- PAGE 3: 7-DAY & 14-DAY STAGES BREAKDOWN ---
-                            story.append(Paragraph("<b>3. Early Age Strength Verification (7-Day & 14-Day Stages)</b>", h2_style))
-                            
-                            if s7:
-                                story.append(Paragraph("<b>7-Day Stage Test Results (Target Ratio: 70%):</b>", body_style))
-                                s7_table_data = [["Specimen", "Crushing Load (N/mm²)", "Deviation", "Status"]]
-                                for idx, val in enumerate(s7['values'], 1):
-                                    dev = val - s7['mean']
-                                    st = "Acceptable" if val >= (0.85 * 0.70 * fcu_val) else "Below Limit"
-                                    s7_table_data.append([f"Cube #{idx}", f"{val:.2f}", f"{dev:+.2f}", st])
-                                t_s7 = Table(s7_table_data, colWidths=[100, 140, 140, 160])
-                                t_s7.setStyle(TableStyle([
-                                    ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1B2A4A")),
-                                    ('TEXTCOLOR', (0,0), (-1,0), colors.white),
-                                    ('ALIGN', (0,0), (-1,-1), 'CENTER'),
-                                    ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-                                    ('FONTSIZE', (0,0), (-1,-1), 7.5),
-                                    ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#CBD5E1")),
-                                    ('TOPPADDING', (0,0), (-1,-1), 3),
-                                    ('BOTTOMPADDING', (0,0), (-1,-1), 3),
-                                ]))
-                                story.append(t_s7)
-                                story.append(Spacer(1, 8))
-
-                            if s14:
-                                story.append(Paragraph("<b>14-Day Stage Test Results (Target Ratio: 85%):</b>", body_style))
-                                s14_table_data = [["Specimen", "Crushing Load (N/mm²)", "Deviation", "Status"]]
-                                for idx, val in enumerate(s14['values'], 1):
-                                    dev = val - s14['mean']
-                                    st = "Acceptable" if val >= (0.85 * 0.85 * fcu_val) else "Below Limit"
-                                    s14_table_data.append([f"Cube #{idx}", f"{val:.2f}", f"{dev:+.2f}", st])
-                                t_s14 = Table(s14_table_data, colWidths=[100, 140, 140, 160])
-                                t_s14.setStyle(TableStyle([
-                                    ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1B2A4A")),
-                                    ('TEXTCOLOR', (0,0), (-1,0), colors.white),
-                                    ('ALIGN', (0,0), (-1,-1), 'CENTER'),
-                                    ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-                                    ('FONTSIZE', (0,0), (-1,-1), 7.5),
-                                    ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#CBD5E1")),
-                                    ('TOPPADDING', (0,0), (-1,-1), 3),
-                                    ('BOTTOMPADDING', (0,0), (-1,-1), 3),
-                                ]))
-                                story.append(t_s14)
-
                             story.append(Spacer(1, 10))
-
-                            # --- PAGE 4: DURABILITY & APPROVAL SIGN-OFF ---
-                            story.append(Paragraph("<b>4. Durability & Quality Assurance Sign-Off</b>", h2_style))
-                            durability_html = f"""
-                            <b>Mix Proportion Durability Audit:</b><br/>
-                            * Cement Content: <b>{cement_input.value} kg/m³</b> (Meets ECP 203 minimum threshold of 350 kg/m³ for reinforced concrete)<br/>
-                            * Free Water Content: <b>{water_input.value} kg/m³</b><br/>
-                            * Calculated Water-Cement Ratio: <b>{float(water_input.value)/float(cement_input.value):.2f}</b> (Maximum allowable limit: 0.45)<br/>
-                            * Governing Inspection Standards: ECP 203, ECP 202, ECP 104, ASTM C39 / C31.
-                            """
-                            story.append(Paragraph(durability_html, body_style))
-                            story.append(Spacer(1, 12))
                             build_pdf_footer_and_signatures(story, qr_buf)
 
                             doc.build(story)
@@ -644,6 +576,7 @@ def main_page():
 
             audit_output_container = ui.column().classes('w-full')
             audit_export_container = ui.row().classes('w-full gap-4 mt-4')
+            audit_result_text_holder = {'text': ''}
 
             def run_ai_audit():
                 if not client:
@@ -685,6 +618,7 @@ def main_page():
                         config=config
                     )
                     audit_result_text = clean_ai_text(response.text)
+                    audit_result_text_holder['text'] = audit_result_text
                     
                     audit_output_container.clear()
                     with audit_output_container:
@@ -718,7 +652,7 @@ def main_page():
                                 styles = getSampleStyleSheet()
                                 body_style = ParagraphStyle("AuditBody", parent=styles["Normal"], fontSize=8, textColor=colors.HexColor("#222222"), leading=12)
                                 
-                                sanitized_text = clean_for_reportlab(audit_result_text)
+                                sanitized_text = clean_for_reportlab(audit_result_text_holder['text'])
                                 story.append(Paragraph(sanitized_text, body_style))
                                 story.append(Spacer(1, 10))
                                 build_pdf_footer_and_signatures(story, qr_buf)
@@ -733,7 +667,7 @@ def main_page():
                         def download_audit_csv():
                             df = pd.DataFrame({
                                 "Audit Field": ["Project Name", "Focus", "Source File", "Engineer", "Verification UID", "Summary Findings"],
-                                "Value": [project_name_input.value, audit_focus, uploaded_file_data['name'], engineer_input.value, unique_uid, audit_result_text[:300].replace('\n', ' ')]
+                                "Value": [project_name_input.value, audit_focus, uploaded_file_data['name'], engineer_input.value, unique_uid, audit_result_text_holder['text'][:300].replace('\n', ' ')]
                             })
                             ui.download(df.to_csv(index=False).encode('utf-8'), filename=f"AI_Audit_{ticket_input.value}.csv")
                             ui.notify('AI Audit CSV Summary downloaded!', type='positive')
@@ -755,6 +689,7 @@ def main_page():
             
             defect_status_label = ui.label('Status: No file uploaded yet').classes('text-xs text-amber-400 font-semibold mb-2')
             defect_file_data = {'bytes': None, 'type': None}
+            defect_result_holder = {'text': ''}
 
             async def handle_defect_upload(e):
                 try:
@@ -768,12 +703,14 @@ def main_page():
 
             ui.upload(label='Select Site Defect Photo (JPG/PNG)', auto_upload=True, on_upload=handle_defect_upload).props('flat dark').classes('w-full mb-4 bg-[#1E293B] rounded-lg')
             defect_output = ui.column().classes('w-full')
+            defect_export_area = ui.row().classes('w-full gap-4 mt-4')
 
             def run_defect_diagnosis():
                 if not client or not defect_file_data['bytes']:
                     ui.notify('API key missing or image not uploaded!', type='negative')
                     return
                 defect_output.clear()
+                defect_export_area.clear()
                 with defect_output:
                     ui.spinner('ios', size='lg').classes('self-center text-[#00BFFF]')
                     ui.label('Analyzing defect and matching local repair products (Sika/Fosroc)...').classes('self-center text-sm')
@@ -782,11 +719,55 @@ def main_page():
                     img = types.Part.from_bytes(data=defect_file_data['bytes'], mime_type=defect_file_data['type'])
                     prompt = "Perform forensic structural evaluation and list repair products (Sika/Fosroc) complying with ECP 203 and ASTM."
                     response = client.models.generate_content(model='gemini-3.5-flash-lite', contents=[prompt, img])
+                    res_text = clean_ai_text(response.text)
+                    defect_result_holder['text'] = res_text
+
                     defect_output.clear()
                     with defect_output:
                         with ui.column().classes('custom-card w-full'):
                             ui.label('Forensic Diagnosis & Repair Protocol').classes('text-xl font-bold text-white mb-2')
-                            ui.markdown(clean_ai_text(response.text))
+                            ui.markdown(res_text)
+
+                    with defect_export_area:
+                        unique_uid = f"DEFECT-{uuid.uuid4().hex[:8].upper()}"
+
+                        def download_defect_pdf():
+                            try:
+                                buffer = io.BytesIO()
+                                doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=36, leftMargin=36, topMargin=36, bottomMargin=36)
+                                story = []
+                                rep_date = datetime.date.today().strftime('%Y-%m-%d')
+                                qr_buf = generate_qr_code(f"UID: {unique_uid} | Defect Diagnostic - {project_name_input.value}")
+
+                                build_pdf_header(
+                                    story, 
+                                    "AI DEFECT DIAGNOSTIC & REPAIR REPORT", 
+                                    "Forensic Structural Evaluation & Sika/Fosroc Repair Protocols", 
+                                    logo_bytes_holder['bytes'], 
+                                    engineer_input.value, 
+                                    project_name_input.value, 
+                                    pour_location_input.value, 
+                                    rep_date,
+                                    ticket_input.value,
+                                    unique_uid
+                                )
+                                styles = getSampleStyleSheet()
+                                body_style = ParagraphStyle("DefectBody", parent=styles["Normal"], fontSize=8, textColor=colors.HexColor("#222222"), leading=12)
+                                
+                                sanitized_text = clean_for_reportlab(defect_result_holder['text'])
+                                story.append(Paragraph(sanitized_text, body_style))
+                                story.append(Spacer(1, 10))
+                                build_pdf_footer_and_signatures(story, qr_buf)
+
+                                doc.build(story)
+                                buffer.seek(0)
+                                ui.download(buffer.getvalue(), filename=f"Defect_Diagnostic_Report_{ticket_input.value}.pdf")
+                                ui.notify('Defect Diagnostic PDF downloaded successfully!', type='positive')
+                            except Exception as ex:
+                                ui.notify(f'PDF Export Error: {str(ex)}', type='negative')
+
+                        ui.button('Download Defect PDF Report', on_click=download_defect_pdf).classes('primary-btn flex-1')
+
                 except Exception as ex:
                     defect_output.clear()
                     with defect_output:
@@ -836,7 +817,46 @@ def main_page():
                     chat_messages.append({"role": "assistant", "content": f"Error: {str(e)}"})
                 render_chat()
 
-            ui.button('Send Query', on_click=send_chat).classes('primary-btn')
+            with ui.row().classes('w-full gap-4 mt-2'):
+                ui.button('Send Query', on_click=send_chat).classes('primary-btn flex-1')
+
+                def download_chat_pdf():
+                    try:
+                        buffer = io.BytesIO()
+                        doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=36, leftMargin=36, topMargin=36, bottomMargin=36)
+                        story = []
+                        rep_date = datetime.date.today().strftime('%Y-%m-%d')
+                        unique_uid = f"CHAT-{uuid.uuid4().hex[:8].upper()}"
+                        qr_buf = generate_qr_code(f"UID: {unique_uid} | Chat Transcript - {project_name_input.value}")
+
+                        build_pdf_header(
+                            story, 
+                            "AI ENGINEERING ASSISTANT TRANSCRIPT", 
+                            "Official Q&A Consultation Record", 
+                            logo_bytes_holder['bytes'], 
+                            engineer_input.value, 
+                            project_name_input.value, 
+                            pour_location_input.value, 
+                            rep_date,
+                            ticket_input.value,
+                            unique_uid
+                        )
+                        styles = getSampleStyleSheet()
+                        body_style = ParagraphStyle("ChatBody", parent=styles["Normal"], fontSize=8, textColor=colors.HexColor("#222222"), leading=12)
+                        
+                        full_chat_text = "<br/><br/>".join([f"<b>{m['role'].upper()}:</b> {clean_for_reportlab(m['content'])}" for m in chat_messages])
+                        story.append(Paragraph(full_chat_text, body_style))
+                        story.append(Spacer(1, 10))
+                        build_pdf_footer_and_signatures(story, qr_buf)
+
+                        doc.build(story)
+                        buffer.seek(0)
+                        ui.download(buffer.getvalue(), filename=f"AI_Chat_Transcript_{ticket_input.value}.pdf")
+                        ui.notify('Chat Transcript PDF downloaded successfully!', type='positive')
+                    except Exception as ex:
+                        ui.notify(f'PDF Export Error: {str(ex)}', type='negative')
+
+                ui.button('Download Chat PDF Transcript', on_click=download_chat_pdf).classes('primary-btn flex-1')
 
         # --- TAB 5: TECHNICAL HANDBOOK ---
         with ui.tab_panel(t_handbook):
