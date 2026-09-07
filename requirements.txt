@@ -6,7 +6,7 @@ pypdf
 python-dotenv
 fastapi
 nicegui
-google-generativeai
+google-genai
 reportlab
 xlsxwriter
 Pillow
