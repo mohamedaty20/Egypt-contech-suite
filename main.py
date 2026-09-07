@@ -60,17 +60,6 @@ ui.add_head_html('''
         height: 100vh;
         overflow-x: hidden;
     }
-    .custom-card {
-        background-color: #1B2A4A;
-        border: 1px solid #FF8C00;
-        border-radius: 8px;
-        padding: 24px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.4);
-        margin-bottom: 20px;
-        width: 100% !important;
-        max-width: none !important;
-        box-sizing: border-box;
-    }
     .primary-btn {
         background-color: #000000 !important;
         color: #FFFFFF !important;
@@ -148,9 +137,11 @@ def clean_for_reportlab(text):
 def clean_ai_text(text):
     if not text:
         return ""
+    # Purge weird artifact tokens, double dots, or improper code injections
     text = text.replace('$', '').replace('\\times', '*').replace('\\ge', '>=').replace('\\le', '<=')
-    text = text.replace('****', '**').replace('//', '/').replace('{cu}', 'f_cu')
+    text = text.replace('****', '**').replace('//', '/').replace('ffcu', 'f_cu').replace('{cu}', 'f_cu')
     text = re.sub(r'\\([a-zA-Z]+)', r'\1', text)
+    text = re.sub(r'\.{2,}', '', text) # Remove strange sequence of dots
     return text
 
 def build_pdf_header(story, doc_title, subtitle, logo_bytes, engineer, project, location, rep_date, ticket_id, unique_hash):
@@ -219,10 +210,8 @@ def build_pdf_footer_and_signatures(story, qr_img_buffer):
 # --- MAIN APP LAYOUT (FULL SCREEN) ---
 @ui.page('/')
 def main_page():
-    # Ensure root container takes full width
     ui.query('body').style('width: 100vw; height: 100vh; overflow-x: hidden;')
     
-    # --- SIDEBAR CONFIGURATION (Defined safely at the root page level) ---
     supp_code_select = None
     sidebar = ui.left_drawer().classes('bg-[#1B2A4A] text-white p-4').style('width: 340px;')
     with sidebar:
@@ -274,10 +263,8 @@ def main_page():
 
         ui.upload(label='Upload Company Logo', auto_upload=True, on_upload=handle_logo_upload).props('flat dark').classes('w-full mb-2')
 
-    # Sidebar toggle floating button if closed
     ui.button(icon='menu', on_click=sidebar.toggle).classes('fixed top-4 left-4 z-50 bg-[#1B2A4A] text-white border border-[#FF8C00] p-2 rounded shadow-lg')
 
-    # Main Column Container
     with ui.column().classes('w-full min-h-screen p-4 bg-[#031338]'):
         with ui.row().classes('w-full items-center justify-between bg-[#1B2A4A] px-6 py-4 rounded-lg border border-[#FF8C00] mb-4 shadow-lg'):
             ui.label('Multi-Disciplinary Civil, Geotechnical & Pavement Engineering Auditor').classes('text-3xl font-bold text-white')
@@ -310,13 +297,13 @@ def main_page():
                 ui.label('Comprehensive Concrete Cube Calculation Sheet & Statistical Verifier (ECP 203)').classes('text-2xl font-bold text-white mb-4')
                 
                 with ui.row().classes('w-full gap-4 mb-4'):
-                    with ui.column().classes('custom-card flex-1'):
+                    with ui.column().classes('flex-1'):
                         ui.label('7-Day Cubes (Comma Separated N/mm2)').classes('font-bold text-white text-sm')
                         c7_input = ui.input(value='21.0, 22.5, 20.5').classes('w-full')
-                    with ui.column().classes('custom-card flex-1'):
+                    with ui.column().classes('flex-1'):
                         ui.label('14-Day Cubes (Comma Separated N/mm2)').classes('font-bold text-white text-sm')
                         c14_input = ui.input(value='26.0, 27.2, 25.8').classes('w-full')
-                    with ui.column().classes('custom-card flex-1'):
+                    with ui.column().classes('flex-1'):
                         ui.label('28-Day Cubes (Comma Separated N/mm2)').classes('font-bold text-white text-sm')
                         c28_input = ui.input(value='32.5, 34.0, 31.0, 35.5, 29.0, 33.0').classes('w-full')
 
@@ -369,9 +356,9 @@ def main_page():
 
                         result_output_area.clear()
                         with result_output_area:
-                            with ui.column().classes('custom-card w-full'):
+                            with ui.column().classes('w-full'):
                                 ui.label('AI-Powered Comprehensive Concrete Calculation Sheet & Statistical Proof').classes('text-xl font-bold text-white mb-2')
-                                ui.markdown(res_text)
+                                ui.markdown(res_text).style('width: 100%; text-align: left; display: block;')
 
                         def parse_vals(txt):
                             try:
@@ -565,9 +552,9 @@ def main_page():
                         
                         audit_output_container.clear()
                         with audit_output_container:
-                            with ui.column().classes('custom-card w-full'):
+                            with ui.column().classes('w-full'):
                                 ui.label('Master Engineering Audit Findings & Code Compliance Report').classes('text-xl font-bold text-white mb-2')
-                                ui.markdown(audit_result_text)
+                                ui.markdown(audit_result_text).style('width: 100%; text-align: left; display: block;')
 
                         with audit_export_container:
                             unique_uid = f"AUDIT-{uuid.uuid4().hex[:8].upper()}"
@@ -667,9 +654,9 @@ def main_page():
 
                         defect_output.clear()
                         with defect_output:
-                            with ui.column().classes('custom-card w-full'):
+                            with ui.column().classes('w-full'):
                                 ui.label('Forensic Diagnosis & Repair Protocol').classes('text-xl font-bold text-white mb-2')
-                                ui.markdown(res_text)
+                                ui.markdown(res_text).style('width: 100%; text-align: left; display: block;')
 
                         with defect_export_area:
                             unique_uid = f"DEFECT-{uuid.uuid4().hex[:8].upper()}"
@@ -723,16 +710,16 @@ def main_page():
                 ui.label('Core-Code Intelligent Assistant Chatbot (Master Engine)').classes('text-2xl font-bold text-white mb-2')
                 ui.markdown('Ask any engineering, mix design, geotechnical, or pavement question based strictly on core codes (**ECP 203, ECP 202, ECP 104, ASTM, AASHTO, BS, EN, and ISO**).')
 
-                chat_container = ui.column().classes('custom-card w-full h-[500px] overflow-y-auto mb-4')
+                chat_container = ui.column().classes('w-full h-[500px] overflow-y-auto mb-4 p-2')
                 chat_messages = [{"role": "assistant", "content": "Hello! I am your Multi-Standard Engineering Assistant. How can I assist you with your civil, geotechnical, or concrete queries today?"}]
 
                 def render_chat():
                     chat_container.clear()
                     with chat_container:
                         for msg in chat_messages:
-                            bg = 'bg-[#121E36]' if msg['role'] == 'assistant' else 'bg-[#2A3F6A]'
-                            with ui.row().classes(f'w-full p-3 rounded-lg mb-2 {bg}'):
-                                ui.markdown(f"**{msg['role'].capitalize()}:** {msg['content']}")
+                            # Strict full-width row alignment with zero border containers wrapping outputs
+                            with ui.row().classes('w-full py-2 my-1'):
+                                ui.markdown(f"**{msg['role'].capitalize()}:** {msg['content']}").style('width: 100%; text-align: left; display: block;')
 
                 render_chat()
                 user_msg = ui.input(placeholder='Type your engineering question here...').classes('w-full mb-2')
