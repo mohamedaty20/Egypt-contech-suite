@@ -5,7 +5,6 @@ import re
 import uuid
 import numpy as np
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
 import qrcode
 import pypdf
@@ -72,21 +71,24 @@ ui.add_head_html('''
         color: #FF8C00 !important;
         border: 2px solid #00BFFF !important;
     }
-    input, select, textarea {
+    input, select, textarea, .q-field__control {
         background-color: #1E222D !important;
         color: #FFFFFF !important;
         border: 1px solid #FF8C00 !important;
         border-radius: 4px;
-        padding: 8px;
     }
-    /* Fix Quasar Dropdown Menu Contrast */
-    .q-menu, .q-popover {
+    .q-field__native, .q-field__input, .q-field__label {
+        color: #FFFFFF !important;
+    }
+    /* Fix Quasar Dropdown Menu & Select Box Contrast */
+    .q-menu, .q-popover, .q-virtual-scroll__content {
         background-color: #1B2A4A !important;
         color: #FFFFFF !important;
         border: 1px solid #FF8C00 !important;
     }
     .q-item {
         color: #FFFFFF !important;
+        background-color: #1B2A4A !important;
     }
     .q-item:hover {
         background-color: #000000 !important;
@@ -111,18 +113,6 @@ def generate_qr_code(data_str):
     buf.seek(0)
     return buf
 
-def format_markdown_for_reportlab(text):
-    if not text:
-        return ""
-    cleaned = re.sub(r'\$(.*?)\$', r'\1', text)
-    cleaned = cleaned.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    cleaned = re.sub(r'[\-\|\:]+', ' ', cleaned)
-    cleaned = re.sub(r'#{1,6}\s*', '', cleaned)
-    cleaned = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', cleaned)
-    cleaned = re.sub(r'\*(.*?)\*', r'<i>\1</i>', cleaned)
-    cleaned = re.sub(r'^\s*[\*\-]\s+', '&bull; ', cleaned, flags=re.MULTILINE)
-    return cleaned
-
 def build_pdf_header(story, doc_title, subtitle, logo_bytes, engineer, project, location, rep_date, ticket_id, unique_hash):
     styles = getSampleStyleSheet()
     title_style = ParagraphStyle("DocTitle", parent=styles["Heading1"], fontSize=16, textColor=colors.HexColor("#1B2A4A"), spaceAfter=4, alignment=0, fontName="Helvetica-Bold")
@@ -130,7 +120,6 @@ def build_pdf_header(story, doc_title, subtitle, logo_bytes, engineer, project, 
     meta_style = ParagraphStyle("MetaStyle", parent=styles["Normal"], fontSize=8, textColor=colors.HexColor("#333333"), leading=12, fontName="Helvetica")
 
     header_table_data = []
-    
     meta_html = f"""
     <b>Project Name:</b> {project}<br/>
     <b>Structural Element / Location:</b> {location}<br/>
@@ -211,6 +200,7 @@ def main_page():
     ui.add_head_html(ticker_html)
 
     # --- SIDEBAR CONFIGURATION ---
+    supp_code_select = None
     with ui.left_drawer().classes('bg-[#1B2A4A] text-white p-4').style('width: 340px;'):
         ui.label('PROJECT METADATA').classes('text-white font-bold text-base mb-2')
         project_name_input = ui.input(label='Project Name', value='Highway Expansion Project').classes('w-full mb-2')
@@ -258,12 +248,12 @@ def main_page():
         ui.upload(label='Upload Company Logo', auto_upload=True, on_upload=handle_logo_upload).props('flat dark').classes('w-full mb-2')
 
     # --- TABS / SCREENS NAVIGATION ---
-    with ui.tabs().classes('w-full text-[#00BFFF]') as tabs:
-        t_dash = ui.tab('Concrete Verifier Dashboard')
-        t_audit = ui.tab('AI Multi-Standard Auditor')
-        t_defect = ui.tab('Defect Diagnostic')
-        t_chat = ui.tab('AI Chatbot')
-        t_handbook = ui.tab('Technical Codes Handbook')
+    with ui.tabs().classes('w-full text-white bg-[#1B2A4A] rounded-lg') as tabs:
+        t_dash = ui.tab('Concrete Verifier Dashboard').classes('text-white font-bold')
+        t_audit = ui.tab('AI Multi-Standard Auditor').classes('text-white font-bold')
+        t_defect = ui.tab('Defect Diagnostic').classes('text-white font-bold')
+        t_chat = ui.tab('AI Chatbot').classes('text-white font-bold')
+        t_handbook = ui.tab('Technical Codes Handbook').classes('text-white font-bold')
 
     with ui.tab_panels(tabs, value=t_dash).classes('w-full bg-transparent'):
         
@@ -273,17 +263,20 @@ def main_page():
             
             with ui.row().classes('w-full gap-4 mb-4'):
                 with ui.column().classes('custom-card flex-1'):
-                    ui.label('7-Day Cubes').classes('font-bold text-[#00BFFF]')
+                    ui.label('7-Day Cubes').classes('font-bold text-white')
                     c7_input = ui.textarea(value='21.0, 22.5, 20.5').classes('w-full')
                 with ui.column().classes('custom-card flex-1'):
-                    ui.label('14-Day Cubes').classes('font-bold text-[#00BFFF]')
+                    ui.label('14-Day Cubes').classes('font-bold text-white')
                     c14_input = ui.textarea(value='26.0, 27.2, 25.8').classes('w-full')
                 with ui.column().classes('custom-card flex-1'):
-                    ui.label('28-Day Cubes').classes('font-bold text-[#00BFFF]')
+                    ui.label('28-Day Cubes').classes('font-bold text-white')
                     c28_input = ui.textarea(value='32.5, 34.0, 31.0, 35.5, 29.0, 33.0').classes('w-full')
 
             result_output_area = ui.column().classes('w-full')
-            export_buttons_area = ui.row().classes('w-full gap-4 mt-2')
+            
+            # Persistent Export Buttons Container
+            with ui.row().classes('w-full gap-4 mt-4') as export_buttons_area:
+                pass
 
             def parse_cubes(text):
                 try:
@@ -320,21 +313,19 @@ def main_page():
                         
                         if s28:
                             color = 'green' if s28['pass'] else 'red'
-                            ui.markdown(f"**28-Day Characteristic Strength ($f_{{cu}}$):** `{s28['fcu']:.2f} N/mm²` | **Target:** `{s28['target']} N/mm²` | **Verdict:** :{color}[**{'PASS' if s28['pass'] else 'FAIL'}**]")
+                            ui.markdown(f"**28-Day Characteristic Strength (fcu):** `{s28['fcu']:.2f} N/mm²` | **Target:** `{s28['target']} N/mm²` | **Verdict:** :{color}[**{'PASS' if s28['pass'] else 'FAIL'}**]")
                             ui.markdown(f"• **Mean Strength:** `{s28['mean']:.2f} N/mm²` | **Standard Deviation:** `{s28['std']:.2f}` | **Sample Size:** `{s28['count']}`")
                         else:
                             ui.warning('Please provide at least 3 valid cube strength values for 28-day testing.')
 
-                        # Mix audit check
                         try:
                             cem_v = float(cement_input.value)
                             wat_v = float(water_input.value)
                             wc = wat_v / cem_v if cem_v > 0 else 0
-                            ui.markdown(f"• **Calculated W/C Ratio:** `{wc:.2f}` (Max allowed under ECP 203: `0.45`)")
+                            ui.markdown(f"• **Calculated W/C Ratio:** `{wc:.2f}` (Max allowed under ECP 203: `0.45`órico)")
                         except ValueError:
                             pass
 
-                        # Interactive Plotly Chart for Professional Visualization
                         stages = ['7-Day', '14-Day', '28-Day', 'Target Grade']
                         means = [
                             s7['mean'] if s7 else 0,
@@ -356,7 +347,7 @@ def main_page():
                         )
                         ui.plotly(fig).classes('w-full mt-4')
 
-                # Export Options (PDF & CSV with Unique QR / UID)
+                # Populate export buttons inside the persistent row
                 with export_buttons_area:
                     unique_uid = f"ECP-{uuid.uuid4().hex[:8].upper()}"
 
@@ -385,11 +376,11 @@ def main_page():
                             body_style = ParagraphStyle("Body", parent=styles["Normal"], fontSize=9, textColor=colors.HexColor("#222222"), leading=14)
                             
                             summary_text = f"""
-                            <b>Specified Grade ($f_{{cu}}$):</b> {fcu_input.value} N/mm²<br/>
+                            <b>Specified Grade (fcu):</b> {fcu_input.value} N/mm²<br/>
                             <b>Mixer Truck No:</b> {truck_input.value} &nbsp;|&nbsp; <b>Batch Ticket ID:</b> {ticket_input.value}<br/>
                             <b>Cement Content:</b> {cement_input.value} kg/m³ &nbsp;|&nbsp; <b>Free Water Content:</b> {water_input.value} kg/m³<br/>
                             <b>28-Day Characteristic Strength:</b> {s28['fcu']:.2f} N/mm² &nbsp;|&nbsp; <b>Verdict:</b> {'PASS' if s28['pass'] else 'FAIL'}<br/>
-                            <b>Statistical Mean:</b> {s28['mean']:.2f} N/mm² &nbsp;|&nbsp; <b>Standard Deviation ($\sigma$):</b> {s28['std']:.2f}
+                            <b>Statistical Mean:</b> {s28['mean']:.2f} N/mm² &nbsp;|&nbsp; <b>Standard Deviation (sigma):</b> {s28['std']:.2f}
                             """
                             story.append(Paragraph(summary_text, body_style))
                             story.append(Spacer(1, 10))
@@ -477,7 +468,7 @@ def main_page():
                 try:
                     prompt = f"""
                     You are an expert senior civil, geotechnical, and highway engineering consultant specializing in core Egyptian Codes (ECP 203, 202, 104) and international standards (ASTM, AASHTO, BS, EN, ISO).
-                    Focus: {audit_focus}. Supplementary code: {supp_code_select.value}.
+                    Focus: {audit_focus}. Supplementary code: {supp_code_select.value if supp_code_select else 'None'}.
                     Provide a rigorous technical audit identifying compliance, code violations, risks, and required corrective actions.
                     """
                     
@@ -592,7 +583,7 @@ def main_page():
                     return
 
                 try:
-                    sys_prompt = f"You are an expert AI engineering assistant specialized in ECP 203, ECP 202, ECP 104, ASTM, AASHTO, BS, EN, and ISO. Supplementary: {supp_code_select.value}."
+                    sys_prompt = f"You are an expert AI engineering assistant specialized in ECP 203, ECP 202, ECP 104, ASTM, AASHTO, BS, EN, and ISO. Supplementary: {supp_code_select.value if supp_code_select else 'None'}."
                     res = client.models.generate_content(model='gemini-3.5-flash-lite', contents=f"{sys_prompt}\n\nQuestion: {q}")
                     chat_messages.append({"role": "assistant", "content": res.text})
                 except Exception as e:
@@ -605,11 +596,11 @@ def main_page():
         with ui.tab_panel(t_handbook):
             ui.label('Multi-Standard Civil Engineering Technical Handbook').classes('text-2xl font-bold text-white mb-4')
             
-            with ui.tabs().classes('w-full text-[#00BFFF]') as hb_tabs:
-                h1 = ui.tab('ECP 203 & Concrete')
-                h2 = ui.tab('ECP 202 & Soils')
-                h3 = ui.tab('ECP 104 & Roads')
-                h4 = ui.tab('International Standards')
+            with ui.tabs().classes('w-full text-white bg-[#1B2A4A] rounded-lg') as hb_tabs:
+                h1 = ui.tab('ECP 203 & Concrete').classes('text-white font-bold')
+                h2 = ui.tab('ECP 202 & Soils').classes('text-white font-bold')
+                h3 = ui.tab('ECP 104 & Roads').classes('text-white font-bold')
+                h4 = ui.tab('International Standards').classes('text-white font-bold')
 
             with ui.tab_panels(hb_tabs, value=h1).classes('w-full bg-transparent'):
                 with ui.tab_panel(h1):
@@ -621,10 +612,10 @@ def main_page():
                       - **Cement:** CEM I (Ordinary Portland Cement) or CEM II conforming to ES 4756-1 / EN 197-1. Minimum cement content for structural elements exposed to severe environments is 350 kg/m³.
                       - **Aggregates:** Clean, graded coarse and fine aggregates conforming to ES 1109 / ASTM C33. Maximum aggregate size limited to 1/5 narrowest dimension or 3/4 clear spacing between rebars.
                       - **Water:** Potable water free of organic impurities, chlorides (< 500 ppm for reinforced concrete), and sulfates (< 1000 ppm).
-                    * **Chapter 3: Mix Design & Characteristic Strength ($f_{{cu}}$)**
-                      - Characteristic strength $f_{{cu}}$ evaluated via standard 150mm cube crushing tests at 28 days.
-                      - Statistical compliance: $f_{{cu,min}} \ge f_{{cu}} + 1.64\sigma$ or verified through rolling batches with target mean margin $1.34s$ to $2.33s$.
-                      - Maximum water-cement ratio ($W/C$) capped at $0.45$ for standard structural applications and $0.40$ for water-retaining structures.
+                    * **Chapter 3: Mix Design & Characteristic Strength (fcu)**
+                      - Characteristic strength fcu evaluated via standard 150mm cube crushing tests at 28 days.
+                      - Statistical compliance: fcu,min >= fcu + 1.64 * sigma or verified through rolling batches with target mean margin 1.34s to 2.33s.
+                      - Maximum water-cement ratio (W/C ratio) capped at 0.45 for standard structural applications and 0.40 for water-retaining structures.
                     * **Chapter 4: Construction & Curing Protocols**
                       - Continuous curing required for a minimum of 7 days using wet hessian, curing compounds, or ponding.
                       - Formwork stripping times: Sides of beams/columns (24-48 hours), soffits of slabs (7-14 days depending on span and prop conditions).
@@ -635,13 +626,13 @@ def main_page():
                     * **Chapter 1: Subsurface Investigation & Soil Exploration**
                       - Mandatory borehole drilling, Standard Penetration Testing (SPT - ASTM D1586), Cone Penetration Testing (CPT), and undisturbed sampling for deep and shallow foundations.
                     * **Chapter 2: Shallow Foundations & Bearing Capacity**
-                      - Ultimate bearing capacity calculated using Terzaghi, Meyerhof, or Hansen bearing capacity equations factoring cohesion ($c$), surcharge ($q$), and unit weight ($\gamma$).
+                      - Ultimate bearing capacity calculated using Terzaghi, Meyerhof, or Hansen bearing capacity equations factoring cohesion (c), surcharge (q), and unit weight (gamma).
                       - Allowable bearing capacity determined by applying a minimum Factor of Safety (F.S. = 3.0 for static loads, 2.5 for seismic/wind combinations). Total settlement limited to 25-50mm.
                     * **Chapter 3: Deep Foundations & Pile Load Testing**
-                      - Bored and driven pile design including skin friction ($f_s$) and end bearing ($q_b$) evaluation.
+                      - Bored and driven pile design including skin friction (fs) and end bearing (qb) evaluation.
                       - Static load testing mandated up to 2.0 times the working load in accordance with ASTM D1143 / ECP 202 specifications. Integrity testing (PIT / Sonic Logging) required on 100% of major bridge/high-rise piles.
                     * **Chapter 4: Earthworks & Compaction Control**
-                      - Subgrade compaction specifications: Minimum 95% to 98% Modified Proctor Maximum Dry Density (ASTM D1557 / AASHTO T180) at optimum moisture content ($\pm 2\%$).
+                      - Subgrade compaction specifications: Minimum 95% to 98% Modified Proctor Maximum Dry Density (ASTM D1557 / AASHTO T180) at optimum moisture content (+/- 2%).
                     ''')
                 with ui.tab_panel(h3):
                     ui.markdown('''
@@ -651,7 +642,7 @@ def main_page():
                     * **Chapter 2: Subgrade & Embankment Engineering**
                       - CBR (California Bearing Ratio) testing requirements (ASTM D1883). Minimum subgrade CBR of 10% for heavy traffic loads; stabilized subgrade required if CBR < 7%.
                     * **Chapter 3: Unbound Subbase & Base Course Layers**
-                      - Crushed stone aggregate base course (ABC) grading limits. Minimum relative compaction of 100% Modified Proctor. Layer thickness tolerances within $\pm 10\text{ mm}$.
+                      - Crushed stone aggregate base course (ABC) grading limits. Minimum relative compaction of 100% Modified Proctor. Layer thickness tolerances within +/- 10 mm.
                     * **Chapter 4: Bituminous Pavements & Asphalt Mix Design**
                       - Marshall Mix Design method (ASTM D6915 / AASHTO T245): Optimum bitumen content, stability, flow, air voids (3-5%), and voids in mineral aggregate (VMA).
                     ''')
@@ -664,9 +655,9 @@ def main_page():
                     * **ISO Quality Management:** ISO 9001 (Quality Management Systems in Construction), ISO 14001 (Environmental Management), ISO 45001 (Occupational Health & Safety).
                     ''')
 
-    # --- PROFESSIONAL COMPACT FULL-WIDTH FOOTER BAR ---
+    # --- PROFESSIONAL COMPACT 100% FULL-WIDTH FOOTER BAR ---
     ui.markdown('''
-    <div style="width: 100%; background-color: #1B2A4A; border-top: 2px solid #FF8C00; padding: 10px 20px; margin-top: 40px; text-align: center; color: #FFFFFF; font-size: 11px; box-sizing: border-box;">
+    <div style="width: 100vw; position: relative; left: 50%; right: 50%; margin-left: -50vw; margin-right: -50vw; background-color: #1B2A4A; border-top: 2px solid #FF8C00; padding: 12px 20px; margin-top: 40px; text-align: center; color: #FFFFFF; font-size: 11px; box-sizing: border-box;">
         <b>Multi-Standard Engineering Quality Assurance Portal</b> &nbsp;|&nbsp; Automated compliance verification across ECP 203, ECP 202, ECP 104, ASTM, AASHTO, BS, EN, and ISO standards.<br>
         <b>Official Direct Contacts & Professional Network:</b> 
         LinkedIn: <a href="https://www.linkedin.com/in/mohamed-abdalaty" target="_blank" style="color: #00BFFF; text-decoration: underline;">Mohamed Abd Al Aty</a> &nbsp;|&nbsp; 
