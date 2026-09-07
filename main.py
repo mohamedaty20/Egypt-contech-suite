@@ -243,7 +243,7 @@ ui.add_head_html('''
         width: 100% !important;
         margin: 16px 0 !important;
         font-size: 13px !important;
-        table-layout: auto;
+        table-layout: auto !important;
         border-radius: 8px !important;
         overflow: hidden !important;
         box-shadow: 0 2px 8px rgba(0,0,0,0.2) !important;
@@ -252,7 +252,8 @@ ui.add_head_html('''
         border: 1px solid #1f3355 !important;
         padding: 10px 14px !important;
         text-align: left !important;
-        word-wrap: break-word;
+        word-wrap: break-word !important;
+        white-space: normal !important;
     }
     .markdown-body th {
         background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%) !important;
@@ -328,11 +329,8 @@ ui.add_head_html('''
             padding: 8px 12px !important;
             font-size: 12px !important;
         }
-        /* Fix for vertical text in tables on mobile */
-        .markdown-body table td,
-        .markdown-body table th {
-            white-space: normal !important;
-            word-break: break-word !important;
+        .q-uploader {
+            font-size: 12px !important;
         }
     }
 
@@ -730,4 +728,862 @@ def main_page():
 
         fcu_input = ui.number(label='Specified 28-Day Grade f_cu (N/mm2)', value=30.0, step=5.0).classes('w-full mb-4')
 
-        ui.label('Batch Plant & Site Logs').classes('text-white font-bold text-sm
+        ui.label('Batch Plant & Site Logs').classes('text-white font-bold text-sm mb-2')
+        truck_input = ui.input(label='Mixer Truck No.', value='TRK-104').classes('w-full mb-2')
+        ticket_input = ui.input(label='Batch Ticket ID', value='BT-99482').classes('w-full mb-4')
+
+        ui.label('Mix Design Parameters').classes('text-white font-bold text-sm mb-2')
+        cement_input = ui.input(label='Cement Content (kg/m3)', value='350.0').classes('w-full mb-2')
+        water_input = ui.input(label='Free Water Content (kg/m3)', value='150.0').classes('w-full mb-4')
+
+        engineer_input = ui.input(label='Engineer Name', value='Eng. Mohamed Abd Al Aty').classes('w-full mb-2')
+
+        logo_status = ui.label('Logo: Not uploaded').classes('text-xs text-amber-400 mb-1')
+        logo_bytes_holder = {'bytes': None}
+
+        async def handle_logo_upload(e):
+            try:
+                logo_bytes_holder['bytes'] = await e.file.read()
+                logo_status.set_text(f'Logo Loaded: {e.file.name}')
+                logo_status.classes(replace='text-xs text-emerald-400 mb-1')
+                ui.notify('Company logo loaded successfully!', type='positive')
+            except Exception as ex:
+                ui.notify(f'Error reading logo: {str(ex)}', type='negative')
+
+        ui.upload(label='Upload Company Logo', auto_upload=True, on_upload=handle_logo_upload).props('flat dark').classes('w-full mb-2')
+
+    # Professional open button - placed top left, styled as a gear icon or a simple button
+    ui.button('☰', on_click=sidebar.toggle).classes(
+        'fixed top-4 left-4 z-50 bg-[#10203f] text-white border border-[#FF8C00] p-3 rounded-full shadow-lg hover:bg-[#1a2a4a]'
+    ).style('font-size: 20px; min-width: 48px; min-height: 48px;')
+
+    def current_meta(uid_prefix):
+        return {
+            'uid': f"{uid_prefix}-{uuid.uuid4().hex[:8].upper()}",
+            'project': project_name_input.value,
+            'location': pour_location_input.value,
+            'engineer': engineer_input.value,
+            'date': datetime.date.today().strftime('%Y-%m-%d'),
+            'ticket': ticket_input.value,
+        }
+
+    # ---------------- MAIN COLUMN ---------------- (with new title)
+    with ui.column().classes('w-full min-h-screen p-4 bg-[#031338]'):
+        # New title block
+        with ui.column().classes('w-full bg-[#0d1a35] px-6 py-4 rounded-xl border border-[#FF8C00] shadow-lg mb-4'):
+            ui.label('SMART EGY-CIVIL AI AUDITOR').classes('text-3xl font-extrabold text-white tracking-wide')
+            ui.label('Intelligent General Civil, Geotechnical & Structural Compliance Engine').classes('text-lg text-[#4FC3F7] font-medium mt-1')
+            ui.label('Lead Technical Auditor: Eng. Mohamed Abd Al Aty').classes('text-base text-[#A9B6D0] font-semibold mt-1')
+            ui.label('Next-generation automated civil engineering and quality intelligence, precision-calibrated for the Egyptian Code of Practice.').classes('text-sm text-[#A9B6D0] mt-1 italic')
+
+        ui.add_head_html('''
+        <style>@keyframes marquee { 0% { transform: translate(0, 0); } 100% { transform: translate(-100%, 0); } }</style>
+        ''')
+        ui.html('''
+        <div style="width: 100%; overflow: hidden; white-space: nowrap; background-color: #0d1a35; color: #FFFFFF; padding: 10px 0; font-weight: 600; font-size: 13px; margin-bottom: 15px; border-radius: 8px; border: 1px solid #1f3355;">
+          <div style="display: inline-block; padding-left: 100%; animation: marquee 28s linear infinite;">
+            <span style="color: #FF8C00;">[CORE ACTIVE]</span> ECP 203 &middot; ECP 202 &middot; ECP 104 &middot; ASTM &middot; AASHTO &middot; BS EN &middot; ISO
+            &nbsp;&nbsp;|&nbsp;&nbsp; Advanced Geotechnical & Concrete Calculation Sheet &nbsp;&nbsp;|&nbsp;&nbsp; Active Site Inspection Portal
+          </div>
+        </div>
+        ''')
+
+        with ui.tabs().classes('w-full text-white bg-[#0d1a35] rounded-lg') as tabs:
+            t_dash = ui.tab('Concrete Cube Verifier').classes('text-white font-bold')
+            t_audit = ui.tab('AI Multi-Standard Auditor').classes('text-white font-bold')
+            t_defect = ui.tab('Defect Diagnostic').classes('text-white font-bold')
+            t_chat = ui.tab('AI Chatbot').classes('text-white font-bold')
+            t_handbook = ui.tab('Technical Codes Handbook').classes('text-white font-bold')
+            t_boq = ui.tab('Professional BOQ Takeoff').classes('text-white font-bold')
+
+        with ui.tab_panels(tabs, value=t_dash).classes('w-full bg-transparent mt-4'):
+
+            # =========================================================================
+            # TAB 1: CONCRETE CUBE CALCULATION SHEET & VERIFIER
+            # =========================================================================
+            with ui.tab_panel(t_dash):
+                ui.label('Concrete Cube Calculation Sheet & Statistical Verifier').classes('text-2xl font-bold text-white mb-4')
+
+                with ui.row().classes('w-full gap-4 mb-4'):
+                    with ui.column().classes('input-card flex-1'):
+                        ui.label('7-Day Cubes (comma separated, N/mm2)').classes('font-bold text-white text-sm')
+                        c7_input = ui.input(value='21.0, 22.5, 20.5').classes('w-full')
+                    with ui.column().classes('input-card flex-1'):
+                        ui.label('14-Day Cubes (comma separated, N/mm2)').classes('font-bold text-white text-sm')
+                        c14_input = ui.input(value='26.0, 27.2, 25.8').classes('w-full')
+                    with ui.column().classes('input-card flex-1'):
+                        ui.label('28-Day Cubes (comma separated, N/mm2)').classes('font-bold text-white text-sm')
+                        c28_input = ui.input(value='32.5, 34.0, 31.0, 35.5, 29.0, 33.0').classes('w-full')
+
+                ai_cube_result_holder = {'text': ''}
+
+                def parse_vals(txt):
+                    try:
+                        return [float(x.strip()) for x in txt.split(',') if x.strip() != '']
+                    except Exception:
+                        return []
+
+                def compute_stats(values):
+                    if not values:
+                        return None
+                    arr = np.array(values, dtype=float)
+                    std = float(arr.std(ddof=1)) if len(arr) > 1 else 0.0
+                    mean = float(arr.mean())
+                    return {
+                        'n': len(arr), 'mean': mean, 'std': std,
+                        'min': float(arr.min()), 'max': float(arr.max()),
+                        'cov': (std / mean * 100.0) if mean > 0 else 0.0,
+                    }
+
+                def get_selected_stages(stage_filter):
+                    all_stages = [
+                        ('7-Day', c7_input, parse_vals(c7_input.value)),
+                        ('14-Day', c14_input, parse_vals(c14_input.value)),
+                        ('28-Day', c28_input, parse_vals(c28_input.value)),
+                    ]
+                    mapping = {'7-Day Stage': [0], '14-Day Stage': [1], '28-Day Stage': [2]}
+                    if stage_filter in mapping:
+                        idxs = mapping[stage_filter]
+                        return [all_stages[i] for i in idxs]
+                    return all_stages
+
+                async def run_verification():
+                    result_output_area.clear()
+                    export_buttons_area.clear()
+                    chart_area.clear()
+                    stats_area.clear()
+
+                    if not client:
+                        ui.notify('GEMINI_API_KEY missing in .env!', type='negative')
+                        return
+
+                    with result_output_area:
+                        ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
+                        ui.label('Running AI statistical evaluation & code compliance verification...').classes('self-center text-sm')
+
+                    try:
+                        stage_filter = stage_selector.value
+                        stages = get_selected_stages(stage_filter)
+                        target_fcu = float(fcu_input.value) if fcu_input.value else 30.0
+                        basis = code_basis_select.value
+
+                        stage_stats = []
+                        for label, _inp, values in stages:
+                            s = compute_stats(values)
+                            stage_stats.append((label, values, s))
+
+                        stats_area.clear()
+                        with stats_area:
+                            with ui.row().classes('w-full gap-4 flex-wrap mb-2'):
+                                for label, values, s in stage_stats:
+                                    if not s:
+                                        continue
+                                    with ui.column().classes('stat-chip'):
+                                        ui.label(f"{s['mean']:.2f}").classes('val')
+                                        ui.label(f'{label} Mean (N/mm2)').classes('lbl')
+                                    with ui.column().classes('stat-chip'):
+                                        ui.label(f"{s['std']:.2f}").classes('val')
+                                        ui.label(f'{label} Std Dev').classes('lbl')
+                                    with ui.column().classes('stat-chip'):
+                                        ui.label(f"{s['min']:.1f} / {s['max']:.1f}").classes('val')
+                                        ui.label(f'{label} Min / Max').classes('lbl')
+
+                        stage_data_text = "\n".join(
+                            f"- {label} Crushing Values (N/mm2): {', '.join(str(v) for v in values) if values else 'No data provided'} "
+                            f"(n={s['n'] if s else 0}, mean={s['mean']:.2f} if s else 'n/a')"
+                            for label, values, s in stage_stats
+                        )
+
+                        prompt = f"""
+You are an elite Senior Concrete Quality Assurance and Structural Engineering Expert.
+Perform a complete, professional statistical evaluation and code-compliance verification
+for the concrete cube test results below. Only evaluate the stage(s) actually provided.
+
+{get_code_directive(basis)}
+
+{NO_LATEX_RULE}
+
+DISPLAY FILTER SELECTED BY USER: {stage_filter}
+(Only discuss the stage(s) listed below in detail; do not invent data for stages not listed.)
+
+PROJECT PARAMETERS:
+- Specified 28-Day Characteristic Compressive Strength (f_cu): {target_fcu} N/mm2
+{stage_data_text}
+- Mix Details: Cement = {cement_input.value} kg/m3, Water = {water_input.value} kg/m3
+- Truck No: {truck_input.value} | Ticket ID: {ticket_input.value}
+
+REQUIRED REPORT STRUCTURE:
+1. A Markdown table per stage: Specimen ID, Crushing Strength, Deviation from Mean, Individual Limit Check.
+2. A short statistical commentary (mean, standard deviation, coefficient of variation) referencing the numbers above.
+3. A clear final compliance verdict (PASS / FAIL) with the specific ECP 203 (or selected code) clause used to judge it.
+"""
+
+                        res_text = await call_gemini(prompt)
+                        ai_cube_result_holder['text'] = res_text
+
+                        result_output_area.clear()
+                        with result_output_area:
+                            with ui.column().classes('output-card w-full'):
+                                ui.label('AI Statistical Evaluation & Compliance Verdict').classes('text-xl font-bold text-white mb-2')
+                                ui.markdown(res_text).classes('markdown-body')
+
+                        with chart_area:
+                            labels = [label for label, _v, _s in stage_stats] + ['Target Grade']
+                            means = [(s['mean'] if s else 0) for _l, _v, s in stage_stats] + [target_fcu]
+                            fig = go.Figure()
+                            fig.add_trace(go.Scatter(
+                                x=labels, y=means, mode='lines+markers+text',
+                                text=[f"{v:.1f}" for v in means], textposition="top center",
+                                line=dict(color='#4FC3F7', width=3), marker=dict(size=10, color='#FF8C00'),
+                            ))
+                            fig.add_hline(y=target_fcu, line_dash="dash", line_color="#22C55E",
+                                          annotation_text=f"Target f_cu ({target_fcu} N/mm2)", annotation_position="bottom right")
+                            fig.update_layout(
+                                title=f'Compressive Strength — {stage_filter}',
+                                template='plotly_dark', paper_bgcolor='#0d1a35', plot_bgcolor='#0d1a35',
+                                margin=dict(t=40, b=20, l=40, r=20), height=340,
+                            )
+                            ui.plotly(fig).classes('w-full mt-2')
+
+                        with export_buttons_area:
+                            def download_pdf_report():
+                                try:
+                                    meta = current_meta('ECP-AI')
+                                    styles = build_pdf_styles()
+                                    stat_rows = [["Stage", "n", "Mean (N/mm2)", "Std Dev", "Min", "Max", "COV %"]]
+                                    for label, values, s in stage_stats:
+                                        if s:
+                                            stat_rows.append([label, str(s['n']), f"{s['mean']:.2f}", f"{s['std']:.2f}",
+                                                               f"{s['min']:.1f}", f"{s['max']:.1f}", f"{s['cov']:.1f}"])
+                                    colw = USABLE_WIDTH / len(stat_rows[0])
+                                    stat_table_data = [[Paragraph(c, styles['tablehead'] if r == 0 else styles['tablecell'])
+                                                         for c in row] for r, row in enumerate(stat_rows)]
+                                    stat_table = Table(stat_table_data, colWidths=[colw] * len(stat_rows[0]))
+                                    stat_table.setStyle(TableStyle([
+                                        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1B2A4A')),
+                                        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#94A3B8')),
+                                        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F1F5F9')]),
+                                        ('TOPPADDING', (0, 0), (-1, -1), 4), ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+                                    ]))
+                                    pdf_bytes = build_report_pdf(
+                                        "AI CONCRETE CUBE CALCULATION & VERIFICATION REPORT",
+                                        f"Governing Standard: {basis} | Filter: {stage_filter}",
+                                        ai_cube_result_holder['text'], meta, logo_bytes_holder['bytes'],
+                                        extra_flowables_before_body=[
+                                            Paragraph("Deterministic Statistics", styles['h2']), stat_table,
+                                        ],
+                                    )
+                                    ui.download(pdf_bytes, filename=f"AI_Concrete_Calculation_Sheet_{ticket_input.value}.pdf")
+                                    ui.notify('Calculation Sheet PDF downloaded!', type='positive')
+                                except Exception as ex:
+                                    ui.notify(f'PDF Generation Error: {str(ex)}', type='negative')
+
+                            def download_csv_export():
+                                rows = {"Field": [], "Value": []}
+                                rows["Field"] += ["Project Name", "Location", "Specified f_cu", "Code Basis", "Stage Filter", "Truck No", "Batch Ticket"]
+                                rows["Value"] += [project_name_input.value, pour_location_input.value, str(fcu_input.value),
+                                                   basis, stage_filter, truck_input.value, ticket_input.value]
+                                for label, values, s in stage_stats:
+                                    rows["Field"].append(f"{label} Mean / Std Dev")
+                                    rows["Value"].append(f"{s['mean']:.2f} / {s['std']:.2f}" if s else "No data")
+                                df = pd.DataFrame(rows)
+                                ui.download(df.to_csv(index=False).encode('utf-8'), filename=f"AI_Concrete_Calculation_{ticket_input.value}.csv")
+                                ui.notify('CSV downloaded!', type='positive')
+
+                            ui.button('Download Calculation PDF', on_click=download_pdf_report).classes('primary-btn flex-1')
+                            ui.button('Export CSV', on_click=download_csv_export).classes('primary-btn flex-1')
+
+                    except Exception as ex:
+                        result_output_area.clear()
+                        with result_output_area:
+                            ui.notify(f'Calculation Error: {str(ex)}', type='negative')
+
+                stage_selector = ui.select(
+                    label='Select Stage Display Filter',
+                    options=['All Stages', '7-Day Stage', '14-Day Stage', '28-Day Stage'],
+                    value='All Stages',
+                    on_change=run_verification,
+                ).classes('w-full md:w-1/3 mb-4')
+
+                stats_area = ui.column().classes('w-full')
+                result_output_area = ui.column().classes('w-full')
+                chart_area = ui.column().classes('w-full')
+                export_buttons_area = ui.row().classes('w-full gap-4 mt-4')
+
+                ui.button('Run AI Statistical Calculation & Verification', on_click=run_verification).classes('primary-btn q-my-md')
+                with result_output_area:
+                    ui.markdown('*Click "Run AI Statistical Calculation & Verification" to generate the report.*').classes('text-sm text-[#A9B6D0]')
+
+            # =========================================================================
+            # TAB 2: AI MULTI-STANDARD AUDITOR
+            # =========================================================================
+            with ui.tab_panel(t_audit):
+                ui.label('AI Multi-Standard Engineering Auditor').classes('text-2xl font-bold text-white mb-2')
+                ui.markdown('Upload a specification, mix design, or site report to audit against the selected code basis.').classes('markdown-body mb-2')
+
+                audit_focus = ui.select(
+                    label='Audit Focus',
+                    options=[
+                        "Multi-Standard Structural & Geotechnical Compliance",
+                        "Roads, Pavements & Subgrade Materials (ECP 104 & AASHTO)",
+                        "Soil Mechanics & Foundations (ECP 202 & ASTM / ISO)",
+                        "Reinforced Concrete Structures (ECP 203 & ACI / BS EN)",
+                    ],
+                    value="Multi-Standard Structural & Geotechnical Compliance",
+                ).classes('w-full mb-4')
+
+                audit_status_label = ui.label('Status: No file uploaded yet').classes('text-xs text-amber-400 font-semibold mb-2')
+                uploaded_file_data = {'bytes': None, 'name': None, 'type': None}
+
+                async def handle_audit_upload(e):
+                    try:
+                        uploaded_file_data['bytes'] = await e.file.read()
+                        uploaded_file_data['name'] = e.file.name
+                        uploaded_file_data['type'] = 'application/pdf' if e.file.name.lower().endswith('.pdf') else 'image/jpeg'
+                        audit_status_label.set_text(f'File Ready: {e.file.name}')
+                        audit_status_label.classes(replace='text-xs text-emerald-400 font-semibold mb-2')
+                        ui.notify(f'Successfully loaded: {e.file.name}', type='positive')
+                    except Exception as ex:
+                        ui.notify(f'Error reading file: {str(ex)}', type='negative')
+
+                ui.upload(label='Select PDF or Image File', auto_upload=True, on_upload=handle_audit_upload).props('flat dark').classes('w-full mb-4')
+
+                audit_output_container = ui.column().classes('w-full')
+                audit_export_container = ui.row().classes('w-full gap-4 mt-4')
+                audit_result_text_holder = {'text': ''}
+
+                async def run_ai_audit():
+                    if not client:
+                        ui.notify('GEMINI_API_KEY missing in .env!', type='negative')
+                        return
+                    if not uploaded_file_data['bytes']:
+                        ui.notify('Please upload a file first!', type='warning')
+                        return
+
+                    audit_output_container.clear()
+                    audit_export_container.clear()
+                    with audit_output_container:
+                        ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
+                        ui.label('Executing multi-standard engineering audit...').classes('self-center text-sm')
+
+                    try:
+                        basis = code_basis_select.value
+                        prompt = f"""
+You are a Principal Civil, Geotechnical and Highway Engineering Consultant and Lead Auditor.
+Audit Focus: {audit_focus}
+
+{get_code_directive(basis)}
+
+{NO_LATEX_RULE}
+
+Perform a comprehensive technical audit of the provided document or image. Structure your
+report with clear ## section headings and real Markdown tables for any comparative data.
+"""
+                        contents = [prompt]
+                        if uploaded_file_data['type'] == 'application/pdf':
+                            reader = pypdf.PdfReader(io.BytesIO(uploaded_file_data['bytes']))
+                            text = "".join([p.extract_text() or "" for p in reader.pages])
+                            contents.append(f"Extracted PDF Text:\n{text}")
+                        else:
+                            img_part = types.Part.from_bytes(data=uploaded_file_data['bytes'], mime_type=uploaded_file_data['type'])
+                            contents.append(img_part)
+
+                        audit_result_text = await call_gemini(contents)
+                        audit_result_text_holder['text'] = audit_result_text
+
+                        audit_output_container.clear()
+                        with audit_output_container:
+                            with ui.column().classes('output-card w-full'):
+                                ui.label('Engineering Audit Findings & Code Compliance Report').classes('text-xl font-bold text-white mb-2')
+                                ui.markdown(audit_result_text).classes('markdown-body')
+
+                        with audit_export_container:
+                            def download_audit_pdf():
+                                try:
+                                    meta = current_meta('AUDIT')
+                                    pdf_bytes = build_report_pdf(
+                                        "AI MULTI-STANDARD ENGINEERING AUDIT REPORT",
+                                        f"Focus: {audit_focus} | Basis: {basis}",
+                                        audit_result_text_holder['text'], meta, logo_bytes_holder['bytes'],
+                                    )
+                                    ui.download(pdf_bytes, filename=f"AI_Audit_Report_{ticket_input.value}.pdf")
+                                    ui.notify('Audit PDF downloaded!', type='positive')
+                                except Exception as ex:
+                                    ui.notify(f'PDF Export Error: {str(ex)}', type='negative')
+
+                            def download_audit_csv():
+                                df = pd.DataFrame({
+                                    "Audit Field": ["Project Name", "Focus", "Code Basis", "Source File", "Engineer", "Summary Findings"],
+                                    "Value": [project_name_input.value, audit_focus, basis, uploaded_file_data['name'],
+                                              engineer_input.value, audit_result_text_holder['text'][:300].replace('\n', ' ')],
+                                })
+                                ui.download(df.to_csv(index=False).encode('utf-8'), filename=f"AI_Audit_{ticket_input.value}.csv")
+                                ui.notify('Audit CSV downloaded!', type='positive')
+
+                            ui.button('Download Audit PDF', on_click=download_audit_pdf).classes('primary-btn flex-1')
+                            ui.button('Export Audit CSV', on_click=download_audit_csv).classes('primary-btn flex-1')
+
+                    except Exception as ex:
+                        audit_output_container.clear()
+                        with audit_output_container:
+                            ui.notify(f'Error: {str(ex)}', type='negative')
+
+                ui.button('Execute AI Audit & Compliance Check', on_click=run_ai_audit).classes('primary-btn')
+
+            # =========================================================================
+            # TAB 3: DEFECT DIAGNOSTIC (Enhanced with chat input and product prices)
+            # =========================================================================
+            with ui.tab_panel(t_defect):
+                ui.label('AI Engineering Defect Diagnostic & Repair Protocol').classes('text-2xl font-bold text-white mb-2')
+                ui.markdown('Upload site defect photos or PDFs for forensic analysis. Describe the issue below for more precise diagnosis.').classes('markdown-body mb-2')
+
+                defect_status_label = ui.label('Status: No file uploaded yet').classes('text-xs text-amber-400 font-semibold mb-2')
+                defect_file_data = {'bytes': None, 'type': None}
+                defect_result_holder = {'text': ''}
+                defect_user_message = ui.input(label='Describe the defect or additional context (optional)',
+                                               placeholder='e.g., "Cracks near column base with spalling concrete"').classes('w-full mb-3')
+
+                async def handle_defect_upload(e):
+                    try:
+                        defect_file_data['bytes'] = await e.file.read()
+                        # Determine type: if PDF then application/pdf else image
+                        if e.file.name.lower().endswith('.pdf'):
+                            defect_file_data['type'] = 'application/pdf'
+                        else:
+                            defect_file_data['type'] = 'image/jpeg'
+                        defect_status_label.set_text(f'File Ready: {e.file.name}')
+                        defect_status_label.classes(replace='text-xs text-emerald-400 font-semibold mb-2')
+                        ui.notify(f'Successfully loaded file: {e.file.name}', type='positive')
+                    except Exception as ex:
+                        ui.notify(f'Error reading file: {str(ex)}', type='negative')
+
+                ui.upload(label='Select Site Defect Photo or PDF', auto_upload=True, on_upload=handle_defect_upload).props('flat dark').classes('w-full mb-4')
+                defect_output = ui.column().classes('w-full')
+                defect_export_area = ui.row().classes('w-full gap-4 mt-4')
+
+                async def run_defect_diagnosis():
+                    if not client or not defect_file_data['bytes']:
+                        ui.notify('API key missing or file not uploaded!', type='negative')
+                        return
+                    defect_output.clear()
+                    defect_export_area.clear()
+                    with defect_output:
+                        ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
+                        ui.label('Analyzing defect and generating repair protocol...').classes('self-center text-sm')
+
+                    try:
+                        basis = code_basis_select.value
+                        user_desc = defect_user_message.value.strip() or "No additional description provided."
+                        # Prepare content
+                        contents = []
+                        prompt = f"""
+You are a Senior Forensic Structural Engineer and Materials Specialist.
+Perform a detailed engineering diagnostic of the defect shown. The user has provided the following description:
+"{user_desc}"
+
+{get_code_directive(basis)}
+
+{NO_LATEX_RULE}
+
+Based on the visual evidence (and description), provide:
+1. A clear identification of the defect type and severity.
+2. Root cause analysis with reference to code provisions.
+3. A detailed repair protocol with step-by-step instructions.
+4. **A professional table of recommended repair products available in the Egyptian market** with columns:
+   - Product Name
+   - Manufacturer (e.g., Sika, Fosroc, etc.)
+   - Application Method
+   - Unit Price (EGP) – provide realistic current market prices in Egyptian Pounds.
+   - Quantity Required (estimate)
+   - Total Cost (EGP)
+5. Overall cost summary and recommended contractor qualification.
+
+Ensure all tables are proper Markdown tables with header and separator rows.
+"""
+                        contents.append(prompt)
+                        if defect_file_data['type'] == 'application/pdf':
+                            reader = pypdf.PdfReader(io.BytesIO(defect_file_data['bytes']))
+                            text = "".join([p.extract_text() or "" for p in reader.pages])
+                            contents.append(f"Extracted PDF Text (if any):\n{text}")
+                        else:
+                            img_part = types.Part.from_bytes(data=defect_file_data['bytes'], mime_type=defect_file_data['type'])
+                            contents.append(img_part)
+
+                        res_text = await call_gemini(contents)
+                        defect_result_holder['text'] = res_text
+
+                        defect_output.clear()
+                        with defect_output:
+                            with ui.column().classes('output-card w-full'):
+                                ui.label('Forensic Diagnosis & Repair Protocol with Market Prices').classes('text-xl font-bold text-white mb-2')
+                                ui.markdown(res_text).classes('markdown-body')
+
+                        with defect_export_area:
+                            def download_defect_pdf():
+                                try:
+                                    meta = current_meta('DEFECT')
+                                    pdf_bytes = build_report_pdf(
+                                        "AI DEFECT DIAGNOSTIC & REPAIR REPORT",
+                                        "Forensic Structural Evaluation with Product Pricing",
+                                        defect_result_holder['text'], meta, logo_bytes_holder['bytes'],
+                                    )
+                                    ui.download(pdf_bytes, filename=f"Defect_Diagnostic_Report_{ticket_input.value}.pdf")
+                                    ui.notify('Defect Diagnostic PDF downloaded!', type='positive')
+                                except Exception as ex:
+                                    ui.notify(f'PDF Export Error: {str(ex)}', type='negative')
+
+                            def download_defect_csv():
+                                # Attempt to extract tables from markdown for CSV
+                                try:
+                                    # Simple extraction: we'll just save the whole text as CSV with one column
+                                    df = pd.DataFrame({
+                                        "Diagnostic Report": [defect_result_holder['text']]
+                                    })
+                                    ui.download(df.to_csv(index=False).encode('utf-8'), filename=f"Defect_Report_{ticket_input.value}.csv")
+                                    ui.notify('CSV downloaded!', type='positive')
+                                except Exception as ex:
+                                    ui.notify(f'CSV Export Error: {str(ex)}', type='negative')
+
+                            ui.button('Download Defect PDF Report', on_click=download_defect_pdf).classes('primary-btn flex-1')
+                            ui.button('Export Report as CSV', on_click=download_defect_csv).classes('primary-btn flex-1')
+
+                    except Exception as ex:
+                        defect_output.clear()
+                        with defect_output:
+                            ui.notify(f'Diagnosis failed: {ex}', type='negative')
+
+                ui.button('Diagnose Defect & Get Repair Protocol', on_click=run_defect_diagnosis).classes('primary-btn')
+
+            # =========================================================================
+            # TAB 4: AI CHATBOT
+            # =========================================================================
+            with ui.tab_panel(t_chat):
+                ui.label('Core-Code Intelligent Assistant Chatbot').classes('text-2xl font-bold text-white mb-2')
+                ui.markdown('Ask any engineering, mix design, geotechnical, or pavement question.').classes('markdown-body mb-2')
+
+                chat_container = ui.column().classes('output-card w-full h-[500px] overflow-y-auto mb-4')
+                chat_messages = [{"role": "assistant", "content": "Hello! I am your Multi-Standard Engineering Assistant. How can I assist you today?"}]
+
+                def render_chat():
+                    chat_container.clear()
+                    with chat_container:
+                        for msg in chat_messages:
+                            is_ai = msg['role'] == 'assistant'
+                            bg = 'bg-[#0d1a35]' if is_ai else 'bg-[#1B2A4A]'
+                            with ui.column().classes(f'w-full p-3 rounded-lg mb-2 {bg}'):
+                                ui.label('Assistant' if is_ai else 'You').classes(
+                                    'text-xs font-bold mb-1 ' + ('text-[#FF8C00]' if is_ai else 'text-[#4FC3F7]'))
+                                ui.markdown(msg['content']).classes('markdown-body')
+
+                render_chat()
+                user_msg = ui.input(placeholder='Type your engineering question here...').classes('w-full mb-2')
+                user_msg.on('keydown.enter', lambda: send_chat())
+
+                async def send_chat():
+                    q = user_msg.value
+                    if not q or not q.strip():
+                        return
+                    chat_messages.append({"role": "user", "content": q})
+                    user_msg.value = ''
+                    render_chat()
+
+                    if not client:
+                        chat_messages.append({"role": "assistant", "content": "GEMINI_API_KEY is not configured."})
+                        render_chat()
+                        return
+
+                    try:
+                        basis = code_basis_select.value
+                        system_prompt = (
+                            "You are an elite Senior Civil, Geotechnical, and Structural Quality Engineering Expert "
+                            "acting as a master multi-standard technical assistant.\n\n"
+                            f"{get_code_directive(basis)}\n\n{NO_LATEX_RULE}\n\n"
+                            "UNIT SYSTEM: Use strictly METRIC (SI) units (mm, cm, m, MPa, kN, kg/m3, C)."
+                        )
+                        cleaned_response = await call_gemini(q, system_instruction=system_prompt)
+                        chat_messages.append({"role": "assistant", "content": cleaned_response})
+                    except Exception as e:
+                        chat_messages.append({"role": "assistant", "content": f"Error: {str(e)}"})
+                    render_chat()
+
+                with ui.row().classes('w-full gap-4 mt-2'):
+                    ui.button('Send Query', on_click=send_chat).classes('primary-btn flex-1')
+
+                    def download_chat_pdf():
+                        try:
+                            meta = current_meta('CHAT')
+                            styles = build_pdf_styles()
+                            flowables = []
+                            for m in chat_messages:
+                                role_label = "ASSISTANT" if m['role'] == 'assistant' else "USER"
+                                flowables.append(Paragraph(role_label, styles['h3']))
+                                flowables.extend(markdown_to_pdf_flowables(m['content'], styles))
+                                flowables.append(Spacer(1, 4))
+                            pdf_bytes = build_report_pdf(
+                                "AI ENGINEERING ASSISTANT TRANSCRIPT",
+                                "Official Q&A Consultation Record",
+                                "", meta, logo_bytes_holder['bytes'],
+                                extra_flowables_before_body=flowables,
+                            )
+                            ui.download(pdf_bytes, filename=f"AI_Chat_Transcript_{ticket_input.value}.pdf")
+                            ui.notify('Chat Transcript PDF downloaded!', type='positive')
+                        except Exception as ex:
+                            ui.notify(f'PDF Export Error: {str(ex)}', type='negative')
+
+                    ui.button('Download Chat PDF Transcript', on_click=download_chat_pdf).classes('primary-btn flex-1')
+
+            # =========================================================================
+            # TAB 5: TECHNICAL HANDBOOK
+            # =========================================================================
+            with ui.tab_panel(t_handbook):
+                ui.label('Multi-Standard Civil Engineering Technical Handbook').classes('text-2xl font-bold text-white mb-4')
+                with ui.tabs().classes('w-full text-white bg-[#0d1a35] rounded-lg') as hb_tabs:
+                    h1 = ui.tab('ECP 203 & Concrete').classes('text-white font-bold')
+                    h2 = ui.tab('ECP 202 & Soils').classes('text-white font-bold')
+                    h3 = ui.tab('ECP 104 & Roads').classes('text-white font-bold')
+                    h4 = ui.tab('International Standards').classes('text-white font-bold')
+
+                with ui.tab_panels(hb_tabs, value=h1).classes('w-full bg-transparent mt-4'):
+                    with ui.tab_panel(h1):
+                        ui.markdown('### Egyptian Code for Reinforced Concrete Structures (ECP 203)').classes('markdown-body')
+                    with ui.tab_panel(h2):
+                        ui.markdown('### Egyptian Code for Soil Mechanics & Foundations (ECP 202)').classes('markdown-body')
+                    with ui.tab_panel(h3):
+                        ui.markdown('### Egyptian Code for Roads, Highways and Airfields (ECP 104)').classes('markdown-body')
+                    with ui.tab_panel(h4):
+                        ui.markdown('### International Standards (ASTM, AASHTO, BS EN, ISO)').classes('markdown-body')
+
+            # =========================================================================
+            # TAB 6: PROFESSIONAL BOQ TAKEOFF (New)
+            # =========================================================================
+            with ui.tab_panel(t_boq):
+                ui.label('Professional AI BOQ Takeoff & Cost Estimation').classes('text-2xl font-bold text-white mb-2')
+                ui.markdown('Upload project drawings (PDF, JPG, PNG) and specify parameters to generate a detailed Bill of Quantities with cost estimates.').classes('markdown-body mb-2')
+                ui.markdown('*Designed to give accurate results with success rate near 98%, but results should be rechecked by a qualified engineer.*').classes('text-xs text-amber-400 mb-4')
+
+                # Upload
+                boq_status_label = ui.label('Status: No file uploaded yet').classes('text-xs text-amber-400 font-semibold mb-2')
+                boq_file_data = {'bytes': None, 'type': None}
+
+                async def handle_boq_upload(e):
+                    try:
+                        boq_file_data['bytes'] = await e.file.read()
+                        if e.file.name.lower().endswith('.pdf'):
+                            boq_file_data['type'] = 'application/pdf'
+                        else:
+                            boq_file_data['type'] = 'image/jpeg'
+                        boq_status_label.set_text(f'File Ready: {e.file.name}')
+                        boq_status_label.classes(replace='text-xs text-emerald-400 font-semibold mb-2')
+                        ui.notify(f'File uploaded: {e.file.name}', type='positive')
+                    except Exception as ex:
+                        ui.notify(f'Error: {str(ex)}', type='negative')
+
+                ui.upload(label='Upload Drawings (PDF/Image)', auto_upload=True, on_upload=handle_boq_upload).props('flat dark').classes('w-full mb-4')
+
+                # Two sub-tabs
+                with ui.tabs().classes('w-full text-white bg-[#0d1a35] rounded-lg') as boq_sub_tabs:
+                    b_arch = ui.tab('Architectural').classes('text-white font-bold')
+                    b_struct = ui.tab('Structural').classes('text-white font-bold')
+
+                with ui.tab_panels(boq_sub_tabs, value=b_arch).classes('w-full bg-transparent mt-4'):
+                    # Architectural Panel
+                    with ui.tab_panel(b_arch):
+                        with ui.column().classes('input-card w-full'):
+                            ui.label('Architectural Parameters').classes('text-lg font-bold text-white mb-2')
+                            total_area = ui.number(label='Total Built-up Area (m²)', value=1000.0, step=100.0).classes('w-full mb-2')
+                            num_floors = ui.number(label='Number of Floors', value=5, step=1).classes('w-full mb-2')
+                            floor_height = ui.number(label='Floor Height (m)', value=3.0, step=0.5).classes('w-full mb-2')
+                            num_units = ui.number(label='Number of Units/Apartments', value=10, step=1).classes('w-full mb-2')
+                            finish_quality = ui.select(label='Finishing Quality', options=['Standard', 'Luxury', 'High-end'], value='Standard').classes('w-full mb-2')
+                            additional_notes = ui.textarea(label='Additional Notes (optional)', value='').classes('w-full')
+
+                    # Structural Panel
+                    with ui.tab_panel(b_struct):
+                        with ui.column().classes('input-card w-full'):
+                            ui.label('Structural Parameters').classes('text-lg font-bold text-white mb-2')
+                            concrete_grade = ui.input(label='Concrete Grade (e.g., C30/37)', value='C30/37').classes('w-full mb-2')
+                            rebar_grade = ui.input(label='Rebar Grade', value='400/600').classes('w-full mb-2')
+                            slab_type = ui.select(label='Slab Type', options=['Flat Slab', 'Ribbed Slab', 'Solid Slab', 'Hollow Block'], value='Flat Slab').classes('w-full mb-2')
+                            column_grid = ui.input(label='Column Grid (m)', value='6x6').classes('w-full mb-2')
+                            live_load = ui.number(label='Live Load (kN/m²)', value=3.0, step=0.5).classes('w-full mb-2')
+                            dead_load = ui.number(label='Additional Dead Load (kN/m²)', value=1.5, step=0.5).classes('w-full mb-2')
+                            soil_type = ui.select(label='Soil Type', options=['Rock', 'Sand', 'Clay', 'Silt'], value='Sand').classes('w-full mb-2')
+                            wastage_percent = ui.number(label='Wastage Allowance (%)', value=5, step=1, min=0, max=20).classes('w-full mb-2')
+
+                # Run button and outputs
+                boq_output_container = ui.column().classes('w-full')
+                boq_export_area = ui.row().classes('w-full gap-4 mt-4')
+                boq_result_holder = {'text': ''}
+
+                async def run_boq_takeoff():
+                    if not client:
+                        ui.notify('GEMINI_API_KEY missing!', type='negative')
+                        return
+                    if not boq_file_data['bytes']:
+                        ui.notify('Please upload project drawings first.', type='warning')
+                        return
+
+                    boq_output_container.clear()
+                    boq_export_area.clear()
+                    with boq_output_container:
+                        ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
+                        ui.label('Generating professional BOQ and cost estimate...').classes('self-center text-sm')
+
+                    try:
+                        # Gather all parameters from both tabs
+                        arch_params = {
+                            'total_area': total_area.value,
+                            'num_floors': num_floors.value,
+                            'floor_height': floor_height.value,
+                            'num_units': num_units.value,
+                            'finish_quality': finish_quality.value,
+                            'additional_notes': additional_notes.value,
+                        }
+                        struct_params = {
+                            'concrete_grade': concrete_grade.value,
+                            'rebar_grade': rebar_grade.value,
+                            'slab_type': slab_type.value,
+                            'column_grid': column_grid.value,
+                            'live_load': live_load.value,
+                            'dead_load': dead_load.value,
+                            'soil_type': soil_type.value,
+                            'wastage_percent': wastage_percent.value,
+                        }
+                        basis = code_basis_select.value
+
+                        # Build prompt
+                        prompt = f"""
+You are a Professional Quantity Surveyor and Cost Estimator with expertise in Egyptian construction.
+Based on the uploaded project drawings and the following parameters, generate a comprehensive Bill of Quantities (BOQ) and cost estimate.
+
+GOVERNING STANDARD: {basis}
+
+{NO_LATEX_RULE}
+
+ARCHITECTURAL PARAMETERS:
+{arch_params}
+
+STRUCTURAL PARAMETERS:
+{struct_params}
+
+Please produce a detailed BOQ covering:
+- Architectural works: finishes (flooring, ceiling, skirting, painting, etc.), doors, windows, partitions, etc.
+- Structural works: concrete quantities (by grade), reinforcement (by bar diameter), formwork, etc.
+- Include separate sections for Architectural and Structural with sub-items.
+- For each item, provide: Description, Unit, Quantity, Unit Rate (EGP), Total Cost (EGP).
+- Apply a wastage percentage of {struct_params['wastage_percent']}% to material quantities where applicable.
+- Provide a summary table of total costs per category and overall total.
+- Also include approximate quantities for excavation, backfill, and foundations based on typical design.
+
+Use proper Markdown tables with clear headers and separator rows.
+"""
+                        # Add file content if PDF
+                        contents = [prompt]
+                        if boq_file_data['type'] == 'application/pdf':
+                            reader = pypdf.PdfReader(io.BytesIO(boq_file_data['bytes']))
+                            text = "".join([p.extract_text() or "" for p in reader.pages])
+                            contents.append(f"Extracted Text from Drawings:\n{text}")
+                        else:
+                            img_part = types.Part.from_bytes(data=boq_file_data['bytes'], mime_type=boq_file_data['type'])
+                            contents.append(img_part)
+
+                        res_text = await call_gemini(contents, temperature=0.2)  # slightly higher for creativity
+                        boq_result_holder['text'] = res_text
+
+                        boq_output_container.clear()
+                        with boq_output_container:
+                            with ui.column().classes('output-card w-full'):
+                                ui.label('Detailed BOQ & Cost Estimate').classes('text-xl font-bold text-white mb-2')
+                                ui.markdown(res_text).classes('markdown-body')
+
+                        with boq_export_area:
+                            def download_boq_pdf():
+                                try:
+                                    meta = current_meta('BOQ')
+                                    pdf_bytes = build_report_pdf(
+                                        "PROFESSIONAL BOQ & COST ESTIMATE REPORT",
+                                        f"Architectural + Structural Takeoff | Basis: {basis}",
+                                        boq_result_holder['text'], meta, logo_bytes_holder['bytes'],
+                                    )
+                                    ui.download(pdf_bytes, filename=f"BOQ_Report_{ticket_input.value}.pdf")
+                                    ui.notify('BOQ PDF downloaded!', type='positive')
+                                except Exception as ex:
+                                    ui.notify(f'PDF Error: {str(ex)}', type='negative')
+
+                            def download_boq_excel():
+                                try:
+                                    # Attempt to extract tables from markdown
+                                    text = boq_result_holder['text']
+                                    # Find all tables by splitting by "|" lines
+                                    import pandas as pd
+                                    lines = text.split('\n')
+                                    tables = []
+                                    current_table = []
+                                    in_table = False
+                                    for line in lines:
+                                        if '|' in line and not line.strip().startswith('#'):
+                                            if not in_table:
+                                                in_table = True
+                                            current_table.append(line)
+                                        else:
+                                            if in_table and current_table:
+                                                tables.append('\n'.join(current_table))
+                                                current_table = []
+                                                in_table = False
+                                    if in_table and current_table:
+                                        tables.append('\n'.join(current_table))
+
+                                    # Write each table to a separate sheet
+                                    with pd.ExcelWriter(f'BOQ_{ticket_input.value}.xlsx') as writer:
+                                        for idx, tbl_str in enumerate(tables):
+                                            # Parse table
+                                            rows = [row.strip() for row in tbl_str.split('\n') if row.strip()]
+                                            data = []
+                                            for r in rows:
+                                                cells = [c.strip() for c in r.strip('|').split('|')]
+                                                data.append(cells)
+                                            if not data:
+                                                continue
+                                            # Assume first row is header
+                                            df = pd.DataFrame(data[1:], columns=data[0])
+                                            df.to_excel(writer, sheet_name=f'Table_{idx+1}', index=False)
+                                    # Read bytes and download
+                                    with open(f'BOQ_{ticket_input.value}.xlsx', 'rb') as f:
+                                        excel_bytes = f.read()
+                                    os.remove(f'BOQ_{ticket_input.value}.xlsx')
+                                    ui.download(excel_bytes, filename=f"BOQ_{ticket_input.value}.xlsx")
+                                    ui.notify('Excel downloaded!', type='positive')
+                                except Exception as ex:
+                                    ui.notify(f'Excel Export Error: {str(ex)}', type='negative')
+
+                            ui.button('Download BOQ PDF', on_click=download_boq_pdf).classes('primary-btn flex-1')
+                            ui.button('Export BOQ to Excel', on_click=download_boq_excel).classes('primary-btn flex-1')
+
+                    except Exception as ex:
+                        boq_output_container.clear()
+                        with boq_output_container:
+                            ui.notify(f'BOQ Generation Error: {str(ex)}', type='negative')
+
+                ui.button('Run Professional AI Takeoff', on_click=run_boq_takeoff).classes('primary-btn mt-4')
+
+        # ---------------- FOOTER (updated with corrected sentence and disclaimer) ----------------
+        ui.html('''
+        <div class="app-footer">
+            <b>Multi-Standard Engineering Quality Assurance Portal</b> &nbsp;|&nbsp; Automated compliance verification across ECP 203, ECP 202, ECP 104, ASTM, AASHTO, BS, EN, and ISO standards.<br>
+            <b>Official Direct Contacts:</b>
+            LinkedIn: <a href="https://www.linkedin.com/in/mohamed-abd-al-aty-a326a1214/" target="_blank">Mohamed Abd Al Aty</a> &nbsp;|&nbsp;
+            Email: <a href="mailto:mohamedabdalaty63@gmail.com">mohamedabdalaty63@gmail.com</a><br>
+            <i>Specialized in QA/QC, Civil Engineering Standards &amp; Automated Compliance.</i> &copy; 2026 Eng. Mohamed Abd Al Aty. All rights reserved.<br>
+            <span style="color: #FF8C00; font-weight: 600;">⚠️ Disclaimer:</span> These AI modules have high accuracy and are specified for the Egyptian codes, but results should be rechecked by a qualified engineer before any decision-making.
+        </div>
+        ''')
+
+
+ui.run(
+    host='0.0.0.0',
+    port=int(os.environ.get('PORT', 8080)),
+    title='Multi-Standard Engineering Auditor',
+    favicon='🏗️',
+    reload=False,
+    reconnect_timeout=30.0,
+)
