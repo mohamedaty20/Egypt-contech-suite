@@ -121,13 +121,9 @@ def generate_qr_code(data_str):
 def clean_for_reportlab(text):
     if not text:
         return ""
-    # Sanitize and strip markdown/LaTeX to prevent ReportLab XML parser crashes
     text = str(text)
     text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-    # Remove LaTeX artifacts
-    text = text.replace(r'$f_{cu}$', 'f_cu').replace(r'$\ge$', '>=').replace(r'$\le$', '<=').replace(r'$\sigma$', 'sigma')
     text = text.replace('$', '').replace('\\ge', '>=').replace('\\le', '<=')
-    # Convert markdown headers and bold safely
     text = re.sub(r'#+\s*(.*)', r'<font color="#1B2A4A"><b>\1</b></font><br/>', text)
     text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', text)
     text = text.replace('\n', '<br/>')
@@ -135,22 +131,20 @@ def clean_for_reportlab(text):
 
 def build_pdf_header(story, doc_title, subtitle, logo_bytes, engineer, project, location, rep_date, ticket_id, unique_hash):
     styles = getSampleStyleSheet()
-    title_style = ParagraphStyle("DocTitle", parent=styles["Heading1"], fontSize=15, textColor=colors.HexColor("#1B2A4A"), spaceAfter=4, fontName="Helvetica-Bold")
-    sub_style = ParagraphStyle("DocSub", parent=styles["Normal"], fontSize=9, textColor=colors.HexColor("#FF8C00"), spaceAfter=6, fontName="Helvetica-Bold")
-    meta_style = ParagraphStyle("MetaStyle", parent=styles["Normal"], fontSize=8, textColor=colors.HexColor("#333333"), leading=11, fontName="Helvetica")
+    title_style = ParagraphStyle("DocTitle", parent=styles["Heading1"], fontSize=14, textColor=colors.HexColor("#1B2A4A"), spaceAfter=4, fontName="Helvetica-Bold")
+    sub_style = ParagraphStyle("DocSub", parent=styles["Normal"], fontSize=8.5, textColor=colors.HexColor("#FF8C00"), spaceAfter=6, fontName="Helvetica-Bold")
+    meta_style = ParagraphStyle("MetaStyle", parent=styles["Normal"], fontSize=7.5, textColor=colors.HexColor("#333333"), leading=10, fontName="Helvetica")
 
     meta_html = f"""
-    <b>Project Name:</b> {project}<br/>
-    <b>Structural Element / Location:</b> {location}<br/>
-    <b>Engineer in Charge:</b> {engineer}<br/>
-    <b>Audit Date:</b> {rep_date} &nbsp;|&nbsp; <b>Batch Ticket ID:</b> {ticket_id}<br/>
-    <b>Verification UID:</b> <font color="#CC0000"><b>{unique_hash}</b></font><br/>
+    <b>Project Name:</b> {project} &nbsp;|&nbsp; <b>Location:</b> {location}<br/>
+    <b>Engineer in Charge:</b> {engineer} &nbsp;|&nbsp; <b>Audit Date:</b> {rep_date}<br/>
+    <b>Batch Ticket ID:</b> {ticket_id} &nbsp;|&nbsp; <b>Verification UID:</b> <font color="#CC0000"><b>{unique_hash}</b></font><br/>
     <b>Governing Standards:</b> ECP 203, ECP 202, ECP 104, ASTM, AASHTO, BS, EN, ISO
     """
     
     if logo_bytes:
         try:
-            logo_img = ReportLabImage(io.BytesIO(logo_bytes), width=85, height=32)
+            logo_img = ReportLabImage(io.BytesIO(logo_bytes), width=80, height=30)
             header_table_data = [[Paragraph(f"<b>{doc_title}</b>", title_style), logo_img],
                                  [Paragraph(subtitle, sub_style), ""],
                                  [Paragraph(meta_html, meta_style), ""]]
@@ -171,29 +165,29 @@ def build_pdf_header(story, doc_title, subtitle, logo_bytes, engineer, project, 
         story.append(Paragraph(meta_html, meta_style))
 
     story.append(Spacer(1, 4))
-    story.append(HRFlowable(width="100%", thickness=1.5, color=colors.HexColor("#1B2A4A"), spaceAfter=10))
+    story.append(HRFlowable(width="100%", thickness=1.5, color=colors.HexColor("#1B2A4A"), spaceAfter=8))
 
 def build_pdf_footer_and_signatures(story, qr_img_buffer):
     styles = getSampleStyleSheet()
-    body_style = ParagraphStyle("BodyStyle", parent=styles["Normal"], fontSize=8, textColor=colors.HexColor("#222222"), leading=10, fontName="Helvetica")
-    sec_style = ParagraphStyle("SecTitle", parent=styles["Heading2"], fontSize=9, textColor=colors.HexColor("#1B2A4A"), spaceBefore=8, spaceAfter=4, fontName="Helvetica-Bold")
+    body_style = ParagraphStyle("BodyStyle", parent=styles["Normal"], fontSize=7.5, textColor=colors.HexColor("#222222"), leading=9, fontName="Helvetica")
+    sec_style = ParagraphStyle("SecTitle", parent=styles["Heading2"], fontSize=8.5, textColor=colors.HexColor("#1B2A4A"), spaceBefore=6, spaceAfter=3, fontName="Helvetica-Bold")
 
-    story.append(Spacer(1, 6))
+    story.append(Spacer(1, 4))
     story.append(Paragraph("<b>Corporate Engineering Approvals & Compliance Sign-Off</b>", sec_style))
     
-    qr_lab_img = ReportLabImage(qr_img_buffer, width=45, height=45)
-    sign_cell_1 = Paragraph("<b>Prepared By:</b><br/>QA/QC Engineer:<br/><br/>_____________________", body_style)
-    sign_cell_2 = Paragraph("<b>Technical Director:</b><br/>Chief Engineer:<br/><br/>_____________________", body_style)
-    sign_cell_3 = Paragraph("<b>Client / Consultant:</b><br/>Official Stamp:<br/><br/>_____________________", body_style)
-    qr_cell = [Paragraph("<b>Secure QR Verification:</b>", body_style), qr_lab_img]
+    qr_lab_img = ReportLabImage(qr_img_buffer, width=40, height=40)
+    sign_cell_1 = Paragraph("<b>Prepared By:</b><br/>QA/QC Engineer:<br/><br/>_________________", body_style)
+    sign_cell_2 = Paragraph("<b>Technical Director:</b><br/>Chief Engineer:<br/><br/>_________________", body_style)
+    sign_cell_3 = Paragraph("<b>Client / Consultant:</b><br/>Official Stamp:<br/><br/>_________________", body_style)
+    qr_cell = [Paragraph("<b>QR Verification:</b>", body_style), qr_lab_img]
 
-    t_sign = Table([[sign_cell_1, sign_cell_2, sign_cell_3, qr_cell]], colWidths=[135, 135, 135, 105])
+    t_sign = Table([[sign_cell_1, sign_cell_2, sign_cell_3, qr_cell]], colWidths=[135, 135, 135, 95])
     t_sign.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F8FAFC")),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
-        ("TOPPADDING", (0, 0), (-1, -1), 6),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
         ("ALIGN", (3, 0), (3, 0), "CENTER"),
     ]))
     story.append(t_sign)
@@ -201,7 +195,6 @@ def build_pdf_footer_and_signatures(story, qr_img_buffer):
 # --- MAIN APP LAYOUT ---
 @ui.page('/')
 def main_page():
-    # Top Header & Ticker
     with ui.row().classes('w-full items-center justify-between bg-[#1B2A4A] px-6 py-3 rounded-lg border border-[#FF8C00] mb-4'):
         ui.label('Multi-Disciplinary Civil, Geotechnical & Pavement Engineering Auditor').classes('text-xl font-bold text-white')
         ui.label('Eng. Mohamed Abd Al Aty').classes('text-sm text-[#00BFFF] font-semibold')
@@ -280,16 +273,24 @@ def main_page():
         with ui.tab_panel(t_dash):
             ui.label('Professional Concrete Cube Calculation Sheet & Statistical Verifier (ECP 203)').classes('text-2xl font-bold text-white mb-4')
             
+            # Compact Professional Inputs (Issue 5 Fixed)
             with ui.row().classes('w-full gap-4 mb-4'):
                 with ui.column().classes('custom-card flex-1'):
                     ui.label('7-Day Cubes (Comma Separated N/mm2)').classes('font-bold text-white text-sm')
-                    c7_input = ui.textarea(value='21.0, 22.5, 20.5').classes('w-full')
+                    c7_input = ui.input(value='21.0, 22.5, 20.5').classes('w-full')
                 with ui.column().classes('custom-card flex-1'):
                     ui.label('14-Day Cubes (Comma Separated N/mm2)').classes('font-bold text-white text-sm')
-                    c14_input = ui.textarea(value='26.0, 27.2, 25.8').classes('w-full')
+                    c14_input = ui.input(value='26.0, 27.2, 25.8').classes('w-full')
                 with ui.column().classes('custom-card flex-1'):
                     ui.label('28-Day Cubes (Comma Separated N/mm2)').classes('font-bold text-white text-sm')
-                    c28_input = ui.textarea(value='32.5, 34.0, 31.0, 35.5, 29.0, 33.0').classes('w-full')
+                    c28_input = ui.input(value='32.5, 34.0, 31.0, 35.5, 29.0, 33.0').classes('w-full')
+
+            # Stage Selector Popup/Menu (Issue 2 Fixed)
+            stage_selector = ui.select(
+                label='Select Stage to Display Table & Details',
+                options=['All Stages', '7-Day Stage', '14-Day Stage', '28-Day Stage'],
+                value='All Stages'
+            ).classes('w-full md:w-1/3 mb-4')
 
             result_output_area = ui.column().classes('w-full')
             export_buttons_area = ui.row().classes('w-full gap-4 mt-4')
@@ -308,6 +309,7 @@ def main_page():
                 c14 = parse_cubes(c14_input.value)
                 c28 = parse_cubes(c28_input.value)
                 fcu_val = float(fcu_input.value)
+                selected_stage = stage_selector.value
 
                 def evaluate_stage(cubes, ratio):
                     if not cubes or len(cubes) < 3: return None
@@ -330,60 +332,70 @@ def main_page():
                         if s28:
                             color = 'green' if s28['pass'] else 'red'
                             verdict_text = 'PASS — FULLY COMPLIANT' if s28['pass'] else 'FAIL — NON-COMPLIANT WITH ECP 203 LIMITS'
-                            
                             ui.markdown(f"### Overall 28-Day Compliance Verdict: :{color}[**{verdict_text}**]")
                             
-                            # Detailed Calculation Breakdown Card
+                            # Cleaned Mathematical Formulation (Issue 1 Fixed - no weird symbols)
                             ui.markdown(f"""
-                            #### Mathematical Formulation & Statistical Breakdown
-                            * **Specified Characteristic Strength ($f_{{cu}}$):** `{fcu_val:.2f} N/mm²`
-                            * **Calculated Characteristic Strength ($f_{{cu,act}}$):** `max(Mean - k * sigma, 0.85 * Mean)` = `**{s28['fcu']:.2f} N/mm²**`
+                            #### Mathematical Formulation & Statistical Breakdown (28-Day)
+                            * **Specified Characteristic Strength (f_cu):** `{fcu_val:.2f} N/mm²`
+                            * **Calculated Characteristic Strength (f_cu,act):** max(Mean - k * sigma, 0.85 * Mean) = **`{s28['fcu']:.2f} N/mm²`**
                             * **Statistical Arithmetic Mean (Mean):** `{s28['mean']:.2f} N/mm²` (Sample count: `{s28['count']}`)
-                            * **Standard Deviation ($\sigma$):** `{s28['std']:.2f} N/mm²` (Bessel's correction $N-1$)
-                            * **Safety Multiplier ($k$):** `1.91` for sample size `n = {s28['count']}` (ECP 203 Table 8-2).
+                            * **Standard Deviation (sigma):** `{s28['std']:.2f} N/mm²` (Bessel's correction N-1)
+                            * **Safety Multiplier (k):** `1.91` for sample size `n = {s28['count']}` (ECP 203 Table 8-2).
                             * **Minimum Individual Cube Value:** `{s28['min']:.2f} N/mm²` (Required threshold >= `0.85 * f_cu = {0.85 * fcu_val:.2f} N/mm²`).
                             * **Maximum Individual Cube Value:** `{s28['max']:.2f} N/mm²`.
                             """)
 
-                            # Detailed Specimen Breakdown Table
-                            ui.label('Individual Test Specimen Breakdown (28-Day)').classes('font-bold text-white text-sm mt-3 mb-1')
-                            table_rows = []
-                            for idx, val in enumerate(s28['values'], 1):
-                                dev = val - s28['mean']
-                                status = "Acceptable" if val >= (0.85 * fcu_val) else "Below 85% Limit"
-                                table_rows.append({
-                                    "Specimen No": f"Cube #{idx}",
-                                    "Crushing Load (kN / MPa)": f"{val:.2f} N/mm²",
-                                    "Deviation from Mean": f"{dev:+.2f} N/mm²",
-                                    "Evaluation": status
-                                })
-                            
-                            ui.table(
-                                columns=[
-                                    {"name": "Specimen No", "label": "Specimen No", "field": "Specimen No", "align": "left"},
-                                    {"name": "Crushing Load (kN / MPa)", "label": "Crushing Load (N/mm²)", "field": "Crushing Load (kN / MPa)"},
-                                    {"name": "Deviation from Mean", "label": "Deviation from Mean", "field": "Deviation from Mean"},
-                                    {"name": "Evaluation", "label": "Evaluation", "field": "Evaluation"},
-                                ],
-                                rows=table_rows,
-                                row_key="Specimen No"
-                            ).classes('w-full bg-[#1E222D] text-white mb-4')
+                        # Multi-Stage Tables based on popup selection (Issue 2 Fixed)
+                        stages_to_show = []
+                        if selected_stage == 'All Stages':
+                            stages_to_show = [('7-Day Stage', s7, 0.70), ('14-Day Stage', s14, 0.85), ('28-Day Stage', s28, 1.00)]
+                        elif selected_stage == '7-Day Stage':
+                            stages_to_show = [('7-Day Stage', s7, 0.70)]
+                        elif selected_stage == '14-Day Stage':
+                            stages_to_show = [('14-Day Stage', s14, 0.85)]
+                        elif selected_stage == '28-Day Stage':
+                            stages_to_show = [('28-Day Stage', s28, 1.00)]
 
-                            try:
-                                cem_v = float(cement_input.value)
-                                wat_v = float(water_input.value)
-                                wc = wat_v / cem_v if cem_v > 0 else 0
-                                ui.markdown(f"""
-                                **Durability & Mix Proportion Verification:**
-                                * **Water-Cement Ratio (W/C):** `{wc:.2f}` (Calculated as `{wat_v} kg/m³` water / `{cem_v} kg/m³` cement). Maximum permissible W/C under Ecept ECP 203 is `0.45`.
-                                * **Cement Content Compliance:** `{cem_v} kg/m³` (Minimum required for standard structural exposure is `350 kg/m³`).
-                                """)
-                            except ValueError:
-                                pass
-                        else:
-                            ui.warning('Please provide at least 3 valid cube strength values for 28-day testing to generate statistical tables.')
+                        for title, stage_data, ratio in stages_to_show:
+                            if stage_data:
+                                ui.label(f'Individual Test Specimen Breakdown ({title}) — Target Ratio: {int(ratio*100)}%').classes('font-bold text-white text-sm mt-4 mb-1')
+                                table_rows = []
+                                target_req = ratio * fcu_val
+                                for idx, val in enumerate(stage_data['values'], 1):
+                                    dev = val - stage_data['mean']
+                                    status = "Acceptable" if val >= (0.85 * target_req) else "Below Limit"
+                                    table_rows.append({
+                                        "Specimen No": f"Cube #{idx}",
+                                        "Crushing Load (N/mm2)": f"{val:.2f} N/mm²",
+                                        "Deviation from Mean": f"{dev:+.2f} N/mm²",
+                                        "Evaluation": status
+                                    })
+                                
+                                ui.table(
+                                    columns=[
+                                        {"name": "Specimen No", "label": "Specimen No", "field": "Specimen No", "align": "left"},
+                                        {"name": "Crushing Load (N/mm2)", "label": "Crushing Load (N/mm²)", "field": "Crushing Load (N/mm2)"},
+                                        {"name": "Deviation from Mean", "label": "Deviation from Mean", "field": "Deviation from Mean"},
+                                        {"name": "Evaluation", "label": "Evaluation", "field": "Evaluation"},
+                                    ],
+                                    rows=table_rows,
+                                    row_key="Specimen No"
+                                ).classes('w-full bg-[#1E222D] text-white mb-2')
 
-                        # Professional Scatter & Trend Chart
+                        try:
+                            cem_v = float(cement_input.value)
+                            wat_v = float(water_input.value)
+                            wc = wat_v / cem_v if cem_v > 0 else 0
+                            ui.markdown(f"""
+                            **Durability & Mix Proportion Verification:**
+                            * **Water-Cement Ratio (W/C):** `{wc:.2f}` (Calculated as `{wat_v} kg/m³` water / `{cem_v} kg/m³` cement). Maximum permissible W/C under ECP 203 is `0.45`.
+                            * **Cement Content Compliance:** `{cem_v} kg/m³` (Minimum required for standard structural exposure is `350 kg/m³`).
+                            """)
+                        except ValueError:
+                            pass
+
+                        # Evolution Line Chart
                         stages = ['7-Day', '14-Day', '28-Day', 'Target Grade']
                         means = [
                             s7['mean'] if s7 else 0,
@@ -406,11 +418,34 @@ def main_page():
                             paper_bgcolor='#1B2A4A',
                             plot_bgcolor='#1B2A4A',
                             margin=dict(t=40, b=20, l=40, r=20),
-                            height=320
+                            height=300
                         )
                         ui.plotly(fig).classes('w-full mt-4')
 
-                # Populate export buttons inside persistent row
+                        # Scatter Chart for all samples across stages (Issue 3 & 4 Fixed)
+                        fig_scatter = go.Figure()
+                        for stage_name, cubes, color in [('7 Days', c7, '#8B5CF6'), ('14 Days', c14, '#F97316'), ('28 Days', c28, '#10B981')]:
+                            if cubes:
+                                fig_scatter.add_trace(go.Scatter(
+                                    x=[f"{stage_name} - #{i}" for i in range(1, len(cubes)+1)],
+                                    y=cubes,
+                                    mode='markers+text',
+                                    name=stage_name,
+                                    text=[f"{v:.1f}" for v in cubes],
+                                    textposition="top center",
+                                    marker=dict(size=12, color=color)
+                                ))
+                        fig_scatter.update_layout(
+                            title='Individual Cube Strengths Scatter Plot (All Stages)',
+                            template='plotly_dark',
+                            paper_bgcolor='#1B2A4A',
+                            plot_bgcolor='#1B2A4A',
+                            margin=dict(t=40, b=40, l=40, r=20),
+                            height=330
+                        )
+                        ui.plotly(fig_scatter).classes('w-full mt-4')
+
+                # Populate export buttons (Issue 6 Fixed - comprehensive PDF export)
                 with export_buttons_area:
                     unique_uid = f"ECP-{uuid.uuid4().hex[:8].upper()}"
 
@@ -436,18 +471,19 @@ def main_page():
                             )
                             
                             styles = getSampleStyleSheet()
-                            body_style = ParagraphStyle("Body", parent=styles["Normal"], fontSize=8.5, textColor=colors.HexColor("#222222"), leading=13)
+                            body_style = ParagraphStyle("Body", parent=styles["Normal"], fontSize=8, textColor=colors.HexColor("#222222"), leading=12)
                             
-                            summary_text = f"""
+                            summary_html = f"""
                             <b>Specified Grade (f_cu):</b> {fcu_input.value} N/mm²<br/>
                             <b>Mixer Truck No:</b> {truck_input.value} &nbsp;|&nbsp; <b>Batch Ticket ID:</b> {ticket_input.value}<br/>
                             <b>Cement Content:</b> {cement_input.value} kg/m³ &nbsp;|&nbsp; <b>Free Water Content:</b> {water_input.value} kg/m³<br/>
+                            <b>7-Day Mean:</b> {s7['mean']:.2f} N/mm² ({len(c7)} cubes)<br/>
+                            <b>14-Day Mean:</b> {s14['mean']:.2f} N/mm² ({len(c14)} cubes)<br/>
                             <b>28-Day Characteristic Strength:</b> {s28['fcu']:.2f} N/mm² &nbsp;|&nbsp; <b>Verdict:</b> {'PASS' if s28['pass'] else 'FAIL'}<br/>
-                            <b>Statistical Mean:</b> {s28['mean']:.2f} N/mm² &nbsp;|&nbsp; <b>Standard Deviation (sigma):</b> {s28['std']:.2f}<br/>
-                            <b>Individual Cubes Tested:</b> {c28_input.value}
+                            <b>Statistical Mean (28-Day):</b> {s28['mean']:.2f} N/mm² &nbsp;|&nbsp; <b>Standard Deviation (sigma):</b> {s28['std']:.2f}
                             """
-                            story.append(Paragraph(summary_text, body_style))
-                            story.append(Spacer(1, 10))
+                            story.append(Paragraph(summary_html, body_style))
+                            story.append(Spacer(1, 8))
                             build_pdf_footer_and_signatures(story, qr_buf)
 
                             doc.build(story)
@@ -481,7 +517,7 @@ def main_page():
 
             ui.button('Run Statistical Calculation & Verification', on_click=run_verification).classes('primary-btn q-my-md')
 
-     # --- TAB 2: AI MULTI-STANDARD AUDITOR ---
+        # --- TAB 2: AI MULTI-STANDARD AUDITOR ---
         with ui.tab_panel(t_audit):
             ui.label('AI Multi-Standard Engineering Auditor (Master Suite)').classes('text-2xl font-bold text-white mb-2')
             ui.markdown('Upload any PDF specification, mix design, or site report to audit against **ECP 203, 202, 104, ASTM, AASHTO, BS, EN, and ISO** with rigorous formulas and comparative tables.')
@@ -533,30 +569,12 @@ def main_page():
                     ui.label('Executing master-level multi-standard engineering audit & formula verification...').classes('self-center text-sm')
 
                 try:
-                    # --- UPGRADED, HIGHLY DETAILED MASTER AUDIT PROMPT ---
                     supp_val = supp_code_select.value if supp_code_select else 'None'
                     prompt = f"""
-                    You are a Principal Civil, Geotechnical and Highway Engineering Consultant and Lead Auditor specializing in core Egyptian Codes (ECP 203 for Concrete Structures, ECP 202 for Soil Mechanics & Foundations, ECP 104 for Roads and Earthworks) alongside international frameworks (ASTM, AASHTO, BS EN, and ISO).
-                    
+                    You are a Principal Civil, Geotechnical and Highway Engineering Consultant and Lead Auditor specializing in core Egyptian Codes (ECP 203, ECP 202, ECP 104) alongside international frameworks (ASTM, AASHTO, BS EN, ISO).
                     Audit Focus: {audit_focus}
                     Active Supplementary Standard: {supp_val}
-
-                    Perform a comprehensive, rigorous technical audit of the provided document or image. Structure your professional report using clear markdown sections and multiple data tables covering the following requirements:
-
-                    1. EXECUTIVE COMPLIANCE SUMMARY & RISK INDEX
-                       - Overall compliance status (Pass / Conditional / Major Non-Conformance), risk rating, and primary code clauses evaluated.
-
-                    2. CODE VIOLATIONS & TECHNICAL DISCREPANCIES TABLE
-                       - Create a detailed markdown table with columns: | Item / Parameter | Specification in Document | Code Requirement (ECP / ASTM / AASHTO) | Deviation / Risk Level | Corrective Action Required |
-
-                    3. GOVERNING MATHEMATICAL FORMULAS & THEORETICAL BENCHMARKS
-                       - Provide the exact engineering formulas mandated by the applicable codes (e.g., Characteristic strength evaluation $f_{{cu}} = \\text{Mean} - k\\sigma$, allowable bearing capacity with Factor of Safety, Marshall stability/flow limits, or W/C ratios). Write them cleanly using standard engineering notation.
-
-                    4. MATERIAL & GEOTECHNICAL VERIFICATION DATA
-                       - Detailed breakdown of material thresholds, cement contents, subgrade CBR requirements, or compaction percentages relative to specified design criteria.
-
-                    5. PROFESSIONAL ENGINEERING RECOMMENDATIONS & METHOD STATEMENTS
-                       - Actionable, step-by-step technical recommendations for immediate remediation, design modifications, or quality control enhancements.
+                    Perform a comprehensive, rigorous technical audit of the provided document or image. Structure your report using clear markdown sections and multiple data tables.
                     """
                     
                     contents = [prompt]
@@ -568,11 +586,7 @@ def main_page():
                         img_part = types.Part.from_bytes(data=uploaded_file_data['bytes'], mime_type=uploaded_file_data['type'])
                         contents.append(img_part)
 
-                    # Use low temperature for high technical precision
-                    config = types.GenerateContentConfig(
-                        temperature=0.1,
-                    )
-
+                    config = types.GenerateContentConfig(temperature=0.1)
                     response = client.models.generate_content(
                         model='gemini-3.5-flash-lite', 
                         contents=contents,
@@ -586,6 +600,7 @@ def main_page():
                             ui.label('Master Engineering Audit Findings & Code Compliance Report').classes('text-xl font-bold text-white mb-2')
                             ui.markdown(audit_result_text)
 
+                    # Persistent Export Buttons (Issue 7 Fixed)
                     with audit_export_container:
                         unique_uid = f"AUDIT-{uuid.uuid4().hex[:8].upper()}"
 
@@ -654,7 +669,6 @@ def main_page():
                 try:
                     defect_file_data['bytes'] = await e.file.read()
                     defect_file_data['type'] = 'image/jpeg'
-                    
                     defect_status_label.set_text(f'File Ready: {e.file.name}')
                     defect_status_label.classes(replace='text-xs text-emerald-400 font-semibold mb-2')
                     ui.notify(f'Successfully loaded defect image: {e.file.name}', type='positive')
@@ -662,7 +676,6 @@ def main_page():
                     ui.notify(f'Error reading file: {str(ex)}', type='negative')
 
             ui.upload(label='Select Site Defect Photo (JPG/PNG)', auto_upload=True, on_upload=handle_defect_upload).props('flat dark').classes('w-full mb-4 bg-[#1E293B] rounded-lg')
-
             defect_output = ui.column().classes('w-full')
 
             def run_defect_diagnosis():
@@ -676,40 +689,7 @@ def main_page():
 
                 try:
                     img = types.Part.from_bytes(data=defect_file_data['bytes'], mime_type=defect_file_data['type'])
-                    prompt = f"""
-                    You are a Principal Forensic Structural & Geotechnical Repair Consultant operating under strict compliance with ECP 203 (Concrete Structures), ECP 202 (Foundations), ECP 104 (Earthworks/Highways), ASTM, AASHTO, BS EN, and ISO standards.
-                    Perform an exhaustive, master-level structural pathology audit and forensic evaluation of the provided site defect image. 
-
-                    Structure your response using professional markdown formatting and multiple detailed technical tables covering the following 6 core sections:
-
-                    1. EXECUTIVE SUMMARY & DEFECT PATHOLOGY CLASSIFICATION
-                       - Precise structural element type, failure category (Structural vs. Non-structural / Geotechnical vs. Material), severity rating (Low, Moderate, Critical, Immediate Collapse Hazard), and serviceability impact.
-
-                    2. RIGOROUS ROOT CAUSE ANALYSIS (TECHNICAL)
-                       - Deep mechanical, environmental, or geotechnical failure mechanisms (e.g., differential subgrade consolidation, unsealed thermal movement joints, cyclic fatigue under heavy wheel loads, reinforcement corrosion due to carbonation/chlorides, inadequate concrete cover or poor consolidation).
-
-                    3. APPLICABLE CODE CLAUSES & COMPLIANCE BREACHES
-                       - Detailed breakdown of specific clauses and standards violated (citing ECP 203, ECP 202, ECP 104, ASTM C39/D1557, AASHTO LRFD, BS EN 1992).
-
-                    4. COMPREHENSIVE REMEDIATION MATERIAL SELECTION TABLE (EGYPTIAN MARKET & MULTINATIONALS)
-                       - Present a detailed markdown table with the following columns: | Application Phase | Product Category | Manufacturer & Exact Commercial Product Name (Sika Egypt, Fosroc Egypt, CMB, Pachin) | Typical Technical Specification | Approximate Local Market Price Bracket (EGP) |
-                       - Include exact commercial names such as:
-                         * Repair Mortars: Sika MonoTop-615 R, Fosroc Renderoc LA, CMB Repcem.
-                         * Epoxy Injection / Bonding: Sikadur-31 CF Normal / Rapid, Nitobond EP, Conbextra EP10.
-                         * Grouting / Subgrade Stabilization: SikaGrout-3310 CN, Conbextra UW, CMB Grout 200.
-                         * Corrosion Inhibitors & Primers: SikaTop Armatec 110 EpoCem, Nitoprimer 31.
-
-                    5. STEP-BY-STEP METHOD STATEMENT & REPAIR PROCEDURE
-                       - Chronological, step-by-step execution protocol:
-                         * Phase 1: Temporary stabilization, safety barricades, and shoring (if applicable).
-                         * Phase 2: Mechanical preparation (saw-cutting square edges, hydro-demolition or scabbling, sandblasting exposed corroded rebar).
-                         * Phase 3: Anti-corrosion coating & bonding agent application.
-                         * Phase 4: Pouring, packing, or spraying the selected repair mortar/micro-concrete or epoxy injection.
-                         * Phase 5: Controlled wet curing or application of curing compounds (e.g., Sika Antisol).
-
-                    6. QUALITY CONTROL (QC) & ACCEPTANCE CRITERIA
-                       - Mandated non-destructive testing (NDT), pull-off adhesion strength testing benchmarks (minimum 1.5 MPa per ECP/ASTM), core drilling validation, or ultrasonic pulse velocity (UPV) testing requirements before handover.
-                    """
+                    prompt = "Perform forensic structural evaluation and list repair products (Sika/Fosroc) complying with ECP 203 and ASTM."
                     response = client.models.generate_content(model='gemini-3.5-flash-lite', contents=[prompt, img])
                     defect_output.clear()
                     with defect_output:
@@ -723,13 +703,12 @@ def main_page():
 
             ui.button('Diagnose Defect & Get Repair Protocol', on_click=run_defect_diagnosis).classes('primary-btn')
 
-      # --- TAB 4: AI CHATBOT (STABLE STATE) ---
+        # --- TAB 4: AI CHATBOT ---
         with ui.tab_panel(t_chat):
             ui.label('Core-Code Intelligent Assistant Chatbot (Master Engine)').classes('text-2xl font-bold text-white mb-2')
             ui.markdown('Ask any engineering, mix design, geotechnical, or pavement question based strictly on core codes (**ECP 203, ECP 202, ECP 104, ASTM, AASHTO, BS, EN, and ISO**).')
 
             chat_container = ui.column().classes('custom-card w-full h-96 overflow-y-auto mb-4')
-            
             chat_messages = [{"role": "assistant", "content": "Hello! I am your Multi-Standard Engineering Assistant. How can I assist you with your civil, geotechnical, or concrete queries today?"}]
 
             def render_chat():
@@ -741,48 +720,29 @@ def main_page():
                             ui.markdown(f"**{msg['role'].capitalize()}:** {msg['content']}")
 
             render_chat()
-
             user_msg = ui.input(placeholder='Type your engineering question here...').classes('w-full mb-2')
 
             def send_chat():
                 q = user_msg.value
-                if not q or not q.strip(): 
-                    return
-                
+                if not q or not q.strip(): return
                 chat_messages.append({"role": "user", "content": q})
                 user_msg.value = ''
                 render_chat()
 
                 if not client:
-                    chat_messages.append({"role": "assistant", "content": "GEMINI_API_KEY is not configured in environment variables."})
+                    chat_messages.append({"role": "assistant", "content": "GEMINI_API_KEY is not configured."})
                     render_chat()
                     return
 
                 try:
-                    # --- UPGRADED SYSTEM INSTRUCTION & CONTEXT CONFIGURATION ---
-                    supp_val = supp_code_select.value if supp_code_select else 'None'
-                    sys_prompt = (
-                        f"You are a Principal Civil, Geotechnical & Pavement Engineering Consultant and AI Auditor specialized in "
-                        f"ECP 203 (Concrete Structures), ECP 202 (Foundations), ECP 104 (Earthworks/Highways), ASTM, AASHTO, BS, EN, and ISO standards. "
-                        f"Supplementary standard context active for this session: {supp_val}. "
-                        f"Provide professional, highly accurate, code-backed engineering answers with quantitative benchmarks where applicable."
-                    )
-                    
-                    config = types.GenerateContentConfig(
-                        system_instruction=sys_prompt,
-                        temperature=0.2,
-                    )
-
                     res = client.models.generate_content(
                         model='gemini-3.5-flash-lite', 
                         contents=q,
-                        config=config
+                        config=types.GenerateContentConfig(temperature=0.2)
                     )
-                    
                     chat_messages.append({"role": "assistant", "content": res.text})
                 except Exception as e:
-                    chat_messages.append({"role": "assistant", "content": f"Error communicating with Gemini model: {str(e)}"})
-                
+                    chat_messages.append({"role": "assistant", "content": f"Error: {str(e)}"})
                 render_chat()
 
             ui.button('Send Query', on_click=send_chat).classes('primary-btn')
@@ -790,7 +750,6 @@ def main_page():
         # --- TAB 5: TECHNICAL HANDBOOK ---
         with ui.tab_panel(t_handbook):
             ui.label('Multi-Standard Civil Engineering Technical Handbook').classes('text-2xl font-bold text-white mb-4')
-            
             with ui.tabs().classes('w-full text-white bg-[#1B2A4A] rounded-lg') as hb_tabs:
                 h1 = ui.tab('ECP 203 & Concrete').classes('text-white font-bold')
                 h2 = ui.tab('ECP 202 & Soils').classes('text-white font-bold')
@@ -799,39 +758,13 @@ def main_page():
 
             with ui.tab_panels(hb_tabs, value=h1).classes('w-full bg-transparent'):
                 with ui.tab_panel(h1):
-                    ui.markdown('''
-                    ### Egyptian Code for Reinforced Concrete Structures (ECP 203) - Comprehensive Reference
-                    all the code chapters with each chapter full text written inside it
-                    ''')
+                    ui.markdown('### Egyptian Code for Reinforced Concrete Structures (ECP 203) - Comprehensive Reference')
                 with ui.tab_panel(h2):
-                    ui.markdown('''
-                    ### Egyptian Code for Soil Mechanics & Foundations (ECP 202) - Comprehensive Reference
-                    * **Chapter 1: Subsurface Investigation & Soil Exploration**
-                      - Mandatory borehole drilling, Standard Penetration Testing (SPT - ASTM D1586), Cone Penetration Testing (CPT), and undisturbed sampling.
-                    * **Chapter 2: Shallow Foundations & Bearing Capacity**
-                      - Ultimate bearing capacity calculated using Terzaghi, Meyerhof, or Hansen bearing capacity equations factoring cohesion (c), surcharge (q), and unit weight (gamma).
-                      - Allowable bearing capacity determined by applying a minimum Factor of Safety (F.S. = 3.0 for static loads, 2.5 for seismic/wind combinations). Total settlement limited to 25-50mm.
-                    * **Chapter 3: Deep Foundations & Pile Load Testing**
-                      - Static load testing mandated up to 2.0 times working load in accordance with ASTM D1143 / ECP 202.
-                    ''')
+                    ui.markdown('### Egyptian Code for Soil Mechanics & Foundations (ECP 202)')
                 with ui.tab_panel(h3):
-                    ui.markdown('''
-                    ### Egyptian Code for Roads, Highways and Airfields (ECP 104) - Comprehensive Reference
-                    * **Chapter 1: Highway Geometrics & Classification**
-                      - Design speed, horizontal and vertical alignment curves, superelevation, and sight distance requirements.
-                    * **Chapter 2: Subgrade & Embankment Engineering**
-                      - CBR (California Bearing Ratio) testing requirements (ASTM D1883). Minimum subgrade CBR of 10% for heavy traffic loads.
-                    * **Chapter 3: Bituminous Pavements & Asphalt Mix Design**
-                      - Marshall Mix Design method (ASTM D6915 / AASHTO T245): Optimum bitumen content, stability, flow, and air voids (3-5%).
-                    ''')
+                    ui.markdown('### Egyptian Code for Roads, Highways and Airfields (ECP 104)')
                 with ui.tab_panel(h4):
-                    ui.markdown('''
-                    ### International Engineering Standards (ASTM, AASHTO, BS, EN, ISO)
-                    * **ASTM Standards:** ASTM C39 (Compressive Strength of Cylindrical Concrete Specimens), ASTM C143 (Slump Test), ASTM D1557 (Modified Proctor Compaction).
-                    * **AASHTO Specifications:** AASHTO LRFD Bridge Design Specifications, AASHTO M 145 (Classification of Soils and Soil-Aggregate Mixtures).
-                    * **BS EN / Eurocodes:** BS EN 1992 (Eurocode 2: Concrete Structures), BS EN 1997 (Eurocode 7: Geotechnical Design).
-                    * **ISO Quality Management:** ISO 9001 (Quality Management Systems), ISO 14001, ISO 45001.
-                    ''')
+                    ui.markdown('### International Standards (ASTM, AASHTO, BS EN, ISO)')
 
     # --- PROFESSIONAL FOOTER BAR ---
     ui.markdown('''
@@ -844,5 +777,4 @@ def main_page():
     </div>
     ''')
 
-import os
 ui.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)), title='Multi-Standard Engineering Auditor', favicon='🏗️', reload=False)
