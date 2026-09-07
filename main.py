@@ -37,11 +37,21 @@ load_dotenv()
 api_key = os.getenv("GEMINI_API_KEY")
 client = genai.Client(api_key=api_key) if api_key else None
 
-# --- CUSTOM TAILWIND & DARK THEME STYLING ---
+# --- CUSTOM TAILWIND & DARK THEME STYLING (Issue 7 Fixed: Scrollbar removed) ---
 app.native.window_args = {"resizable": True}
 
 ui.add_head_html('''
 <style>
+    /* Completely remove ugly scrollbars across all browsers */
+    ::-webkit-scrollbar {
+        display: none !important;
+        width: 0px !important;
+        background: transparent !important;
+    }
+    html {
+        scrollbar-width: none !important;
+        -ms-overflow-style: none !important;
+    }
     body {
         background-color: #031338 !important;
         color: #FFFFFF !important;
@@ -107,7 +117,7 @@ ui.add_head_html('''
 </style>
 ''', shared=True)
 
-# --- PDF & EXPORT GENERATION HELPERS ---
+# --- PDF & EXPORT GENERATION HELPERS (Issues 2 & 3 Fixed: Cleaned Markdown Artifacts) ---
 def generate_qr_code(data_str):
     qr = qrcode.QRCode(version=1, box_size=5, border=1)
     qr.add_data(data_str)
@@ -122,6 +132,8 @@ def clean_for_reportlab(text):
     if not text:
         return ""
     text = str(text)
+    # Strip raw markdown table syntax lines like |---| or |:---:| or l:-----
+    text = re.sub(r'\|?\s*[:-]+[:?-]*\s*\|?', '', text)
     text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
     text = text.replace('$', '').replace('\\ge', '>=').replace('\\le', '<=')
     text = re.sub(r'#+\s*(.*)', r'<font color="#1B2A4A"><b>\1</b></font><br/>', text)
@@ -129,11 +141,23 @@ def clean_for_reportlab(text):
     text = text.replace('\n', '<br/>')
     return text
 
+def clean_ai_text(text):
+    if not text:
+        return ""
+    # Remove raw markdown table formatting lines from UI text outputs
+    lines = text.split('\n')
+    cleaned_lines = []
+    for line in lines:
+        if re.search(r'^\s*\|?\s*[:\-]+\s*\|?', line):
+            continue
+        cleaned_lines.append(line)
+    return "\n".join(cleaned_lines)
+
 def build_pdf_header(story, doc_title, subtitle, logo_bytes, engineer, project, location, rep_date, ticket_id, unique_hash):
     styles = getSampleStyleSheet()
-    title_style = ParagraphStyle("DocTitle", parent=styles["Heading1"], fontSize=14, textColor=colors.HexColor("#1B2A4A"), spaceAfter=4, fontName="Helvetica-Bold")
-    sub_style = ParagraphStyle("DocSub", parent=styles["Normal"], fontSize=8.5, textColor=colors.HexColor("#FF8C00"), spaceAfter=6, fontName="Helvetica-Bold")
-    meta_style = ParagraphStyle("MetaStyle", parent=styles["Normal"], fontSize=7.5, textColor=colors.HexColor("#333333"), leading=10, fontName="Helvetica")
+    title_style = ParagraphStyle("DocTitle", parent=styles["Heading1"], fontSize=13, textColor=colors.HexColor("#1B2A4A"), spaceAfter=4, fontName="Helvetica-Bold")
+    sub_style = ParagraphStyle("DocSub", parent=styles["Normal"], fontSize=8, textColor=colors.HexColor("#FF8C00"), spaceAfter=6, fontName="Helvetica-Bold")
+    meta_style = ParagraphStyle("MetaStyle", parent=styles["Normal"], fontSize=7, textColor=colors.HexColor("#333333"), leading=9, fontName="Helvetica")
 
     meta_html = f"""
     <b>Project Name:</b> {project} &nbsp;|&nbsp; <b>Location:</b> {location}<br/>
@@ -169,13 +193,13 @@ def build_pdf_header(story, doc_title, subtitle, logo_bytes, engineer, project, 
 
 def build_pdf_footer_and_signatures(story, qr_img_buffer):
     styles = getSampleStyleSheet()
-    body_style = ParagraphStyle("BodyStyle", parent=styles["Normal"], fontSize=7.5, textColor=colors.HexColor("#222222"), leading=9, fontName="Helvetica")
-    sec_style = ParagraphStyle("SecTitle", parent=styles["Heading2"], fontSize=8.5, textColor=colors.HexColor("#1B2A4A"), spaceBefore=6, spaceAfter=3, fontName="Helvetica-Bold")
+    body_style = ParagraphStyle("BodyStyle", parent=styles["Normal"], fontSize=7, textColor=colors.HexColor("#222222"), leading=8, fontName="Helvetica")
+    sec_style = ParagraphStyle("SecTitle", parent=styles["Heading2"], fontSize=8, textColor=colors.HexColor("#1B2A4A"), spaceBefore=6, spaceAfter=3, fontName="Helvetica-Bold")
 
     story.append(Spacer(1, 4))
     story.append(Paragraph("<b>Corporate Engineering Approvals & Compliance Sign-Off</b>", sec_style))
     
-    qr_lab_img = ReportLabImage(qr_img_buffer, width=40, height=40)
+    qr_lab_img = ReportLabImage(qr_img_buffer, width=35, height=35)
     sign_cell_1 = Paragraph("<b>Prepared By:</b><br/>QA/QC Engineer:<br/><br/>_________________", body_style)
     sign_cell_2 = Paragraph("<b>Technical Director:</b><br/>Chief Engineer:<br/><br/>_________________", body_style)
     sign_cell_3 = Paragraph("<b>Client / Consultant:</b><br/>Official Stamp:<br/><br/>_________________", body_style)
@@ -186,8 +210,8 @@ def build_pdf_footer_and_signatures(story, qr_img_buffer):
         ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F8FAFC")),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
-        ("TOPPADDING", (0, 0), (-1, -1), 4),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
         ("ALIGN", (3, 0), (3, 0), "CENTER"),
     ]))
     story.append(t_sign)
@@ -195,14 +219,16 @@ def build_pdf_footer_and_signatures(story, qr_img_buffer):
 # --- MAIN APP LAYOUT ---
 @ui.page('/')
 def main_page():
-    with ui.row().classes('w-full items-center justify-between bg-[#1B2A4A] px-6 py-3 rounded-lg border border-[#FF8C00] mb-4'):
-        ui.label('Multi-Disciplinary Civil, Geotechnical & Pavement Engineering Auditor').classes('text-xl font-bold text-white')
-        ui.label('Eng. Mohamed Abd Al Aty').classes('text-sm text-[#00BFFF] font-semibold')
+    # Issue 4 Fixed: Enlarged main title size to text-3xl font-bold
+    with ui.row().classes('w-full items-center justify-between bg-[#1B2A4A] px-6 py-4 rounded-lg border border-[#FF8C00] mb-4 shadow-lg'):
+        ui.label('Multi-Disciplinary Civil, Geotechnical & Pavement Engineering Auditor').classes('text-3xl font-bold text-white')
+        ui.label('Eng. Mohamed Abd Al Aty').classes('text-base text-[#00BFFF] font-semibold')
 
+    # Issue 1 Fixed: Ticker text explicitly white (`color: #FFFFFF;`) on dark navy/orange banner
     ticker_html = """
-    <div style="overflow: hidden; white-space: nowrap; background-color: #FF8C00; color: #031338; padding: 6px 0; font-weight: bold; font-size: 13px; margin-bottom: 15px; border-radius: 4px;">
-      <div style="display: inline-block; padding-left: 100%; animation: marquee 25s linear infinite;">
-        Core Compliance Active: ECP 203, ECP 202, ECP 104, ASTM, AASHTO, BS, EN, ISO &nbsp;&nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;&nbsp; Advanced Geotechnical & Concrete Calculation Sheet &nbsp;&nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;&nbsp; Active Site Inspection Portal
+    <div style="overflow: hidden; white-space: nowrap; background-color: #1B2A4A; color: #FFFFFF; padding: 8px 0; font-weight: bold; font-size: 13px; margin-bottom: 15px; border-radius: 4px; border: 1px solid #FF8C00;">
+      <div style="display: inline-block; padding-left: 100%; animation: marquee 28s linear infinite;">
+        <span style="color: #FF8C00;">[CORE ACTIVE]</span> ECP 203, ECP 202, ECP 104, ASTM, AASHTO, BS, EN, ISO &nbsp;&nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;&nbsp; Advanced Geotechnical & Concrete Calculation Sheet &nbsp;&nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;&nbsp; Active Site Inspection Portal
       </div>
     </div>
     <style>
@@ -269,11 +295,10 @@ def main_page():
 
     with ui.tab_panels(tabs, value=t_dash).classes('w-full bg-transparent'):
         
-        # --- TAB 1: CONCRETE CALCULATION SHEET & VERIFIER ---
+        # --- TAB 1: CONCRETE CALCULATION SHEET & VERIFIER (Issues 5 & 6 Fixed) ---
         with ui.tab_panel(t_dash):
-            ui.label('Professional Concrete Cube Calculation Sheet & Statistical Verifier (ECP 203)').classes('text-2xl font-bold text-white mb-4')
+            ui.label('Comprehensive Concrete Cube Calculation Sheet & Statistical Verifier (ECP 203)').classes('text-2xl font-bold text-white mb-4')
             
-            # Compact Professional Inputs (Issue 5 Fixed)
             with ui.row().classes('w-full gap-4 mb-4'):
                 with ui.column().classes('custom-card flex-1'):
                     ui.label('7-Day Cubes (Comma Separated N/mm2)').classes('font-bold text-white text-sm')
@@ -285,22 +310,7 @@ def main_page():
                     ui.label('28-Day Cubes (Comma Separated N/mm2)').classes('font-bold text-white text-sm')
                     c28_input = ui.input(value='32.5, 34.0, 31.0, 35.5, 29.0, 33.0').classes('w-full')
 
-            # Stage Selector Popup/Menu (Issue 2 Fixed)
-            stage_selector = ui.select(
-                label='Select Stage to Display Table & Details',
-                options=['All Stages', '7-Day Stage', '14-Day Stage', '28-Day Stage'],
-                value='All Stages'
-            ).classes('w-full md:w-1/3 mb-4')
-
-            result_output_area = ui.column().classes('w-full')
-            export_buttons_area = ui.row().classes('w-full gap-4 mt-4')
-
-            def parse_cubes(text):
-                try:
-                    return [float(x.strip()) for x in text.split(',') if x.strip()]
-                except ValueError:
-                    return []
-
+            # Issue 5 Fixed: Stage selector with immediate reactive callback
             def run_verification():
                 result_output_area.clear()
                 export_buttons_area.clear()
@@ -327,26 +337,25 @@ def main_page():
 
                 with result_output_area:
                     with ui.column().classes('custom-card w-full'):
-                        ui.label('Official Engineering Calculation Sheet & Statistical Summary (ECP 203 / ASTM C39)').classes('text-xl font-bold text-white mb-3')
+                        ui.label('Official Engineering Calculation Sheet & Statistical Proof (ECP 203 / ASTM C39)').classes('text-xl font-bold text-white mb-3')
                         
                         if s28:
                             color = 'green' if s28['pass'] else 'red'
                             verdict_text = 'PASS — FULLY COMPLIANT' if s28['pass'] else 'FAIL — NON-COMPLIANT WITH ECP 203 LIMITS'
                             ui.markdown(f"### Overall 28-Day Compliance Verdict: :{color}[**{verdict_text}**]")
                             
-                            # Cleaned Mathematical Formulation (Issue 1 Fixed - no weird symbols)
+                            # Issue 6 Fixed: Comprehensive calculation proof and formulas displayed directly in UI
                             ui.markdown(f"""
-                            #### Mathematical Formulation & Statistical Breakdown (28-Day)
-                            * **Specified Characteristic Strength (f_cu):** `{fcu_val:.2f} N/mm²`
-                            * **Calculated Characteristic Strength (f_cu,act):** max(Mean - k * sigma, 0.85 * Mean) = **`{s28['fcu']:.2f} N/mm²`**
-                            * **Statistical Arithmetic Mean (Mean):** `{s28['mean']:.2f} N/mm²` (Sample count: `{s28['count']}`)
-                            * **Standard Deviation (sigma):** `{s28['std']:.2f} N/mm²` (Bessel's correction N-1)
-                            * **Safety Multiplier (k):** `1.91` for sample size `n = {s28['count']}` (ECP 203 Table 8-2).
-                            * **Minimum Individual Cube Value:** `{s28['min']:.2f} N/mm²` (Required threshold >= `0.85 * f_cu = {0.85 * fcu_val:.2f} N/mm²`).
-                            * **Maximum Individual Cube Value:** `{s28['max']:.2f} N/mm²`.
+                            #### Step-by-Step Mathematical Formulation & Statistical Proof (28-Day)
+                            * **Specified Characteristic Strength ($f_{{cu}}$):** `{fcu_val:.2f} N/mm²`
+                            * **Calculated Characteristic Strength ($f_{{cu,act}}$):** $\\max(\\text{{Mean}} - k \\cdot \\sigma, 0.85 \\cdot \\text{{Mean}}) =$ **`{s28['fcu']:.2f} N/mm²`**
+                            * **Arithmetic Mean ($\\bar{{x}}$):** $\\frac{{\\sum x_i}}{{n}} = \\frac{{{sum(s28['values'])}}}{{{s28['count']}}} =$ **`{s28['mean']:.2f} N/mm²`**
+                            * **Standard Deviation ($\\sigma$):** $\\sqrt{{\\frac{{\\sum (x_i - \\bar{{x}})^2}}{{n - 1}}}} =$ **`{s28['std']:.2f} N/mm²`** (Bessel's correction $n-1 = {s28['count']}-1$)
+                            * **Safety Multiplier ($k$):** `1.91` for sample size $n = {s28['count']}$ per ECP 203 Table 8-2.
+                            * **Minimum Individual Cube Check:** `{s28['min']:.2f} N/mm²` (Required threshold $\\ge 0.85 \\times f_{{cu}} =$ `{0.85 * fcu_val:.2f} N/mm²`).
+                            * **Maximum Individual Cube Recorded:** `{s28['max']:.2f} N/mm²`.
                             """)
 
-                        # Multi-Stage Tables based on popup selection (Issue 2 Fixed)
                         stages_to_show = []
                         if selected_stage == 'All Stages':
                             stages_to_show = [('7-Day Stage', s7, 0.70), ('14-Day Stage', s14, 0.85), ('28-Day Stage', s28, 1.00)]
@@ -359,16 +368,18 @@ def main_page():
 
                         for title, stage_data, ratio in stages_to_show:
                             if stage_data:
-                                ui.label(f'Individual Test Specimen Breakdown ({title}) — Target Ratio: {int(ratio*100)}%').classes('font-bold text-white text-sm mt-4 mb-1')
+                                ui.label(f'Detailed Specimen Breakdown & Calculation Table ({title}) — Target Ratio: {int(ratio*100)}%').classes('font-bold text-white text-sm mt-4 mb-1')
                                 table_rows = []
                                 target_req = ratio * fcu_val
                                 for idx, val in enumerate(stage_data['values'], 1):
                                     dev = val - stage_data['mean']
+                                    sq_dev = dev ** 2
                                     status = "Acceptable" if val >= (0.85 * target_req) else "Below Limit"
                                     table_rows.append({
                                         "Specimen No": f"Cube #{idx}",
                                         "Crushing Load (N/mm2)": f"{val:.2f} N/mm²",
-                                        "Deviation from Mean": f"{dev:+.2f} N/mm²",
+                                        "Deviation (x - Mean)": f"{dev:+.2f} N/mm²",
+                                        "Squared Deviation": f"{sq_dev:.2f}",
                                         "Evaluation": status
                                     })
                                 
@@ -376,7 +387,8 @@ def main_page():
                                     columns=[
                                         {"name": "Specimen No", "label": "Specimen No", "field": "Specimen No", "align": "left"},
                                         {"name": "Crushing Load (N/mm2)", "label": "Crushing Load (N/mm²)", "field": "Crushing Load (N/mm2)"},
-                                        {"name": "Deviation from Mean", "label": "Deviation from Mean", "field": "Deviation from Mean"},
+                                        {"name": "Deviation (x - Mean)", "label": "Deviation (x - Mean)", "field": "Deviation (x - Mean)"},
+                                        {"name": "Squared Deviation", "label": "Squared Dev (x - Mean)²", "field": "Squared Deviation"},
                                         {"name": "Evaluation", "label": "Evaluation", "field": "Evaluation"},
                                     ],
                                     rows=table_rows,
@@ -388,14 +400,14 @@ def main_page():
                             wat_v = float(water_input.value)
                             wc = wat_v / cem_v if cem_v > 0 else 0
                             ui.markdown(f"""
-                            **Durability & Mix Proportion Verification:**
-                            * **Water-Cement Ratio (W/C):** `{wc:.2f}` (Calculated as `{wat_v} kg/m³` water / `{cem_v} kg/m³` cement). Maximum permissible W/C under ECP 203 is `0.45`.
+                            **Durability & Mix Proportion Calculation Verification:**
+                            * **Water-Cement Ratio (W/C):** `{wc:.2f}` (Calculated as $\\frac{{\\text{{Water}}}}{{\\text{{Cement}}}} = \\frac{{{wat_v}}}{{{cem_v}}}$). Maximum allowable W/C under ECP 203 is `0.45`.
                             * **Cement Content Compliance:** `{cem_v} kg/m³` (Minimum required for standard structural exposure is `350 kg/m³`).
                             """)
                         except ValueError:
                             pass
 
-                        # Evolution Line Chart
+                        # Charts
                         stages = ['7-Day', '14-Day', '28-Day', 'Target Grade']
                         means = [
                             s7['mean'] if s7 else 0,
@@ -422,30 +434,7 @@ def main_page():
                         )
                         ui.plotly(fig).classes('w-full mt-4')
 
-                        # Scatter Chart for all samples across stages (Issue 3 & 4 Fixed)
-                        fig_scatter = go.Figure()
-                        for stage_name, cubes, color in [('7 Days', c7, '#8B5CF6'), ('14 Days', c14, '#F97316'), ('28 Days', c28, '#10B981')]:
-                            if cubes:
-                                fig_scatter.add_trace(go.Scatter(
-                                    x=[f"{stage_name} - #{i}" for i in range(1, len(cubes)+1)],
-                                    y=cubes,
-                                    mode='markers+text',
-                                    name=stage_name,
-                                    text=[f"{v:.1f}" for v in cubes],
-                                    textposition="top center",
-                                    marker=dict(size=12, color=color)
-                                ))
-                        fig_scatter.update_layout(
-                            title='Individual Cube Strengths Scatter Plot (All Stages)',
-                            template='plotly_dark',
-                            paper_bgcolor='#1B2A4A',
-                            plot_bgcolor='#1B2A4A',
-                            margin=dict(t=40, b=40, l=40, r=20),
-                            height=330
-                        )
-                        ui.plotly(fig_scatter).classes('w-full mt-4')
-
-                # Populate export buttons (Issue 6 Fixed - comprehensive PDF export)
+                # Issue 6 Fixed: Comprehensive PDF export containing full tables and calculations
                 with export_buttons_area:
                     unique_uid = f"ECP-{uuid.uuid4().hex[:8].upper()}"
 
@@ -460,7 +449,7 @@ def main_page():
                             build_pdf_header(
                                 story, 
                                 "CONCRETE CUBE STATISTICAL CALCULATION SHEET", 
-                                "Official ECP 203 & ASTM C39 Quality Assurance Report", 
+                                "Official ECP 203 & ASTM C39 Quality Assurance & Calculation Proof Report", 
                                 logo_bytes_holder['bytes'], 
                                 engineer_input.value, 
                                 project_name_input.value, 
@@ -477,13 +466,36 @@ def main_page():
                             <b>Specified Grade (f_cu):</b> {fcu_input.value} N/mm²<br/>
                             <b>Mixer Truck No:</b> {truck_input.value} &nbsp;|&nbsp; <b>Batch Ticket ID:</b> {ticket_input.value}<br/>
                             <b>Cement Content:</b> {cement_input.value} kg/m³ &nbsp;|&nbsp; <b>Free Water Content:</b> {water_input.value} kg/m³<br/>
-                            <b>7-Day Mean:</b> {s7['mean']:.2f} N/mm² ({len(c7)} cubes)<br/>
-                            <b>14-Day Mean:</b> {s14['mean']:.2f} N/mm² ({len(c14)} cubes)<br/>
-                            <b>28-Day Characteristic Strength:</b> {s28['fcu']:.2f} N/mm² &nbsp;|&nbsp; <b>Verdict:</b> {'PASS' if s28['pass'] else 'FAIL'}<br/>
-                            <b>Statistical Mean (28-Day):</b> {s28['mean']:.2f} N/mm² &nbsp;|&nbsp; <b>Standard Deviation (sigma):</b> {s28['std']:.2f}
+                            <b>7-Day Mean Strength:</b> {s7['mean']:.2f} N/mm² ({len(c7)} cubes tested)<br/>
+                            <b>14-Day Mean Strength:</b> {s14['mean']:.2f} N/mm² ({len(c14)} cubes tested)<br/>
+                            <b>28-Day Characteristic Strength (f_cu,act):</b> {s28['fcu']:.2f} N/mm² &nbsp;|&nbsp; <b>Compliance Verdict:</b> {'PASS' if s28['pass'] else 'FAIL'}<br/>
+                            <b>Statistical Mean (28-Day):</b> {s28['mean']:.2f} N/mm² &nbsp;|&nbsp; <b>Standard Deviation (sigma):</b> {s28['std']:.2f} N/mm²
                             """
                             story.append(Paragraph(summary_html, body_style))
                             story.append(Spacer(1, 8))
+
+                            # Add detailed 28-day sample table to PDF
+                            if s28:
+                                pdf_table_data = [["Specimen", "Crushing Load (N/mm²)", "Deviation from Mean", "Status"]]
+                                for idx, val in enumerate(s28['values'], 1):
+                                    dev = val - s28['mean']
+                                    st = "Acceptable" if val >= (0.85 * fcu_val) else "Below Limit"
+                                    pdf_table_data.append([f"Cube #{idx}", f"{val:.2f}", f"{dev:+.2f}", st])
+                                
+                                t_pdf = Table(pdf_table_data, colWidths=[100, 140, 140, 160])
+                                t_pdf.setStyle(TableStyle([
+                                    ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1B2A4A")),
+                                    ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+                                    ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+                                    ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+                                    ('FONTSIZE', (0,0), (-1,-1), 7.5),
+                                    ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#CBD5E1")),
+                                    ('TOPPADDING', (0,0), (-1,-1), 3),
+                                    ('BOTTOMPADDING', (0,0), (-1,-1), 3),
+                                ]))
+                                story.append(t_pdf)
+
+                            story.append(Spacer(1, 10))
                             build_pdf_footer_and_signatures(story, qr_buf)
 
                             doc.build(story)
@@ -514,6 +526,23 @@ def main_page():
 
                     ui.button('Download Official Calculation PDF', on_click=download_pdf_report).classes('primary-btn flex-1')
                     ui.button('Export Calculation CSV', on_click=download_csv_export).classes('primary-btn flex-1')
+
+            # Issue 5 Fixed: Stage selector with on_change reactive listener
+            stage_selector = ui.select(
+                label='Select Stage to Display Table & Details',
+                options=['All Stages', '7-Day Stage', '14-Day Stage', '28-Day Stage'],
+                value='All Stages',
+                on_change=run_verification
+            ).classes('w-full md:w-1/3 mb-4')
+
+            result_output_area = ui.column().classes('w-full')
+            export_buttons_area = ui.row().classes('w-full gap-4 mt-4')
+
+            def parse_cubes(text):
+                try:
+                    return [float(x.strip()) for x in text.split(',') if x.strip()]
+                except ValueError:
+                    return []
 
             ui.button('Run Statistical Calculation & Verification', on_click=run_verification).classes('primary-btn q-my-md')
 
@@ -574,7 +603,7 @@ def main_page():
                     You are a Principal Civil, Geotechnical and Highway Engineering Consultant and Lead Auditor specializing in core Egyptian Codes (ECP 203, ECP 202, ECP 104) alongside international frameworks (ASTM, AASHTO, BS EN, ISO).
                     Audit Focus: {audit_focus}
                     Active Supplementary Standard: {supp_val}
-                    Perform a comprehensive, rigorous technical audit of the provided document or image. Structure your report using clear markdown sections and multiple data tables.
+                    Perform a comprehensive, rigorous technical audit of the provided document or image. Structure your report using clear markdown sections and clean data tables without raw markdown formatting errors.
                     """
                     
                     contents = [prompt]
@@ -592,7 +621,7 @@ def main_page():
                         contents=contents,
                         config=config
                     )
-                    audit_result_text = response.text
+                    audit_result_text = clean_ai_text(response.text)
                     
                     audit_output_container.clear()
                     with audit_output_container:
@@ -600,7 +629,6 @@ def main_page():
                             ui.label('Master Engineering Audit Findings & Code Compliance Report').classes('text-xl font-bold text-white mb-2')
                             ui.markdown(audit_result_text)
 
-                    # Persistent Export Buttons (Issue 7 Fixed)
                     with audit_export_container:
                         unique_uid = f"AUDIT-{uuid.uuid4().hex[:8].upper()}"
 
@@ -695,7 +723,7 @@ def main_page():
                     with defect_output:
                         with ui.column().classes('custom-card w-full'):
                             ui.label('Forensic Diagnosis & Repair Protocol').classes('text-xl font-bold text-white mb-2')
-                            ui.markdown(response.text)
+                            ui.markdown(clean_ai_text(response.text))
                 except Exception as ex:
                     defect_output.clear()
                     with defect_output:
@@ -740,7 +768,7 @@ def main_page():
                         contents=q,
                         config=types.GenerateContentConfig(temperature=0.2)
                     )
-                    chat_messages.append({"role": "assistant", "content": res.text})
+                    chat_messages.append({"role": "assistant", "content": clean_ai_text(res.text)})
                 except Exception as e:
                     chat_messages.append({"role": "assistant", "content": f"Error: {str(e)}"})
                 render_chat()
