@@ -406,7 +406,6 @@ ui.add_head_html('''
         .q-uploader {
             font-size: 12px !important;
         }
-        /* Ensure tables scroll horizontally on mobile */
         .markdown-body {
             overflow-x: auto;
         }
@@ -423,7 +422,6 @@ ui.add_head_html('''
         }
     }
 
-    /* Main title larger */
     .main-title {
         font-size: 3.8rem !important;
         font-weight: 900 !important;
@@ -938,7 +936,7 @@ def main_page():
 
     # ---------------- MAIN COLUMN ----------------
     with ui.column().classes('w-full min-h-screen p-4 bg-[#031338]'):
-        # Title block - updated styles
+        # Title block
         with ui.column().classes('w-full bg-[#0d1a35] px-6 py-4 rounded-xl border border-[#FF8C00] shadow-lg mb-4'):
             ui.label('SMART EGY-CIVIL AI AUDITOR').classes('main-title text-white')
             ui.label('Intelligent General Civil, Geotechnical & Structural Compliance Engine').classes('sub-title text-lg font-medium mt-1')
@@ -957,7 +955,7 @@ def main_page():
         </div>
         ''')
 
-        # Tabs - removed "Technical Codes Handbook"
+        # Tabs
         with ui.tabs().classes('w-full text-white bg-[#0d1a35] rounded-lg') as tabs:
             t_dash = ui.tab('Concrete Cube Verifier').classes('text-white font-bold')
             t_audit = ui.tab('AI Multi-Standard Auditor').classes('text-white font-bold')
@@ -1424,7 +1422,7 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                 ui.button('Diagnose Defect & Get Repair Protocol', on_click=run_defect_diagnosis).classes('primary-btn')
 
             # =========================================================================
-            # TAB 4: AI CHATBOT (updated description)
+            # TAB 4: AI CHATBOT
             # =========================================================================
             with ui.tab_panel(t_chat):
                 ui.label('Core-Code Intelligent Assistant Chatbot').classes('text-2xl font-bold text-white mb-2')
@@ -1502,7 +1500,7 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                     ui.button('Download Chat PDF Transcript', on_click=download_chat_pdf).classes('primary-btn flex-1')
 
             # =========================================================================
-            # TAB 5: PROFESSIONAL BOQ TAKEOFF (with crash fixes)
+            # TAB 5: PROFESSIONAL BOQ TAKEOFF (fixed - no tabulate)
             # =========================================================================
             with ui.tab_panel(t_boq):
                 ui.label('Professional AI BOQ Takeoff & Cost Estimation').classes('text-2xl font-bold text-white mb-2')
@@ -1644,7 +1642,6 @@ Example:
                         if boq_file_data['type'] == 'application/pdf':
                             try:
                                 reader = pypdf.PdfReader(io.BytesIO(boq_file_data['bytes']))
-                                # Read first 5 pages to avoid overload
                                 pages_text = []
                                 for i, page in enumerate(reader.pages[:5]):
                                     try:
@@ -1660,7 +1657,6 @@ Example:
                                     contents.append("No readable text found in PDF. The AI will rely on image analysis if provided as image.")
                             except Exception as pdf_err:
                                 ui.notify(f'PDF reading error: {str(pdf_err)}. Trying image mode.', type='warning')
-                                # Fallback: treat as image
                                 img_part = types.Part.from_bytes(data=boq_file_data['bytes'], mime_type='application/pdf')
                                 contents.append(img_part)
                         else:
@@ -1681,7 +1677,22 @@ Example:
                         df_boq = compute_boq(extracted_items, wastage)
                         df_boq_global = df_boq
 
-                        boq_md = df_boq.to_markdown(index=False)
+                        # Manual markdown table generation (no tabulate)
+                        def df_to_markdown(df):
+                            # convert DataFrame to markdown table
+                            lines = []
+                            # Header
+                            headers = list(df.columns)
+                            lines.append("| " + " | ".join(headers) + " |")
+                            # Separator
+                            lines.append("|" + "|".join(["---"] * len(headers)) + "|")
+                            # Rows
+                            for _, row in df.iterrows():
+                                row_str = "| " + " | ".join(str(val) for val in row) + " |"
+                                lines.append(row_str)
+                            return "\n".join(lines)
+
+                        boq_md = df_to_markdown(df_boq)
                         total_cost = df_boq['Total Cost (EGP)'].sum()
                         summary = f"\n\n**TOTAL ESTIMATED COST: {total_cost:,.2f} EGP**\n\n*Note: Unit rates are approximate market prices. Wastage of {wastage}% applied.*"
                         boq_result_holder['text'] = boq_md + summary
@@ -1746,7 +1757,7 @@ Example:
 
                 ui.button('Run Professional AI Takeoff', on_click=run_boq_takeoff).classes('primary-btn mt-4')
 
-        # ---------------- FOOTER (updated disclaimer) ----------------
+        # ---------------- FOOTER ----------------
         ui.html('''
         <div class="app-footer">
             <b>Multi-Standard Engineering Quality Assurance Portal</b> &nbsp;|&nbsp; Automated compliance verification across ECP 203, ECP 202, ECP 104, ASTM, AASHTO, BS, EN, and ISO standards.<br>
