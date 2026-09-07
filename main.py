@@ -4,6 +4,7 @@ import os
 import uuid
 import re
 import json
+import asyncio
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -65,10 +66,9 @@ ui.add_head_html('''
         overflow-x: hidden;
     }
 
-    /* Sidebar styling - glassmorphism */
+    /* Sidebar styling - solid dark navy */
     .sidebar-container {
-        background: rgba(10, 26, 58, 0.85) !important;
-        backdrop-filter: blur(12px) !important;
+        background: #0b1a3a !important;
         border-right: 2px solid rgba(255, 140, 0, 0.4) !important;
         box-shadow: 8px 0 30px rgba(0,0,0,0.6) !important;
     }
@@ -329,6 +329,29 @@ ui.add_head_html('''
         background: #FF8C00 !important;
         height: 3px !important;
         border-radius: 2px !important;
+    }
+
+    /* Chat messages - no containers */
+    .chat-message {
+        padding: 8px 0;
+        border-bottom: 1px solid rgba(255,255,255,0.05);
+    }
+    .chat-message:last-child {
+        border-bottom: none;
+    }
+    .chat-message .role-label {
+        font-size: 12px;
+        font-weight: 700;
+        margin-bottom: 2px;
+    }
+    .chat-message .role-label.assistant {
+        color: #FF8C00;
+    }
+    .chat-message .role-label.user {
+        color: #4FC3F7;
+    }
+    .chat-message .content {
+        padding-left: 8px;
     }
 
     @media (max-width: 768px) {
@@ -692,19 +715,26 @@ NO_LATEX_RULE = (
 )
 
 
-async def call_gemini(contents, system_instruction=None, temperature=0.1):
-    """Every Gemini call in the app funnels through here."""
+async def call_gemini(contents, system_instruction=None, temperature=0.1, timeout=60):
+    """Every Gemini call in the app funnels through here with a timeout."""
     cfg_kwargs = {"temperature": temperature}
     if system_instruction:
         cfg_kwargs["system_instruction"] = system_instruction
     config = types.GenerateContentConfig(**cfg_kwargs)
-    response = await run.io_bound(
-        client.models.generate_content,
-        model=GEMINI_MODEL,
-        contents=contents,
-        config=config,
-    )
-    return sanitize_ai_markdown(response.text)
+    # Use asyncio.wait_for to enforce timeout
+    try:
+        response = await asyncio.wait_for(
+            run.io_bound(
+                client.models.generate_content,
+                model=GEMINI_MODEL,
+                contents=contents,
+                config=config,
+            ),
+            timeout=timeout
+        )
+        return sanitize_ai_markdown(response.text)
+    except asyncio.TimeoutError:
+        raise Exception("AI request timed out. Please try with a smaller file or simplify your query.")
 
 
 # =====================================================================================
@@ -727,9 +757,9 @@ UNIT_RATES = {
     "Windows (Aluminum)": 2000,  # per unit
     "Partitions (Gypsum)": 150,  # per m2
     # Structural
-    "Concrete (Grade C30/37)": 2500,  # per m3
-    "Concrete (Grade C25/30)": 2200,
-    "Concrete (Grade C40/50)": 3000,
+    "Concrete (C30/37)": 2500,  # per m3
+    "Concrete (C25/30)": 2200,
+    "Concrete (C40/50)": 3000,
     "Rebar (Grade 400)": 15000,  # per ton
     "Rebar (Grade 600)": 18000,
     "Formwork": 300,  # per m2
@@ -824,7 +854,7 @@ def parse_ai_extraction(text):
 def main_page():
     ui.query('body').style('width: 100vw; height: 100vh; overflow-x: hidden;')
 
-    # ---------------- SIDEBAR ---------------- (Professional toggle button)
+    # ---------------- SIDEBAR ---------------- (Solid dark navy)
     sidebar = ui.left_drawer().classes('sidebar-container').style('width: 380px;')
     with sidebar:
         with ui.row().classes('w-full items-center justify-between mb-4 p-2'):
@@ -886,7 +916,7 @@ def main_page():
 
     # ---------------- MAIN COLUMN ----------------
     with ui.column().classes('w-full min-h-screen p-4 bg-[#031338]'):
-        # New title block
+        # Title block
         with ui.column().classes('w-full bg-[#0d1a35] px-6 py-4 rounded-xl border border-[#FF8C00] shadow-lg mb-4'):
             ui.label('SMART EGY-CIVIL AI AUDITOR').classes('text-3xl font-extrabold text-white tracking-wide')
             ui.label('Intelligent General Civil, Geotechnical & Structural Compliance Engine').classes('text-lg text-[#4FC3F7] font-medium mt-1')
@@ -1200,12 +1230,15 @@ report with clear ## section headings and real Markdown tables for any comparati
                         if uploaded_file_data['type'] == 'application/pdf':
                             reader = pypdf.PdfReader(io.BytesIO(uploaded_file_data['bytes']))
                             text = "".join([p.extract_text() or "" for p in reader.pages])
+                            # Truncate to avoid overwhelming the model
+                            if len(text) > 10000:
+                                text = text[:10000] + "\n... (truncated)"
                             contents.append(f"Extracted PDF Text:\n{text}")
                         else:
                             img_part = types.Part.from_bytes(data=uploaded_file_data['bytes'], mime_type=uploaded_file_data['type'])
                             contents.append(img_part)
 
-                        audit_result_text = await call_gemini(contents)
+                        audit_result_text = await call_gemini(contents, timeout=120)
                         audit_result_text_holder['text'] = audit_result_text
 
                         audit_output_container.clear()
@@ -1319,12 +1352,14 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                         if defect_file_data['type'] == 'application/pdf':
                             reader = pypdf.PdfReader(io.BytesIO(defect_file_data['bytes']))
                             text = "".join([p.extract_text() or "" for p in reader.pages])
+                            if len(text) > 10000:
+                                text = text[:10000] + "\n... (truncated)"
                             contents.append(f"Extracted PDF Text (if any):\n{text}")
                         else:
                             img_part = types.Part.from_bytes(data=defect_file_data['bytes'], mime_type=defect_file_data['type'])
                             contents.append(img_part)
 
-                        res_text = await call_gemini(contents)
+                        res_text = await call_gemini(contents, timeout=120)
                         defect_result_holder['text'] = res_text
 
                         defect_output.clear()
@@ -1368,12 +1403,13 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                 ui.button('Diagnose Defect & Get Repair Protocol', on_click=run_defect_diagnosis).classes('primary-btn')
 
             # =========================================================================
-            # TAB 4: AI CHATBOT
+            # TAB 4: AI CHATBOT (No containers, wide space)
             # =========================================================================
             with ui.tab_panel(t_chat):
                 ui.label('Core-Code Intelligent Assistant Chatbot').classes('text-2xl font-bold text-white mb-2')
                 ui.markdown('Ask any engineering, mix design, geotechnical, or pavement question.').classes('markdown-body mb-2')
 
+                # Chat container: no backgrounds, just clean messages
                 chat_container = ui.column().classes('output-card w-full h-[500px] overflow-y-auto mb-4')
                 chat_messages = [{"role": "assistant", "content": "Hello! I am your Multi-Standard Engineering Assistant. How can I assist you today?"}]
 
@@ -1382,11 +1418,11 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                     with chat_container:
                         for msg in chat_messages:
                             is_ai = msg['role'] == 'assistant'
-                            bg = 'bg-[#0d1a35]' if is_ai else 'bg-[#1B2A4A]'
-                            with ui.column().classes(f'w-full p-3 rounded-lg mb-2 {bg}'):
-                                ui.label('Assistant' if is_ai else 'You').classes(
-                                    'text-xs font-bold mb-1 ' + ('text-[#FF8C00]' if is_ai else 'text-[#4FC3F7]'))
-                                ui.markdown(msg['content']).classes('markdown-body')
+                            with ui.column().classes('chat-message'):
+                                role_label = 'Assistant' if is_ai else 'You'
+                                label_class = 'assistant' if is_ai else 'user'
+                                ui.label(role_label).classes(f'role-label {label_class}')
+                                ui.markdown(msg['content']).classes('content markdown-body')
 
                 render_chat()
                 user_msg = ui.input(placeholder='Type your engineering question here...').classes('w-full mb-2')
@@ -1467,7 +1503,7 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                         ui.markdown('### International Standards (ASTM, AASHTO, BS EN, ISO)').classes('markdown-body')
 
             # =========================================================================
-            # TAB 6: PROFESSIONAL BOQ TAKEOFF (FIXED - AI only extracts, Python computes)
+            # TAB 6: PROFESSIONAL BOQ TAKEOFF (FIXED - AI extracts, Python computes)
             # =========================================================================
             with ui.tab_panel(t_boq):
                 ui.label('Professional AI BOQ Takeoff & Cost Estimation').classes('text-2xl font-bold text-white mb-2')
@@ -1527,8 +1563,10 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                 boq_output_container = ui.column().classes('w-full')
                 boq_export_area = ui.row().classes('w-full gap-4 mt-4')
                 boq_result_holder = {'text': ''}
+                df_boq_global = None  # to hold the DataFrame for Excel export
 
                 async def run_boq_takeoff():
+                    nonlocal df_boq_global
                     if not client:
                         ui.notify('GEMINI_API_KEY missing!', type='negative')
                         return
@@ -1540,7 +1578,7 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                     boq_export_area.clear()
                     with boq_output_container:
                         ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
-                        ui.label('AI is extracting quantities from drawings...').classes('self-center text-sm')
+                        ui.label('AI is extracting quantities from drawings... (this may take a moment)').classes('self-center text-sm')
 
                     try:
                         # Gather parameters
@@ -1607,18 +1645,30 @@ Example:
 | Rebar (Grade 400) | ton | 8.5 |
 ...
 """
-                        # Add file content
+                        # Add file content (truncate PDF text)
                         contents = [prompt]
                         if boq_file_data['type'] == 'application/pdf':
                             reader = pypdf.PdfReader(io.BytesIO(boq_file_data['bytes']))
-                            text = "".join([p.extract_text() or "" for p in reader.pages])
-                            contents.append(f"Extracted Text from Drawings:\n{text}")
+                            # Extract text from first 10 pages only to avoid overload
+                            pages_text = []
+                            for i, page in enumerate(reader.pages[:10]):
+                                try:
+                                    pages_text.append(page.extract_text() or "")
+                                except:
+                                    pass
+                            text = "".join(pages_text)
+                            if len(text) > 10000:
+                                text = text[:10000] + "\n... (truncated)"
+                            if text.strip():
+                                contents.append(f"Extracted Text from Drawings (first pages):\n{text}")
+                            else:
+                                contents.append("No readable text found in PDF. The AI will rely on image analysis if provided as image.")
                         else:
                             img_part = types.Part.from_bytes(data=boq_file_data['bytes'], mime_type=boq_file_data['type'])
                             contents.append(img_part)
 
-                        # Get AI extraction
-                        extraction_text = await call_gemini(contents, temperature=0.1)
+                        # Get AI extraction with timeout
+                        extraction_text = await call_gemini(contents, temperature=0.1, timeout=90)
                         # Parse extracted items
                         extracted_items = parse_ai_extraction(extraction_text)
 
@@ -1632,6 +1682,7 @@ Example:
                         # Now compute using Python
                         wastage = float(struct_params['wastage_percent'])
                         df_boq = compute_boq(extracted_items, wastage)
+                        df_boq_global = df_boq  # store for Excel export
 
                         # Generate markdown table from DataFrame
                         boq_md = df_boq.to_markdown(index=False)
@@ -1662,9 +1713,10 @@ Example:
 
                             def download_boq_excel():
                                 try:
-                                    # Convert markdown table to Excel
-                                    # We have the DataFrame
-                                    df = df_boq.copy()
+                                    if df_boq_global is None:
+                                        ui.notify('No data to export.', type='warning')
+                                        return
+                                    df = df_boq_global.copy()
                                     # Add summary row
                                     total_row = pd.DataFrame({
                                         'Item': ['TOTAL'],
