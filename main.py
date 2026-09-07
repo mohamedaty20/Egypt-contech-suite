@@ -349,7 +349,7 @@ def main_page():
                     """
 
                     response = client.models.generate_content(
-                        model='gemini-2.5-flash',
+                        model='gemini-3.5-flash-lite',
                         contents=prompt,
                         config=types.GenerateContentConfig(temperature=0.1)
                     )
@@ -721,7 +721,7 @@ def main_page():
                     )
 
                     res = client.models.generate_content(
-                        model='gemini-2.5-flash', # Or gemini-3.5-flash-lite / flash depending on your API setup
+                        model='gemini-3.5-flash-lite', # Or gemini-3.5-flash-lite / flash depending on your API setup
                         contents=q,
                         config=types.GenerateContentConfig(
                             temperature=0.1,  # Lower temperature for strict, factual, and consistent engineering outputs
