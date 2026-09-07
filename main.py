@@ -354,7 +354,7 @@ def main_page():
                     """
 
                     response = client.models.generate_content(
-                        model='gemini-2.5-flash',
+                        model='gemini-3.5-flash-lite',
                         contents=prompt,
                         config=types.GenerateContentConfig(temperature=0.1)
                     )
@@ -551,7 +551,7 @@ def main_page():
 
                     config = types.GenerateContentConfig(temperature=0.1)
                     response = client.models.generate_content(
-                        model='gemini-2.5-flash', 
+                        model='gemini-3.5-flash-lite', 
                         contents=contents,
                         config=config
                     )
@@ -656,7 +656,7 @@ def main_page():
                 try:
                     img = types.Part.from_bytes(data=defect_file_data['bytes'], mime_type=defect_file_data['type'])
                     prompt = "Perform forensic structural evaluation and list repair products (Sika/Fosroc) complying with ECP 203 and ASTM in clean formatted tables."
-                    response = client.models.generate_content(model='gemini-2.5-flash', contents=[prompt, img])
+                    response = client.models.generate_content(model='gemini-3.5-flash-lite', contents=[prompt, img])
                     res_text = clean_ai_text(response.text)
                     defect_result_holder['text'] = res_text
 
@@ -756,7 +756,7 @@ def main_page():
                     )
 
                     res = client.models.generate_content(
-                        model='gemini-2.5-flash',
+                        model='gemini-3.5-flash-lite',
                         contents=q,
                         config=types.GenerateContentConfig(
                             temperature=0.1,
