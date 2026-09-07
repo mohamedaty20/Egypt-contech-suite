@@ -206,10 +206,10 @@ def main_page():
         logo_status = ui.label('Logo: Not uploaded').classes('text-xs text-amber-400 mb-1')
         logo_bytes_holder = {'bytes': None}
         
-        def handle_logo_upload(e):
+        async def handle_logo_upload(e):
             try:
-                logo_bytes_holder['bytes'] = e.content.read()
-                logo_status.set_text(f'✅ Logo Loaded: {e.name}')
+                logo_bytes_holder['bytes'] = await e.file.read()
+                logo_status.set_text(f'✅ Logo Loaded: {e.file.name}')
                 logo_status.classes(replace='text-xs text-emerald-400 mb-1')
                 ui.notify('Company logo loaded successfully!', type='positive')
             except Exception as ex:
@@ -368,15 +368,15 @@ def main_page():
             audit_status_label = ui.label('Status: No file uploaded yet').classes('text-xs text-amber-400 font-semibold mb-2')
             uploaded_file_data = {'bytes': None, 'name': None, 'type': None}
 
-            def handle_audit_upload(e):
+            async def handle_audit_upload(e):
                 try:
-                    uploaded_file_data['bytes'] = e.content.read()
-                    uploaded_file_data['name'] = e.name
-                    uploaded_file_data['type'] = 'application/pdf' if e.name.lower().endswith('.pdf') else 'image/jpeg'
+                    uploaded_file_data['bytes'] = await e.file.read()
+                    uploaded_file_data['name'] = e.file.name
+                    uploaded_file_data['type'] = 'application/pdf' if e.file.name.lower().endswith('.pdf') else 'image/jpeg'
                     
-                    audit_status_label.set_text(f'✅ File Ready: {e.name}')
+                    audit_status_label.set_text(f'✅ File Ready: {e.file.name}')
                     audit_status_label.classes(replace='text-xs text-emerald-400 font-semibold mb-2')
-                    ui.notify(f'Successfully loaded: {e.name}', type='positive')
+                    ui.notify(f'Successfully loaded: {e.file.name}', type='positive')
                 except Exception as ex:
                     ui.notify(f'Error reading file: {str(ex)}', type='negative')
 
@@ -435,14 +435,14 @@ def main_page():
             defect_status_label = ui.label('Status: No file uploaded yet').classes('text-xs text-amber-400 font-semibold mb-2')
             defect_file_data = {'bytes': None, 'type': None}
 
-            def handle_defect_upload(e):
+            async def handle_defect_upload(e):
                 try:
-                    defect_file_data['bytes'] = e.content.read()
+                    defect_file_data['bytes'] = await e.file.read()
                     defect_file_data['type'] = 'image/jpeg'
                     
-                    defect_status_label.set_text(f'✅ File Ready: {e.name}')
+                    defect_status_label.set_text(f'✅ File Ready: {e.file.name}')
                     defect_status_label.classes(replace='text-xs text-emerald-400 font-semibold mb-2')
-                    ui.notify(f'Successfully loaded defect image: {e.name}', type='positive')
+                    ui.notify(f'Successfully loaded defect image: {e.file.name}', type='positive')
                 except Exception as ex:
                     ui.notify(f'Error reading file: {str(ex)}', type='negative')
 
