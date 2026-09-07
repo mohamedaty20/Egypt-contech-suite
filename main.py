@@ -336,8 +336,8 @@ def main_page():
                             # Detailed Calculation Breakdown Card
                             ui.markdown(f"""
                             #### Mathematical Formulation & Statistical Breakdown
-                            * **Specified Characteristic Strength ($f_{{{}cu}}$):** `{fcu_val:.2f} N/mm²`
-                            * **Calculated Characteristic Strength ($f_{{{}cu,act}}$):** `max(Mean - k * sigma, 0.85 * Mean)` = `**{s28['fcu']:.2f} N/mm²**`
+                            * **Specified Characteristic Strength ($f_{{cu}}$):** `{fcu_val:.2f} N/mm²`
+                            * **Calculated Characteristic Strength ($f_{{cu,act}}$):** `max(Mean - k * sigma, 0.85 * Mean)` = `**{s28['fcu']:.2f} N/mm²**`
                             * **Statistical Arithmetic Mean (Mean):** `{s28['mean']:.2f} N/mm²` (Sample count: `{s28['count']}`)
                             * **Standard Deviation ($\sigma$):** `{s28['std']:.2f} N/mm²` (Bessel's correction $N-1$)
                             * **Safety Multiplier ($k$):** `1.91` for sample size `n = {s28['count']}` (ECP 203 Table 8-2).
@@ -550,7 +550,7 @@ def main_page():
                        - Create a detailed markdown table with columns: | Item / Parameter | Specification in Document | Code Requirement (ECP / ASTM / AASHTO) | Deviation / Risk Level | Corrective Action Required |
 
                     3. GOVERNING MATHEMATICAL FORMULAS & THEORETICAL BENCHMARKS
-                       - Provide the exact engineering formulas mandated by the applicable codes (e.g., Characteristic strength evaluation $f_{cu} = \\text{Mean} - k\\sigma$, allowable bearing capacity with Factor of Safety, Marshall stability/flow limits, or W/C ratios). Write them cleanly using standard engineering notation.
+                       - Provide the exact engineering formulas mandated by the applicable codes (e.g., Characteristic strength evaluation $f_{{cu}} = \\text{Mean} - k\\sigma$, allowable bearing capacity with Factor of Safety, Marshall stability/flow limits, or W/C ratios). Write them cleanly using standard engineering notation.
 
                     4. MATERIAL & GEOTECHNICAL VERIFICATION DATA
                        - Detailed breakdown of material thresholds, cement contents, subgrade CBR requirements, or compaction percentages relative to specified design criteria.
@@ -768,11 +768,9 @@ def main_page():
                         f"Provide professional, highly accurate, code-backed engineering answers with quantitative benchmarks where applicable."
                     )
                     
-                    # Construct full conversational history or immediate prompt payload
-                    # Using GenerateContentConfig for proper system instruction handling
                     config = types.GenerateContentConfig(
                         system_instruction=sys_prompt,
-                        temperature=0.2, # Low temperature for strict engineering compliance
+                        temperature=0.2,
                     )
 
                     res = client.models.generate_content(
