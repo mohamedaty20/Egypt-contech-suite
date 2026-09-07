@@ -330,7 +330,7 @@ def main_page():
                         img_part = types.Part.from_bytes(data=uploaded_file_data['bytes'], mime_type=uploaded_file_data['type'])
                         contents.append(img_part)
 
-                    response = client.models.generate_content(model='gemini-2.5-flash', contents=contents)
+                    response = client.models.generate_content(model='gemini-3.5-flash-lite', contents=contents)
                     
                     audit_output_container.clear()
                     with audit_output_container:
@@ -377,7 +377,7 @@ def main_page():
                     2. Root Cause Analysis.
                     3. Applicable Standards and Remediation Procedure using local products (Sika Egypt / Fosroc).
                     """
-                    response = client.models.generate_content(model='gemini-2.5-flash', contents=[prompt, img])
+                    response = client.models.generate_content(model='gemini-3.5-flash-lite', contents=[prompt, img])
                     defect_output.clear()
                     with defect_output:
                         with ui.column().classes('custom-card w-full'):
@@ -425,7 +425,7 @@ def main_page():
 
                 try:
                     sys_prompt = f"You are an expert AI engineering assistant specialized in ECP 203, ECP 202, ECP 104, ASTM, AASHTO, BS, EN, and ISO. Supplementary: {supp_code_select.value}."
-                    res = client.models.generate_content(model='gemini-2.5-flash', contents=f"{sys_prompt}\n\nQuestion: {q}")
+                    res = client.models.generate_content(model='gemini-3.5-flash-lite', contents=f"{sys_prompt}\n\nQuestion: {q}")
                     chat_messages.append({"role": "assistant", "content": res.text})
                 except Exception as e:
                     chat_messages.append({"role": "assistant", "content": f"Error: {e}"})
