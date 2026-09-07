@@ -3,6 +3,7 @@ import datetime
 import os
 import uuid
 import re
+import json
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -44,7 +45,7 @@ MARGIN = 32
 USABLE_WIDTH = PAGE_WIDTH - (2 * MARGIN)
 
 # =====================================================================================
-# STYLING
+# STYLING - MODERN & PROFESSIONAL
 # =====================================================================================
 app.native.window_args = {"resizable": True}
 
@@ -56,7 +57,7 @@ ui.add_head_html('''
     ::-webkit-scrollbar-thumb { background: #FF8C00 !important; border-radius: 10px; }
 
     html, body {
-        background-color: #031338 !important;
+        background: radial-gradient(circle at 10% 20%, #0a1a3a, #031338) !important;
         color: #E9EDF5 !important;
         font-family: 'Inter', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif !important;
         margin: 0; padding: 0;
@@ -64,16 +65,17 @@ ui.add_head_html('''
         overflow-x: hidden;
     }
 
-    /* Sidebar styling */
+    /* Sidebar styling - glassmorphism */
     .sidebar-container {
-        background: linear-gradient(180deg, #0a1a3a 0%, #10203f 100%) !important;
-        border-right: 2px solid #FF8C00 !important;
-        box-shadow: 4px 0 20px rgba(0,0,0,0.5) !important;
+        background: rgba(10, 26, 58, 0.85) !important;
+        backdrop-filter: blur(12px) !important;
+        border-right: 2px solid rgba(255, 140, 0, 0.4) !important;
+        box-shadow: 8px 0 30px rgba(0,0,0,0.6) !important;
     }
     .sidebar-container .q-field__control {
-        background-color: #0d1a35 !important;
+        background-color: rgba(13, 26, 53, 0.8) !important;
         border: 1px solid #2c3f6b !important;
-        border-radius: 8px !important;
+        border-radius: 10px !important;
     }
     .sidebar-container .q-field__native,
     .sidebar-container .q-field__input,
@@ -81,10 +83,10 @@ ui.add_head_html('''
         color: #E9EDF5 !important;
     }
     .sidebar-container .q-select .q-field__control {
-        background-color: #0d1a35 !important;
+        background-color: rgba(13, 26, 53, 0.8) !important;
     }
 
-    /* Professional card style - minimal, no orange containers for outputs */
+    /* Output without containers */
     .output-card {
         background: transparent !important;
         border: none !important;
@@ -95,47 +97,50 @@ ui.add_head_html('''
         box-sizing: border-box;
     }
 
-    /* Styled card for inputs only */
+    /* Input cards - subtle glass */
     .input-card {
-        background-color: #0d1a35;
-        border: 1px solid #1f3355;
-        border-radius: 12px;
+        background: rgba(13, 26, 53, 0.6);
+        backdrop-filter: blur(8px);
+        border: 1px solid rgba(255, 140, 0, 0.2);
+        border-radius: 16px;
         padding: 18px 22px;
-        box-shadow: 0 4px 14px rgba(0,0,0,0.25);
+        box-shadow: 0 8px 32px rgba(0,0,0,0.3);
         margin-bottom: 20px;
         width: 100% !important;
         max-width: none !important;
         box-sizing: border-box;
     }
 
-    /* Professional rounded buttons - BLACK with WHITE text */
+    /* Buttons - sleek rounded */
     .primary-btn, .q-btn {
-        background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%) !important;
+        background: linear-gradient(135deg, #1a1a1a 0%, #333333 100%) !important;
         color: #FFFFFF !important;
-        border: none !important;
+        border: 1px solid #555 !important;
         font-weight: 600 !important;
-        border-radius: 12px !important;
-        padding: 10px 24px !important;
-        letter-spacing: .3px;
+        border-radius: 14px !important;
+        padding: 10px 28px !important;
+        letter-spacing: .4px;
         text-transform: none !important;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.4) !important;
-        transition: all 0.3s ease !important;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.5) !important;
+        transition: all 0.25s ease !important;
         min-height: 44px !important;
     }
     .primary-btn:hover, .q-btn:hover {
-        background: linear-gradient(135deg, #2d2d2d 0%, #3d3d3d 100%) !important;
-        transform: translateY(-2px) !important;
-        box-shadow: 0 6px 20px rgba(0,0,0,0.5) !important;
+        background: linear-gradient(135deg, #2d2d2d 0%, #444444 100%) !important;
+        transform: translateY(-3px) !important;
+        box-shadow: 0 8px 25px rgba(0,0,0,0.7) !important;
+        border-color: #FF8C00 !important;
     }
     .primary-btn:active, .q-btn:active {
         transform: translateY(0px) !important;
     }
 
-    /* Upload buttons - BLACK with WHITE text */
+    /* Upload buttons - glass */
     .q-uploader {
-        background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%) !important;
-        border-radius: 12px !important;
-        border: 2px dashed #FF8C00 !important;
+        background: rgba(13, 26, 53, 0.6) !important;
+        backdrop-filter: blur(8px) !important;
+        border-radius: 14px !important;
+        border: 2px dashed rgba(255, 140, 0, 0.5) !important;
         color: #FFFFFF !important;
         padding: 8px !important;
     }
@@ -147,17 +152,17 @@ ui.add_head_html('''
         color: #FFFFFF !important;
     }
     .q-uploader .q-uploader__file {
-        background: #0d1a35 !important;
+        background: rgba(13, 26, 53, 0.8) !important;
         color: #FFFFFF !important;
-        border-radius: 8px !important;
+        border-radius: 10px !important;
     }
 
-    /* Input fields styling */
+    /* Inputs */
     input, select, textarea, .q-field__control {
-        background-color: #0d1a35 !important;
+        background-color: rgba(13, 26, 53, 0.7) !important;
         color: #FFFFFF !important;
-        border: 1px solid #1f3355 !important;
-        border-radius: 8px !important;
+        border: 1px solid #2c3f6b !important;
+        border-radius: 10px !important;
     }
     .q-field__native, .q-field__input, .q-field__label {
         color: #E9EDF5 !important;
@@ -166,34 +171,35 @@ ui.add_head_html('''
         color: #FF8C00 !important;
     }
 
-    /* Dropdown menus */
+    /* Dropdown */
     .q-menu, .q-popover, .q-virtual-scroll__content {
-        background-color: #0d1a35 !important;
-        color: #FFFFFF !important;
-        border: 1px solid #1f3355 !important;
-        border-radius: 8px !important;
+        background: rgba(13, 26, 53, 0.95) !important;
+        backdrop-filter: blur(8px) !important;
+        border: 1px solid #2c3f6b !important;
+        border-radius: 10px !important;
     }
     .q-item {
         color: #FFFFFF !important;
-        background-color: #0d1a35 !important;
-        border-radius: 6px !important;
+        background: transparent !important;
+        border-radius: 8px !important;
     }
     .q-item:hover {
-        background-color: #1B2A4A !important;
+        background: rgba(255, 140, 0, 0.15) !important;
         color: #FF8C00 !important;
     }
 
     .app-footer {
         width: 100%;
-        background: linear-gradient(180deg, #0d1a35 0%, #10203f 100%);
-        border-top: 2px solid #FF8C00;
+        background: rgba(13, 26, 53, 0.7);
+        backdrop-filter: blur(8px);
+        border-top: 2px solid rgba(255, 140, 0, 0.5);
         padding: 20px 24px;
         margin-top: 50px;
         text-align: center;
         color: #A9B6D0;
         font-size: 13px;
         box-sizing: border-box;
-        border-radius: 12px 12px 0 0;
+        border-radius: 16px 16px 0 0;
     }
     .app-footer a {
         color: #4FC3F7;
@@ -205,7 +211,7 @@ ui.add_head_html('''
         text-decoration: underline;
     }
 
-    /* ---------- NORMALIZED TYPOGRAPHY FOR ALL AI-GENERATED MARKDOWN ---------- */
+    /* Markdown */
     .markdown-body {
         font-size: 14px;
         line-height: 1.7;
@@ -231,7 +237,7 @@ ui.add_head_html('''
     .markdown-body li { margin: 5px 0 !important; }
     .markdown-body hr { border-color: #1f3355; margin: 16px 0; }
     .markdown-body code {
-        background: #031338;
+        background: rgba(3, 19, 56, 0.8);
         border: 1px solid #1f3355;
         border-radius: 4px;
         padding: 2px 6px;
@@ -244,9 +250,9 @@ ui.add_head_html('''
         margin: 16px 0 !important;
         font-size: 13px !important;
         table-layout: auto !important;
-        border-radius: 8px !important;
+        border-radius: 12px !important;
         overflow: hidden !important;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.2) !important;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.3) !important;
     }
     .markdown-body th, .markdown-body td {
         border: 1px solid #1f3355 !important;
@@ -256,21 +262,22 @@ ui.add_head_html('''
         white-space: normal !important;
     }
     .markdown-body th {
-        background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%) !important;
+        background: linear-gradient(135deg, #1a1a1a 0%, #333333 100%) !important;
         color: #FF8C00 !important;
         font-weight: 700 !important;
     }
     .markdown-body tr:nth-child(even) td {
-        background-color: #0a1a3a;
+        background-color: rgba(10, 26, 58, 0.5);
     }
     .markdown-body tr:hover td {
-        background-color: #1a2a4a;
+        background-color: rgba(255, 140, 0, 0.08);
     }
 
     .stat-chip {
-        background: #0d1a35;
+        background: rgba(13, 26, 53, 0.6);
+        backdrop-filter: blur(8px);
         border: 1px solid #1f3355;
-        border-radius: 10px;
+        border-radius: 12px;
         padding: 14px 20px;
         text-align: center;
         min-width: 140px;
@@ -278,8 +285,8 @@ ui.add_head_html('''
     }
     .stat-chip:hover {
         border-color: #FF8C00;
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(255,140,0,0.15);
+        transform: translateY(-3px);
+        box-shadow: 0 6px 20px rgba(255,140,0,0.15);
     }
     .stat-chip .val {
         font-size: 24px;
@@ -294,7 +301,36 @@ ui.add_head_html('''
         margin-top: 4px;
     }
 
-    /* Mobile responsive styles */
+    /* Tabs - modern */
+    .q-tabs {
+        border-radius: 14px !important;
+        overflow: hidden !important;
+        background: rgba(13, 26, 53, 0.6) !important;
+        backdrop-filter: blur(8px) !important;
+        padding: 4px !important;
+    }
+    .q-tab {
+        color: #A9B6D0 !important;
+        font-weight: 600 !important;
+        transition: all 0.3s ease !important;
+        border-radius: 10px !important;
+        margin: 2px !important;
+        padding: 8px 16px !important;
+    }
+    .q-tab:hover {
+        color: #FFFFFF !important;
+        background: rgba(255, 140, 0, 0.1) !important;
+    }
+    .q-tab--active {
+        color: #FF8C00 !important;
+        background: rgba(255, 140, 0, 0.15) !important;
+    }
+    .q-tab__indicator {
+        background: #FF8C00 !important;
+        height: 3px !important;
+        border-radius: 2px !important;
+    }
+
     @media (max-width: 768px) {
         .markdown-body table {
             font-size: 11px !important;
@@ -326,39 +362,12 @@ ui.add_head_html('''
             flex-wrap: wrap !important;
         }
         .q-tab {
-            padding: 8px 12px !important;
+            padding: 6px 10px !important;
             font-size: 12px !important;
         }
         .q-uploader {
             font-size: 12px !important;
         }
-    }
-
-    /* Tabs styling */
-    .q-tabs {
-        border-radius: 12px !important;
-        overflow: hidden !important;
-        background: #0d1a35 !important;
-    }
-    .q-tab {
-        color: #A9B6D0 !important;
-        font-weight: 600 !important;
-        transition: all 0.3s ease !important;
-        border-radius: 8px !important;
-        margin: 4px !important;
-    }
-    .q-tab:hover {
-        color: #FFFFFF !important;
-        background: #1a2a4a !important;
-    }
-    .q-tab--active {
-        color: #FF8C00 !important;
-        background: #1a2a4a !important;
-    }
-    .q-tab__indicator {
-        background: #FF8C00 !important;
-        height: 3px !important;
-        border-radius: 2px !important;
     }
 </style>
 ''', shared=True)
@@ -699,6 +708,116 @@ async def call_gemini(contents, system_instruction=None, temperature=0.1):
 
 
 # =====================================================================================
+# BOQ CALCULATION ENGINE (Python, not AI)
+# =====================================================================================
+
+# Predefined unit rates (EGP) - typical Egyptian market rates (approximate)
+UNIT_RATES = {
+    # Architectural
+    "Flooring (Ceramic)": 150,  # per m2
+    "Flooring (Marble)": 500,
+    "Flooring (Tiles)": 200,
+    "Wall Finishing (Paint)": 30,  # per m2
+    "Wall Finishing (Plaster)": 80,
+    "Ceiling (Paint)": 25,
+    "Ceiling (Gypsum Board)": 120,
+    "Skirting (Ceramic)": 60,  # per linear meter
+    "Skirting (Marble)": 200,
+    "Doors (Wood)": 3000,  # per unit
+    "Windows (Aluminum)": 2000,  # per unit
+    "Partitions (Gypsum)": 150,  # per m2
+    # Structural
+    "Concrete (Grade C30/37)": 2500,  # per m3
+    "Concrete (Grade C25/30)": 2200,
+    "Concrete (Grade C40/50)": 3000,
+    "Rebar (Grade 400)": 15000,  # per ton
+    "Rebar (Grade 600)": 18000,
+    "Formwork": 300,  # per m2
+    "Excavation": 200,  # per m3
+    "Backfill": 150,  # per m3
+    "Foundation Concrete": 2800,  # per m3
+}
+
+def compute_boq(extracted_items, wastage_percent=5):
+    """
+    Compute costs based on extracted items.
+    extracted_items: list of dicts with keys: item, unit, quantity (extracted by AI)
+    Returns a DataFrame with full cost details.
+    """
+    rows = []
+    for it in extracted_items:
+        item_name = it.get('item', 'Unknown')
+        unit = it.get('unit', '')
+        quantity = float(it.get('quantity', 0))
+        # Find unit rate
+        rate = UNIT_RATES.get(item_name, 0)
+        if rate == 0:
+            # try fuzzy matching
+            for key in UNIT_RATES:
+                if key.lower() in item_name.lower() or item_name.lower() in key.lower():
+                    rate = UNIT_RATES[key]
+                    break
+        # Apply wastage to quantity
+        qty_with_waste = quantity * (1 + wastage_percent / 100)
+        total = qty_with_waste * rate
+        rows.append({
+            'Item': item_name,
+            'Unit': unit,
+            'Quantity (net)': quantity,
+            'Wastage %': wastage_percent,
+            'Quantity (with waste)': round(qty_with_waste, 2),
+            'Unit Rate (EGP)': rate,
+            'Total Cost (EGP)': round(total, 2)
+        })
+    return pd.DataFrame(rows)
+
+
+def parse_ai_extraction(text):
+    """
+    Parse AI output to extract items, units, quantities.
+    Expects a markdown table with columns: Item, Unit, Quantity (or similar).
+    Returns list of dicts.
+    """
+    # Find all tables in markdown
+    lines = text.split('\n')
+    items = []
+    in_table = False
+    header = None
+    for line in lines:
+        if '|' in line:
+            cells = [c.strip() for c in line.strip('|').split('|')]
+            if not in_table:
+                # Check if it's a header (contains typical headers)
+                if any('item' in c.lower() or 'quantity' in c.lower() or 'unit' in c.lower() for c in cells):
+                    header = cells
+                    in_table = True
+                continue
+            else:
+                # Check if it's a separator row
+                if all(re.match(r'^[\s:|-]+$', c) for c in cells):
+                    continue
+                # Data row
+                if header:
+                    row_dict = {}
+                    for idx, col_name in enumerate(header):
+                        if idx < len(cells):
+                            row_dict[col_name] = cells[idx]
+                    # Extract item, unit, quantity
+                    item = row_dict.get('Item', row_dict.get('item', ''))
+                    unit = row_dict.get('Unit', row_dict.get('unit', ''))
+                    qty_str = row_dict.get('Quantity', row_dict.get('quantity', '0'))
+                    try:
+                        qty = float(qty_str)
+                    except:
+                        qty = 0
+                    if item:
+                        items.append({'item': item, 'unit': unit, 'quantity': qty})
+        else:
+            in_table = False
+    return items
+
+
+# =====================================================================================
 # MAIN APP LAYOUT
 # =====================================================================================
 @ui.page('/')
@@ -710,7 +829,6 @@ def main_page():
     with sidebar:
         with ui.row().classes('w-full items-center justify-between mb-4 p-2'):
             ui.label('📋 PROJECT METADATA').classes('text-white font-bold text-base tracking-wide')
-            # Professional close button - "✕" instead of hamburger
             ui.button('✕', on_click=sidebar.toggle).classes(
                 'bg-transparent text-white text-xl hover:text-[#FF8C00] p-1 min-w-[36px] !shadow-none !rounded-full !bg-transparent'
             ).style('font-size: 20px; line-height: 1;')
@@ -752,7 +870,6 @@ def main_page():
 
         ui.upload(label='Upload Company Logo', auto_upload=True, on_upload=handle_logo_upload).props('flat dark').classes('w-full mb-2')
 
-    # Professional open button - placed top left, styled as a gear icon or a simple button
     ui.button('☰', on_click=sidebar.toggle).classes(
         'fixed top-4 left-4 z-50 bg-[#10203f] text-white border border-[#FF8C00] p-3 rounded-full shadow-lg hover:bg-[#1a2a4a]'
     ).style('font-size: 20px; min-width: 48px; min-height: 48px;')
@@ -767,7 +884,7 @@ def main_page():
             'ticket': ticket_input.value,
         }
 
-    # ---------------- MAIN COLUMN ---------------- (with new title)
+    # ---------------- MAIN COLUMN ----------------
     with ui.column().classes('w-full min-h-screen p-4 bg-[#031338]'):
         # New title block
         with ui.column().classes('w-full bg-[#0d1a35] px-6 py-4 rounded-xl border border-[#FF8C00] shadow-lg mb-4'):
@@ -780,7 +897,7 @@ def main_page():
         <style>@keyframes marquee { 0% { transform: translate(0, 0); } 100% { transform: translate(-100%, 0); } }</style>
         ''')
         ui.html('''
-        <div style="width: 100%; overflow: hidden; white-space: nowrap; background-color: #0d1a35; color: #FFFFFF; padding: 10px 0; font-weight: 600; font-size: 13px; margin-bottom: 15px; border-radius: 8px; border: 1px solid #1f3355;">
+        <div style="width: 100%; overflow: hidden; white-space: nowrap; background-color: rgba(13,26,53,0.6); backdrop-filter: blur(8px); color: #FFFFFF; padding: 10px 0; font-weight: 600; font-size: 13px; margin-bottom: 15px; border-radius: 8px; border: 1px solid rgba(255,140,0,0.3);">
           <div style="display: inline-block; padding-left: 100%; animation: marquee 28s linear infinite;">
             <span style="color: #FF8C00;">[CORE ACTIVE]</span> ECP 203 &middot; ECP 202 &middot; ECP 104 &middot; ASTM &middot; AASHTO &middot; BS EN &middot; ISO
             &nbsp;&nbsp;|&nbsp;&nbsp; Advanced Geotechnical & Concrete Calculation Sheet &nbsp;&nbsp;|&nbsp;&nbsp; Active Site Inspection Portal
@@ -1146,7 +1263,6 @@ report with clear ## section headings and real Markdown tables for any comparati
                 async def handle_defect_upload(e):
                     try:
                         defect_file_data['bytes'] = await e.file.read()
-                        # Determine type: if PDF then application/pdf else image
                         if e.file.name.lower().endswith('.pdf'):
                             defect_file_data['type'] = 'application/pdf'
                         else:
@@ -1174,7 +1290,6 @@ report with clear ## section headings and real Markdown tables for any comparati
                     try:
                         basis = code_basis_select.value
                         user_desc = defect_user_message.value.strip() or "No additional description provided."
-                        # Prepare content
                         contents = []
                         prompt = f"""
 You are a Senior Forensic Structural Engineer and Materials Specialist.
@@ -1233,9 +1348,7 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                                     ui.notify(f'PDF Export Error: {str(ex)}', type='negative')
 
                             def download_defect_csv():
-                                # Attempt to extract tables from markdown for CSV
                                 try:
-                                    # Simple extraction: we'll just save the whole text as CSV with one column
                                     df = pd.DataFrame({
                                         "Diagnostic Report": [defect_result_holder['text']]
                                     })
@@ -1354,11 +1467,11 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                         ui.markdown('### International Standards (ASTM, AASHTO, BS EN, ISO)').classes('markdown-body')
 
             # =========================================================================
-            # TAB 6: PROFESSIONAL BOQ TAKEOFF (New)
+            # TAB 6: PROFESSIONAL BOQ TAKEOFF (FIXED - AI only extracts, Python computes)
             # =========================================================================
             with ui.tab_panel(t_boq):
                 ui.label('Professional AI BOQ Takeoff & Cost Estimation').classes('text-2xl font-bold text-white mb-2')
-                ui.markdown('Upload project drawings (PDF, JPG, PNG) and specify parameters to generate a detailed Bill of Quantities with cost estimates.').classes('markdown-body mb-2')
+                ui.markdown('Upload project drawings (PDF, JPG, PNG). AI will extract quantities, and the engine will compute costs with wastage.').classes('markdown-body mb-2')
                 ui.markdown('*Designed to give accurate results with success rate near 98%, but results should be rechecked by a qualified engineer.*').classes('text-xs text-amber-400 mb-4')
 
                 # Upload
@@ -1427,10 +1540,10 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                     boq_export_area.clear()
                     with boq_output_container:
                         ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
-                        ui.label('Generating professional BOQ and cost estimate...').classes('self-center text-sm')
+                        ui.label('AI is extracting quantities from drawings...').classes('self-center text-sm')
 
                     try:
-                        # Gather all parameters from both tabs
+                        # Gather parameters
                         arch_params = {
                             'total_area': total_area.value,
                             'num_floors': num_floors.value,
@@ -1451,10 +1564,12 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                         }
                         basis = code_basis_select.value
 
-                        # Build prompt
+                        # Build prompt - ONLY for extraction, no calculations
                         prompt = f"""
-You are a Professional Quantity Surveyor and Cost Estimator with expertise in Egyptian construction.
-Based on the uploaded project drawings and the following parameters, generate a comprehensive Bill of Quantities (BOQ) and cost estimate.
+You are a Professional Quantity Surveyor with expertise in Egyptian construction.
+Based on the uploaded project drawings and the parameters provided, extract the quantities of materials and items needed.
+
+**CRITICAL: DO NOT PERFORM ANY CALCULATIONS OR COST ESTIMATES. ONLY EXTRACT QUANTITIES FROM THE DRAWINGS.**
 
 GOVERNING STANDARD: {basis}
 
@@ -1466,18 +1581,33 @@ ARCHITECTURAL PARAMETERS:
 STRUCTURAL PARAMETERS:
 {struct_params}
 
-Please produce a detailed BOQ covering:
-- Architectural works: finishes (flooring, ceiling, skirting, painting, etc.), doors, windows, partitions, etc.
-- Structural works: concrete quantities (by grade), reinforcement (by bar diameter), formwork, etc.
-- Include separate sections for Architectural and Structural with sub-items.
-- For each item, provide: Description, Unit, Quantity, Unit Rate (EGP), Total Cost (EGP).
-- Apply a wastage percentage of {struct_params['wastage_percent']}% to material quantities where applicable.
-- Provide a summary table of total costs per category and overall total.
-- Also include approximate quantities for excavation, backfill, and foundations based on typical design.
+For the architectural part, extract quantities for:
+- Flooring area (m2) by type (ceramic, marble, tiles)
+- Wall finishing area (m2) (plaster, paint)
+- Ceiling area (m2) (paint, gypsum)
+- Skirting length (m)
+- Number of doors and windows
+- Partition area (m2)
 
-Use proper Markdown tables with clear headers and separator rows.
+For the structural part, extract quantities for:
+- Concrete volume (m3) for slabs, beams, columns, foundations (by grade)
+- Reinforcement weight (tons) by bar diameter
+- Formwork area (m2)
+- Excavation volume (m3)
+- Backfill volume (m3)
+
+Output your results in a **single Markdown table** with columns: **Item, Unit, Quantity**.
+Do not include any other text or calculations. Only the table.
+
+Example:
+| Item | Unit | Quantity |
+|------|------|----------|
+| Flooring (Ceramic) | m2 | 850 |
+| Concrete (C30/37) | m3 | 120 |
+| Rebar (Grade 400) | ton | 8.5 |
+...
 """
-                        # Add file content if PDF
+                        # Add file content
                         contents = [prompt]
                         if boq_file_data['type'] == 'application/pdf':
                             reader = pypdf.PdfReader(io.BytesIO(boq_file_data['bytes']))
@@ -1487,14 +1617,34 @@ Use proper Markdown tables with clear headers and separator rows.
                             img_part = types.Part.from_bytes(data=boq_file_data['bytes'], mime_type=boq_file_data['type'])
                             contents.append(img_part)
 
-                        res_text = await call_gemini(contents, temperature=0.2)  # slightly higher for creativity
-                        boq_result_holder['text'] = res_text
+                        # Get AI extraction
+                        extraction_text = await call_gemini(contents, temperature=0.1)
+                        # Parse extracted items
+                        extracted_items = parse_ai_extraction(extraction_text)
+
+                        if not extracted_items:
+                            ui.notify('AI could not extract any items. Please check the drawing.', type='warning')
+                            boq_output_container.clear()
+                            with boq_output_container:
+                                ui.markdown('No items extracted. Ensure the drawing contains readable dimensions and labels.').classes('text-amber-400')
+                            return
+
+                        # Now compute using Python
+                        wastage = float(struct_params['wastage_percent'])
+                        df_boq = compute_boq(extracted_items, wastage)
+
+                        # Generate markdown table from DataFrame
+                        boq_md = df_boq.to_markdown(index=False)
+                        # Add summary
+                        total_cost = df_boq['Total Cost (EGP)'].sum()
+                        summary = f"\n\n**TOTAL ESTIMATED COST: {total_cost:,.2f} EGP**\n\n*Note: Unit rates are approximate market prices. Wastage of {wastage}% applied.*"
+                        boq_result_holder['text'] = boq_md + summary
 
                         boq_output_container.clear()
                         with boq_output_container:
                             with ui.column().classes('output-card w-full'):
                                 ui.label('Detailed BOQ & Cost Estimate').classes('text-xl font-bold text-white mb-2')
-                                ui.markdown(res_text).classes('markdown-body')
+                                ui.markdown(boq_result_holder['text']).classes('markdown-body')
 
                         with boq_export_area:
                             def download_boq_pdf():
@@ -1512,46 +1662,31 @@ Use proper Markdown tables with clear headers and separator rows.
 
                             def download_boq_excel():
                                 try:
-                                    # Attempt to extract tables from markdown
-                                    text = boq_result_holder['text']
-                                    # Find all tables by splitting by "|" lines
-                                    import pandas as pd
-                                    lines = text.split('\n')
-                                    tables = []
-                                    current_table = []
-                                    in_table = False
-                                    for line in lines:
-                                        if '|' in line and not line.strip().startswith('#'):
-                                            if not in_table:
-                                                in_table = True
-                                            current_table.append(line)
-                                        else:
-                                            if in_table and current_table:
-                                                tables.append('\n'.join(current_table))
-                                                current_table = []
-                                                in_table = False
-                                    if in_table and current_table:
-                                        tables.append('\n'.join(current_table))
-
-                                    # Write each table to a separate sheet
-                                    with pd.ExcelWriter(f'BOQ_{ticket_input.value}.xlsx') as writer:
-                                        for idx, tbl_str in enumerate(tables):
-                                            # Parse table
-                                            rows = [row.strip() for row in tbl_str.split('\n') if row.strip()]
-                                            data = []
-                                            for r in rows:
-                                                cells = [c.strip() for c in r.strip('|').split('|')]
-                                                data.append(cells)
-                                            if not data:
-                                                continue
-                                            # Assume first row is header
-                                            df = pd.DataFrame(data[1:], columns=data[0])
-                                            df.to_excel(writer, sheet_name=f'Table_{idx+1}', index=False)
-                                    # Read bytes and download
-                                    with open(f'BOQ_{ticket_input.value}.xlsx', 'rb') as f:
-                                        excel_bytes = f.read()
-                                    os.remove(f'BOQ_{ticket_input.value}.xlsx')
-                                    ui.download(excel_bytes, filename=f"BOQ_{ticket_input.value}.xlsx")
+                                    # Convert markdown table to Excel
+                                    # We have the DataFrame
+                                    df = df_boq.copy()
+                                    # Add summary row
+                                    total_row = pd.DataFrame({
+                                        'Item': ['TOTAL'],
+                                        'Unit': [''],
+                                        'Quantity (net)': [''],
+                                        'Wastage %': [''],
+                                        'Quantity (with waste)': [''],
+                                        'Unit Rate (EGP)': [''],
+                                        'Total Cost (EGP)': [df['Total Cost (EGP)'].sum()]
+                                    })
+                                    df_out = pd.concat([df, total_row], ignore_index=True)
+                                    excel_buffer = io.BytesIO()
+                                    with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
+                                        df_out.to_excel(writer, sheet_name='BOQ', index=False)
+                                        workbook = writer.book
+                                        worksheet = writer.sheets['BOQ']
+                                        # Auto-adjust columns
+                                        for i, col in enumerate(df_out.columns):
+                                            column_width = max(df_out[col].astype(str).map(len).max(), len(col)) + 2
+                                            worksheet.set_column(i, i, column_width)
+                                    excel_buffer.seek(0)
+                                    ui.download(excel_buffer.getvalue(), filename=f"BOQ_{ticket_input.value}.xlsx")
                                     ui.notify('Excel downloaded!', type='positive')
                                 except Exception as ex:
                                     ui.notify(f'Excel Export Error: {str(ex)}', type='negative')
@@ -1566,7 +1701,7 @@ Use proper Markdown tables with clear headers and separator rows.
 
                 ui.button('Run Professional AI Takeoff', on_click=run_boq_takeoff).classes('primary-btn mt-4')
 
-        # ---------------- FOOTER (updated with corrected sentence and disclaimer) ----------------
+        # ---------------- FOOTER ----------------
         ui.html('''
         <div class="app-footer">
             <b>Multi-Standard Engineering Quality Assurance Portal</b> &nbsp;|&nbsp; Automated compliance verification across ECP 203, ECP 202, ECP 104, ASTM, AASHTO, BS, EN, and ISO standards.<br>
