@@ -453,5 +453,5 @@ def main_page():
                 with ui.tab_panel(h4):
                     ui.markdown('### International Standards (ASTM, AASHTO, BS, EN, ISO)\n- ASTM C39 / D1557, AASHTO LRFD specifications, Eurocode 2 / BS EN 1992.')
 
-# Run the app locally
-ui.run(host='127.0.0.1', port=8080, title='Multi-Standard Engineering Auditor', favicon='🏗️')
+
+ui.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)), title='Multi-Standard Engineering Auditor', favicon='🏗️', reload=False)
