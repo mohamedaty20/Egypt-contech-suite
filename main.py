@@ -295,7 +295,7 @@ def main_page():
 
     with ui.tab_panels(tabs, value=t_dash).classes('w-full bg-transparent'):
         
-        # --- TAB 1: CONCRETE CALCULATION SHEET & VERIFIER ---
+# --- TAB 1: CONCRETE CALCULATION SHEET & VERIFIER ---
         with ui.tab_panel(t_dash):
             ui.label('Comprehensive Concrete Cube Calculation Sheet & Statistical Verifier (ECP 203)').classes('text-2xl font-bold text-white mb-4')
             
@@ -310,220 +310,124 @@ def main_page():
                     ui.label('28-Day Cubes (Comma Separated N/mm2)').classes('font-bold text-white text-sm')
                     c28_input = ui.input(value='32.5, 34.0, 31.0, 35.5, 29.0, 33.0').classes('w-full')
 
+            ai_cube_result_holder = {'text': ''}
+
             def run_verification():
                 result_output_area.clear()
                 export_buttons_area.clear()
                 
-                c7 = parse_cubes(c7_input.value)
-                c14 = parse_cubes(c14_input.value)
-                c28 = parse_cubes(c28_input.value)
-                fcu_val = float(fcu_input.value)
-                selected_stage = stage_selector.value
-
-                def evaluate_stage(cubes, ratio):
-                    if not cubes or len(cubes) < 3: return None
-                    mean_v = float(np.mean(cubes))
-                    std_v = float(np.std(cubes, ddof=1)) if len(cubes) > 1 else 0.0
-                    k = 1.91 if len(cubes) < 30 else 1.64
-                    fcu_char = max(mean_v - k * std_v, 0.85 * mean_v)
-                    target = ratio * fcu_val
-                    passed = fcu_char >= target and min(cubes) >= (0.85 * target)
-                    return {"mean": mean_v, "std": std_v, "fcu": fcu_char, "target": target, "pass": passed, "count": len(cubes), "min": min(cubes), "max": max(cubes), "values": cubes}
-
-                s7 = evaluate_stage(c7, 0.70)
-                s14 = evaluate_stage(c14, 0.85)
-                s28 = evaluate_stage(c28, 1.00)
+                if not client:
+                    ui.notify('Gemini API key missing in .env!', type='negative')
+                    return
 
                 with result_output_area:
-                    with ui.column().classes('custom-card w-full'):
-                        ui.label('Official Engineering Calculation Sheet & Statistical Proof (ECP 203 / ASTM C39)').classes('text-xl font-bold text-white mb-3')
-                        
-                        if s28:
-                            color = 'green' if s28['pass'] else 'red'
-                            verdict_text = 'PASS — FULLY COMPLIANT' if s28['pass'] else 'FAIL — NON-COMPLIANT WITH ECP 203 LIMITS'
-                            ui.markdown(f"### Overall 28-Day Compliance Verdict: :{color}[**{verdict_text}**]")
-                            
-                            ui.markdown(f"""
-                            #### Step-by-Step Mathematical Formulation & Statistical Proof (28-Day)
-                            * **Specified Characteristic Strength (f_cu):** `{fcu_val:.2f} N/mm²`
-                            * **Calculated Characteristic Strength (f_cu,act):** `max(Mean - k * sigma, 0.85 * Mean)` = **`{s28['fcu']:.2f} N/mm²`**
-                            * **Arithmetic Mean (Mean):** `sum(x_i) / n` = **`{s28['mean']:.2f} N/mm²`**
-                            * **Standard Deviation (sigma):** **`{s28['std']:.2f} N/mm²`** (Bessel's correction n-1 = {s28['count']}-1)
-                            * **Safety Multiplier (k):** `1.91` for sample size n = {s28['count']} per ECP 203 Table 8-2.
-                            * **Minimum Individual Cube Check:** `{s28['min']:.2f} N/mm²` (Required threshold >= `0.85 * f_cu` = `{0.85 * fcu_val:.2f} N/mm²`).
-                            * **Maximum Individual Cube Recorded:** `{s28['max']:.2f} N/mm²`.
-                            """)
+                    ui.spinner('ios', size='lg').classes('self-center text-[#00BFFF]')
+                    ui.label('Running master AI statistical evaluation & code compliance verification...').classes('self-center text-sm')
 
-                        stages_to_show = []
-                        if selected_stage == 'All Stages':
-                            stages_to_show = [('7-Day Stage', s7, 0.70), ('14-Day Stage', s14, 0.85), ('28-Day Stage', s28, 1.00)]
-                        elif selected_stage == '7-Day Stage':
-                            stages_to_show = [('7-Day Stage', s7, 0.70)]
-                        elif selected_stage == '14-Day Stage':
-                            stages_to_show = [('14-Day Stage', s14, 0.85)]
-                        elif selected_stage == '28-Day Stage':
-                            stages_to_show = [('28-Day Stage', s28, 1.00)]
+                try:
+                    supp_val = supp_code_select.value if supp_code_select else 'None (Strictly Core)'
+                    
+                    prompt = f"""
+                    You are an elite Senior Concrete Quality Assurance and Structural Engineering Expert. 
+                    Perform a complete, professional, exhaustive statistical evaluation and code verification for concrete cube test results.
+                    
+                    PROJECT PARAMETERS:
+                    - Governing Core Standards: Egyptian Code ECP 203 (Primary), ECP 202, ECP 104, ASTM C39, BS EN, ISO.
+                    - Supplementary Standard Selected by User: {supp_val}
+                    - Specified 28-Day Characteristic Compressive Strength (f_cu): {fcu_input.value} N/mm²
+                    - 7-Day Crushing Test Values: {c7_input.value} N/mm²
+                    - 14-Day Crushing Test Values: {c14_input.value} N/mm²
+                    - 28-Day Crushing Test Values: {c28_input.value} N/mm²
+                    - Mix Details: Cement Content = {cement_input.value} kg/m³, Free Water Content = {water_input.value} kg/m²
+                    - Mixer Truck No: {truck_input.value} | Batch Ticket ID: {ticket_input.value}
 
-                        for title, stage_data, ratio in stages_to_show:
-                            if stage_data:
-                                ui.label(f'Detailed Specimen Breakdown & Calculation Table ({title}) — Target Ratio: {int(ratio*100)}%').classes('font-bold text-white text-sm mt-4 mb-1')
-                                table_rows = []
-                                target_req = ratio * fcu_val
-                                for idx, val in enumerate(stage_data['values'], 1):
-                                    dev = val - stage_data['mean']
-                                    sq_dev = dev ** 2
-                                    status = "Acceptable" if val >= (0.85 * target_req) else "Below Limit"
-                                    table_rows.append({
-                                        "Specimen No": f"Cube #{idx}",
-                                        "Crushing Load (N/mm2)": f"{val:.2f} N/mm²",
-                                        "Deviation (x - Mean)": f"{dev:+.2f} N/mm²",
-                                        "Squared Deviation": f"{sq_dev:.2f}",
-                                        "Evaluation": status
-                                    })
+                    REQUIREMENTS:
+                    1. Use strictly METRIC (SI) units (N/mm², MPa, kg/m³).
+                    2. Provide deep engineering analysis, step-by-step statistical formulas (Mean, Standard Deviation, Characteristic Strength f_cu,act using ECP 203 / ACI statistical factors).
+                    3. Format outputs with comprehensive Markdown Data Tables for each curing stage (specimen deviation, individual check vs 0.85*f_cu limit).
+                    4. Deliver a clear final compliance verdict (PASS / FAIL) based on ECP 203 compliance criteria. Avoid conversational fluff.
+                    """
+
+                    response = client.models.generate_content(
+                        model='gemini-2.5-flash',
+                        contents=prompt,
+                        config=types.GenerateContentConfig(temperature=0.1)
+                    )
+                    
+                    res_text = clean_ai_text(response.text)
+                    ai_cube_result_holder['text'] = res_text
+
+                    result_output_area.clear()
+                    with result_output_area:
+                        with ui.column().classes('custom-card w-full'):
+                            ui.label('AI-Powered Comprehensive Concrete Calculation Sheet & Statistical Proof').classes('text-xl font-bold text-white mb-2')
+                            ui.markdown(res_text)
+
+                    with export_buttons_area:
+                        unique_uid = f"ECP-AI-{uuid.uuid4().hex[:8].upper()}"
+
+                        def download_pdf_report():
+                            try:
+                                buffer = io.BytesIO()
+                                doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=36, leftMargin=36, topMargin=36, bottomMargin=36)
+                                story = []
+                                rep_date = datetime.date.today().strftime('%Y-%m-%d')
+                                qr_buf = generate_qr_code(f"UID: {unique_uid} | ECP 203 AI Calculation Sheet - {project_name_input.value}")
+
+                                build_pdf_header(
+                                    story, 
+                                    "AI CONCRETE CUBE CALCULATION & VERIFICATION REPORT", 
+                                    f"Governing Standard: ECP 203 & {supp_val}", 
+                                    logo_bytes_holder['bytes'], 
+                                    engineer_input.value, 
+                                    project_name_input.value, 
+                                    pour_location_input.value, 
+                                    rep_date,
+                                    ticket_input.value,
+                                    unique_uid
+                                )
+                                styles = getSampleStyleSheet()
+                                body_style = ParagraphStyle("CubeBody", parent=styles["Normal"], fontSize=8, textColor=colors.HexColor("#222222"), leading=12)
                                 
-                                ui.table(
-                                    columns=[
-                                        {"name": "Specimen No", "label": "Specimen No", "field": "Specimen No", "align": "left"},
-                                        {"name": "Crushing Load (N/mm2)", "label": "Crushing Load (N/mm²)", "field": "Crushing Load (N/mm2)"},
-                                        {"name": "Deviation (x - Mean)", "label": "Deviation (x - Mean)", "field": "Deviation (x - Mean)"},
-                                        {"name": "Squared Deviation", "label": "Squared Dev (x - Mean)²", "field": "Squared Deviation"},
-                                        {"name": "Evaluation", "label": "Evaluation", "field": "Evaluation"},
-                                    ],
-                                    rows=table_rows,
-                                    row_key="Specimen No"
-                                ).classes('w-full bg-[#1E222D] text-white mb-2')
+                                sanitized_text = clean_for_reportlab(ai_cube_result_holder['text'])
+                                story.append(Paragraph(sanitized_text, body_style))
+                                story.append(Spacer(1, 10))
+                                build_pdf_footer_and_signatures(story, qr_buf)
 
-                        try:
-                            cem_v = float(cement_input.value)
-                            wat_v = float(water_input.value)
-                            wc = wat_v / cem_v if cem_v > 0 else 0
-                            ui.markdown(f"""
-                            **Durability & Mix Proportion Calculation Verification:**
-                            * **Water-Cement Ratio (W/C):** `{wc:.2f}` (Calculated as `Water / Cement` = `{wat_v} / {cem_v}`). Maximum allowable W/C under ECP 203 is `0.45`.
-                            * **Cement Content Compliance:** `{cem_v} kg/m³` (Minimum required for standard structural exposure is `350 kg/m³`).
-                            """)
-                        except ValueError:
-                            pass
+                                doc.build(story)
+                                buffer.seek(0)
+                                ui.download(buffer.getvalue(), filename=f"AI_Concrete_Calculation_Sheet_{ticket_input.value}.pdf")
+                                ui.notify('Official Calculation Sheet PDF downloaded successfully!', type='positive')
+                            except Exception as ex:
+                                ui.notify(f'PDF Generation Error: {str(ex)}', type='negative')
 
-                        stages = ['7-Day', '14-Day', '28-Day', 'Target Grade']
-                        means = [
-                            s7['mean'] if s7 else 0,
-                            s14['mean'] if s14 else 0,
-                            s28['mean'] if s28 else 0,
-                            fcu_val
-                        ]
-                        
-                        fig = go.Figure()
-                        fig.add_trace(go.Scatter(
-                            x=stages, y=means, mode='lines+markers+text',
-                            text=[f"{m:.1f}" for m in means], textposition="top center",
-                            line=dict(color='#00BFFF', width=3), marker=dict(size=10, color='#FF8C00')
-                        ))
-                        fig.add_hline(y=fcu_val, line_dash="dash", line_color="#22C55E", annotation_text=f"Target f_cu ({fcu_val} N/mm²)", annotation_position="bottom right")
-                        
-                        fig.update_layout(
-                            title='Compressive Strength Evolution & Target Threshold',
-                            template='plotly_dark',
-                            paper_bgcolor='#1B2A4A',
-                            plot_bgcolor='#1B2A4A',
-                            margin=dict(t=40, b=20, l=40, r=20),
-                            height=300
-                        )
-                        ui.plotly(fig).classes('w-full mt-4')
+                        def download_csv_export():
+                            df = pd.DataFrame({
+                                "Field": ["Project Name", "Location", "Specified f_cu", "Selected Standard", "Truck No", "Batch Ticket", "Verification UID", "AI Findings Summary"],
+                                "Value": [
+                                    project_name_input.value, 
+                                    pour_location_input.value, 
+                                    str(fcu_input.value), 
+                                    supp_val, 
+                                    truck_input.value, 
+                                    ticket_input.value, 
+                                    unique_uid,
+                                    ai_cube_result_holder['text'][:300].replace('\n', ' ')
+                                ]
+                            })
+                            ui.download(df.to_csv(index=False).encode('utf-8'), filename=f"AI_Concrete_Calculation_{ticket_input.value}.csv")
+                            ui.notify('CSV Calculation Sheet downloaded successfully!', type='positive')
 
-                with export_buttons_area:
-                    unique_uid = f"ECP-{uuid.uuid4().hex[:8].upper()}"
+                        ui.button('Download Official Calculation PDF', on_click=download_pdf_report).classes('primary-btn flex-1')
+                        ui.button('Export Calculation CSV', on_click=download_csv_export).classes('primary-btn flex-1')
 
-                    def download_pdf_report():
-                        try:
-                            buffer = io.BytesIO()
-                            doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=36, leftMargin=36, topMargin=36, bottomMargin=36)
-                            story = []
-                            rep_date = datetime.date.today().strftime('%Y-%m-%d')
-                            qr_buf = generate_qr_code(f"UID: {unique_uid} | ECP 203 Calculation Sheet - {project_name_input.value} - {rep_date}")
-
-                            build_pdf_header(
-                                story, 
-                                "CONCRETE CUBE STATISTICAL CALCULATION SHEET", 
-                                "Official ECP 203 & ASTM C39 Quality Assurance & Calculation Proof Report", 
-                                logo_bytes_holder['bytes'], 
-                                engineer_input.value, 
-                                project_name_input.value, 
-                                pour_location_input.value, 
-                                rep_date,
-                                ticket_input.value,
-                                unique_uid
-                            )
-                            
-                            styles = getSampleStyleSheet()
-                            body_style = ParagraphStyle("Body", parent=styles["Normal"], fontSize=8, textColor=colors.HexColor("#222222"), leading=12)
-                            
-                            summary_html = f"""
-                            <b>Specified Grade (f_cu):</b> {fcu_input.value} N/mm²<br/>
-                            <b>Mixer Truck No:</b> {truck_input.value} &nbsp;|&nbsp; <b>Batch Ticket ID:</b> {ticket_input.value}<br/>
-                            <b>Cement Content:</b> {cement_input.value} kg/m³ &nbsp;|&nbsp; <b>Free Water Content:</b> {water_input.value} kg/m³<br/>
-                            <b>7-Day Mean Strength:</b> {s7['mean']:.2f} N/mm² ({len(c7)} cubes tested)<br/>
-                            <b>14-Day Mean Strength:</b> {s14['mean']:.2f} N/mm² ({len(c14)} cubes tested)<br/>
-                            <b>28-Day Characteristic Strength (f_cu,act):</b> {s28['fcu']:.2f} N/mm² &nbsp;|&nbsp; <b>Compliance Verdict:</b> {'PASS' if s28['pass'] else 'FAIL'}<br/>
-                            <b>Statistical Mean (28-Day):</b> {s28['mean']:.2f} N/mm² &nbsp;|&nbsp; <b>Standard Deviation (sigma):</b> {s28['std']:.2f} N/mm²
-                            """
-                            story.append(Paragraph(summary_html, body_style))
-                            story.append(Spacer(1, 8))
-
-                            if s28:
-                                pdf_table_data = [["Specimen", "Crushing Load (N/mm²)", "Deviation from Mean", "Status"]]
-                                for idx, val in enumerate(s28['values'], 1):
-                                    dev = val - s28['mean']
-                                    st = "Acceptable" if val >= (0.85 * fcu_val) else "Below Limit"
-                                    pdf_table_data.append([f"Cube #{idx}", f"{val:.2f}", f"{dev:+.2f}", st])
-                                
-                                t_pdf = Table(pdf_table_data, colWidths=[100, 140, 140, 160])
-                                t_pdf.setStyle(TableStyle([
-                                    ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1B2A4A")),
-                                    ('TEXTCOLOR', (0,0), (-1,0), colors.white),
-                                    ('ALIGN', (0,0), (-1,-1), 'CENTER'),
-                                    ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-                                    ('FONTSIZE', (0,0), (-1,-1), 7.5),
-                                    ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#CBD5E1")),
-                                    ('TOPPADDING', (0,0), (-1,-1), 3),
-                                    ('BOTTOMPADDING', (0,0), (-1,-1), 3),
-                                ]))
-                                story.append(t_pdf)
-
-                            story.append(Spacer(1, 10))
-                            build_pdf_footer_and_signatures(story, qr_buf)
-
-                            doc.build(story)
-                            buffer.seek(0)
-                            ui.download(buffer.getvalue(), filename=f"Concrete_Calculation_Sheet_{ticket_input.value}.pdf")
-                            ui.notify('Official Calculation Sheet PDF downloaded successfully!', type='positive')
-                        except Exception as e:
-                            ui.notify(f'PDF Generation Error: {str(e)}', type='negative')
-
-                    def download_csv_export():
-                        df = pd.DataFrame({
-                            "Calculation Field": ["Project Name", "Location", "Specified f_cu", "28-Day Characteristic f_cu", "Compliance Verdict", "Truck No", "Batch Ticket ID", "Engineer", "Verification UID"],
-                            "Value": [
-                                project_name_input.value, 
-                                pour_location_input.value, 
-                                str(fcu_input.value), 
-                                f"{s28['fcu']:.2f}" if s28 else "N/A", 
-                                "PASS" if s28 and s28['pass'] else "FAIL", 
-                                truck_input.value, 
-                                ticket_input.value, 
-                                engineer_input.value,
-                                unique_uid
-                            ]
-                        })
-                        csv_data = df.to_csv(index=False).encode('utf-8')
-                        ui.download(csv_data, filename=f"Concrete_Calculation_Sheet_{ticket_input.value}.csv")
-                        ui.notify('CSV Calculation Sheet downloaded successfully!', type='positive')
-
-                    ui.button('Download Official Calculation PDF', on_click=download_pdf_report).classes('primary-btn flex-1')
-                    ui.button('Export Calculation CSV', on_click=download_csv_export).classes('primary-btn flex-1')
+                except Exception as ex:
+                    result_output_area.clear()
+                    with result_output_area:
+                        ui.notify(f'Calculation Error: {str(ex)}', type='negative')
 
             stage_selector = ui.select(
-                label='Select Stage to Display Table & Details',
+                label='Select Stage Display Filter',
                 options=['All Stages', '7-Day Stage', '14-Day Stage', '28-Day Stage'],
                 value='All Stages',
                 on_change=run_verification
@@ -532,13 +436,7 @@ def main_page():
             result_output_area = ui.column().classes('w-full')
             export_buttons_area = ui.row().classes('w-full gap-4 mt-4')
 
-            def parse_cubes(text):
-                try:
-                    return [float(x.strip()) for x in text.split(',') if x.strip()]
-                except ValueError:
-                    return []
-
-            ui.button('Run Statistical Calculation & Verification', on_click=run_verification).classes('primary-btn q-my-md')
+            ui.button('Run AI Statistical Calculation & Verification', on_click=run_verification).classes('primary-btn q-my-md')
             run_verification() # Initial render
 
         # --- TAB 2: AI MULTI-STANDARD AUDITOR ---
@@ -807,10 +705,28 @@ def main_page():
                     return
 
                 try:
+                    # Define a powerful engineering system instruction
+                    system_prompt = (
+                        "You are an elite Senior Civil, Geotechnical, and Structural Quality Engineering Expert "
+                        "acting as a master multi-standard technical assistant. "
+                        "\n\nSTRICT RULES:"
+                        "\n1. STANDARD COMPLIANCE: Ground all technical answers, design formulas, specifications, and "
+                        "recommendations strictly in the requested codes: ECP 203 (Concrete Structures), ECP 202 (Soil Mechanics & Foundations), "
+                        "ECP 104 (Subgrade & Pavements), ASTM, AASHTO, BS, EN, and ISO. Always cite the exact code and clause number when applicable."
+                        "\n2. UNIT SYSTEM: Use strictly METRIC (SI) units (e.g., mm, cm, m, MPa, kN, kg/m³, °C) for all dimensions, loads, "
+                        "stresses, and material properties. DO NOT use imperial units (inches, feet, psi, kips) unless the user explicitly requests them."
+                        "\n3. PROFESSIONAL DEPTH & FORMATTING: Avoid superficial or conversational fluff. Provide exhaustive, engineering-grade responses. "
+                        "You MUST structure your responses using clear Markdown headings, explicit mathematical formulas (using standard LaTeX or clear text formatting), "
+                        "and well-organized Markdown data tables for parameters, limits, or mix designs."
+                    )
+
                     res = client.models.generate_content(
-                        model='gemini-3.5-flash-lite', 
+                        model='gemini-2.5-flash', # Or gemini-3.5-flash-lite / flash depending on your API setup
                         contents=q,
-                        config=types.GenerateContentConfig(temperature=0.2)
+                        config=types.GenerateContentConfig(
+                            temperature=0.1,  # Lower temperature for strict, factual, and consistent engineering outputs
+                            system_instruction=system_prompt
+                        )
                     )
                     chat_messages.append({"role": "assistant", "content": clean_ai_text(res.text)})
                 except Exception as e:
