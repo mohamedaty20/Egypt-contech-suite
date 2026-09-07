@@ -297,6 +297,7 @@ def main_page():
         
 
        # --- TAB 1: CONCRETE CALCULATION SHEET & VERIFIER ---
+       # --- TAB 1: CONCRETE CALCULATION SHEET & VERIFIER ---
         with ui.tab_panel(t_dash):
             ui.label('Comprehensive Concrete Cube Calculation Sheet & Statistical Verifier (ECP 203)').classes('text-2xl font-bold text-white mb-4')
             
@@ -334,20 +335,19 @@ def main_page():
                     Perform a complete, professional, exhaustive statistical evaluation and code verification for concrete cube test results.
                     
                     PROJECT PARAMETERS:
-                    - Governing Core Standards: Egyptian Code ECP 203 (Primary), ECP 202, ECP 104, ASTM C39, BS EN, ISO.
-                    - Supplementary Standard Selected by User: {supp_val}
+                    - Governing Core Standards: Egyptian Code ECP 203 (Primary), ECP 202, ASTM C39.
+                    - Supplementary Standard: {supp_val}
                     - Specified 28-Day Characteristic Compressive Strength (f_cu): {fcu_input.value} N/mm²
                     - 7-Day Crushing Test Values: {c7_input.value} N/mm²
                     - 14-Day Crushing Test Values: {c14_input.value} N/mm²
                     - 28-Day Crushing Test Values: {c28_input.value} N/mm²
-                    - Mix Details: Cement Content = {cement_input.value} kg/m³, Free Water Content = {water_input.value} kg/m²
-                    - Mixer Truck No: {truck_input.value} | Batch Ticket ID: {ticket_input.value}
+                    - Mix Details: Cement = {cement_input.value} kg/m³, Water = {water_input.value} kg/m²
+                    - Truck No: {truck_input.value} | Ticket ID: {ticket_input.value}
 
                     REQUIREMENTS:
-                    1. Use strictly METRIC (SI) units (N/mm², MPa, kg/m³).
-                    2. Provide deep engineering analysis, step-by-step statistical formulas (Mean, Standard Deviation, Characteristic Strength f_cu,act using ECP 203 / ACI statistical factors).
-                    3. Format outputs with comprehensive Markdown Data Tables for each curing stage (specimen deviation, individual check vs 0.85*f_cu limit).
-                    4. Deliver a clear final compliance verdict (PASS / FAIL) based on ECP 203 compliance criteria. Avoid conversational fluff.
+                    1. Use strictly METRIC (SI) plain text units (N/mm², MPa, kg/m³). DO NOT use complex LaTeX math strings or backslashes for formulas. Write them out in simple readable text (e.g., Mean, Standard Deviation S, CoV %, Characteristic Strength).
+                    2. Provide clear Markdown Data Tables for each stage showing Specimen ID, Crushing Load, Deviation from Mean, and Individual Limit Check vs 0.85 * target limit.
+                    3. Deliver a clear final compliance verdict (PASS / FAIL) based on ECP 203 criteria.
                     """
 
                     response = client.models.generate_content(
@@ -365,7 +365,6 @@ def main_page():
                             ui.label('AI-Powered Comprehensive Concrete Calculation Sheet & Statistical Proof').classes('text-xl font-bold text-white mb-2')
                             ui.markdown(res_text)
 
-                    # Compute basic means locally for the Plotly evolution chart
                     def parse_vals(txt):
                         try:
                             vals = [float(x.strip()) for x in txt.split(',') if x.strip()]
@@ -711,7 +710,7 @@ def main_page():
             ui.button('Diagnose Defect & Get Repair Protocol', on_click=run_defect_diagnosis).classes('primary-btn')
 
         # --- TAB 4: AI CHATBOT ---
-        with ui.tab_panel(t_chat):
+       with ui.tab_panel(t_chat):
             ui.label('Core-Code Intelligent Assistant Chatbot (Master Engine)').classes('text-2xl font-bold text-white mb-2')
             ui.markdown('Ask any engineering, mix design, geotechnical, or pavement question based strictly on core codes (**ECP 203, ECP 202, ECP 104, ASTM, AASHTO, BS, EN, and ISO**).')
 
@@ -742,30 +741,27 @@ def main_page():
                     return
 
                 try:
-                    # Define a powerful engineering system instruction
                     system_prompt = (
                         "You are an elite Senior Civil, Geotechnical, and Structural Quality Engineering Expert "
                         "acting as a master multi-standard technical assistant. "
-                        "\n\nSTRICT RULES:"
+                        "\n\nSTRICT FORMATTING & COMPLIANCE RULES:"
                         "\n1. STANDARD COMPLIANCE: Ground all technical answers, design formulas, specifications, and "
-                        "recommendations strictly in the requested codes: ECP 203 (Concrete Structures), ECP 202 (Soil Mechanics & Foundations), "
-                        "ECP 104 (Subgrade & Pavements), ASTM, AASHTO, BS, EN, and ISO. Always cite the exact code and clause number when applicable."
-                        "\n2. UNIT SYSTEM: Use strictly METRIC (SI) units (e.g., mm, cm, m, MPa, kN, kg/m³, °C) for all dimensions, loads, "
-                        "stresses, and material properties. DO NOT use imperial units (inches, feet, psi, kips) unless the user explicitly requests them."
-                        "\n3. PROFESSIONAL DEPTH & FORMATTING: Avoid superficial or conversational fluff. Provide exhaustive, engineering-grade responses. "
-                        "You MUST structure your responses using clear Markdown headings, explicit mathematical formulas (using standard LaTeX or clear text formatting), "
-                        "and well-organized Markdown data tables for parameters, limits, or mix designs."
+                        "recommendations strictly in the requested codes: ECP 203, ECP 202, ECP 104, ASTM, AASHTO, BS, EN, and ISO. Cite exact clauses."
+                        "\n2. UNIT SYSTEM: Use strictly METRIC (SI) units (mm, cm, m, MPa, kN, kg/m³, °C). DO NOT use imperial units."
+                        "\n3. NO LATEX / NO RAW MATH BLOCKS: DO NOT use LaTeX double-dollar signs ($$), backslashes for math symbols, or broken markdown formatting like four asterisks (****). Write all formulas clearly in clean readable plain text (e.g., Mean = sum(x)/n, Standard Deviation S, CoV %). Use clean standard markdown tables and headings."
                     )
 
                     res = client.models.generate_content(
-                        model='gemini-3.5-flash-lite', # Or gemini-3.5-flash-lite / flash depending on your API setup
+                        model='gemini-3.5-flash-lite',
                         contents=q,
                         config=types.GenerateContentConfig(
-                            temperature=0.1,  # Lower temperature for strict, factual, and consistent engineering outputs
+                            temperature=0.1,
                             system_instruction=system_prompt
                         )
                     )
-                    chat_messages.append({"role": "assistant", "content": clean_ai_text(res.text)})
+                    
+                    cleaned_response = clean_ai_text(res.text).replace('$$', '').replace('****', '**')
+                    chat_messages.append({"role": "assistant", "content": cleaned_response})
                 except Exception as e:
                     chat_messages.append({"role": "assistant", "content": f"Error: {str(e)}"})
                 render_chat()
