@@ -30,6 +30,7 @@ from reportlab.platypus import (
     Table,
     TableStyle,
     Image as ReportLabImage,
+    PageBreak,
 )
 
 # Load environment variables securely from .env
@@ -437,10 +438,11 @@ def main_page():
                             rep_date = datetime.date.today().strftime('%Y-%m-%d')
                             qr_buf = generate_qr_code(f"UID: {unique_uid} | ECP 203 Calculation Sheet - {project_name_input.value} - {rep_date}")
 
+                            # --- PAGE 1: COVER, METADATA & EXECUTIVE SUMMARY ---
                             build_pdf_header(
                                 story, 
                                 "CONCRETE CUBE STATISTICAL CALCULATION SHEET", 
-                                "Official ECP 203 & ASTM C39 Quality Assurance & Calculation Proof Report", 
+                                "Official ECP 203 & ASTM C39 Quality Assurance & Comprehensive Calculation Report", 
                                 logo_bytes_holder['bytes'], 
                                 engineer_input.value, 
                                 project_name_input.value, 
@@ -452,18 +454,31 @@ def main_page():
                             
                             styles = getSampleStyleSheet()
                             body_style = ParagraphStyle("Body", parent=styles["Normal"], fontSize=8, textColor=colors.HexColor("#222222"), leading=12)
+                            h2_style = ParagraphStyle("H2Style", parent=styles["Heading2"], fontSize=10, textColor=colors.HexColor("#1B2A4A"), spaceBefore=10, spaceAfter=4)
                             
+                            story.append(Paragraph("<b>1. Executive Summary & Batch Specifications</b>", h2_style))
                             summary_html = f"""
-                            <b>Specified Grade (f_cu):</b> {fcu_input.value} N/mm²<br/>
+                            <b>Specified Characteristic Strength (f_cu):</b> {fcu_input.value} N/mm²<br/>
                             <b>Mixer Truck No:</b> {truck_input.value} &nbsp;|&nbsp; <b>Batch Ticket ID:</b> {ticket_input.value}<br/>
                             <b>Cement Content:</b> {cement_input.value} kg/m³ &nbsp;|&nbsp; <b>Free Water Content:</b> {water_input.value} kg/m³<br/>
                             <b>7-Day Mean Strength:</b> {s7['mean']:.2f} N/mm² ({len(c7)} cubes tested)<br/>
                             <b>14-Day Mean Strength:</b> {s14['mean']:.2f} N/mm² ({len(c14)} cubes tested)<br/>
-                            <b>28-Day Characteristic Strength (f_cu,act):</b> {s28['fcu']:.2f} N/mm² &nbsp;|&nbsp; <b>Compliance Verdict:</b> {'PASS' if s28['pass'] else 'FAIL'}<br/>
+                            <b>28-Day Characteristic Strength (f_cu,act):</b> {s28['fcu']:.2f} N/mm² &nbsp;|&nbsp; <b>Compliance Verdict:</b> {'PASS (Fully Compliant)' if s28['pass'] else 'FAIL (Non-Compliant)'}<br/>
                             <b>Statistical Mean (28-Day):</b> {s28['mean']:.2f} N/mm² &nbsp;|&nbsp; <b>Standard Deviation (sigma):</b> {s28['std']:.2f} N/mm²
                             """
                             story.append(Paragraph(summary_html, body_style))
-                            story.append(Spacer(1, 8))
+                            story.append(Spacer(1, 10))
+
+                            # --- PAGE 2: STATISTICAL FORMULATION & 28-DAY TABLE ---
+                            story.append(Paragraph("<b>2. Statistical Formulas & 28-Day Specimen Verification</b>", h2_style))
+                            math_explanation = """
+                            The characteristic strength $f_{cu,act}$ is calculated in accordance with Egyptian Code ECP 203 as the lower of:<br/>
+                            1. $\\text{Mean} - k \\cdot \\sigma$<br/>
+                            2. $0.85 \\cdot \\text{Mean}$<br/>
+                            Bessel's correction is applied for sample standard deviation with $n-1$ degrees of freedom. All individual cubes must satisfy $\\ge 0.85 \\times f_{cu}$.
+                            """
+                            story.append(Paragraph(math_explanation, body_style))
+                            story.append(Spacer(1, 6))
 
                             if s28:
                                 pdf_table_data = [["Specimen", "Crushing Load (N/mm²)", "Deviation from Mean", "Status"]]
@@ -485,7 +500,65 @@ def main_page():
                                 ]))
                                 story.append(t_pdf)
 
+                            story.append(PageBreak())
+
+                            # --- PAGE 3: 7-DAY & 14-DAY STAGES BREAKDOWN ---
+                            story.append(Paragraph("<b>3. Early Age Strength Verification (7-Day & 14-Day Stages)</b>", h2_style))
+                            
+                            if s7:
+                                story.append(Paragraph("<b>7-Day Stage Test Results (Target Ratio: 70%):</b>", body_style))
+                                s7_table_data = [["Specimen", "Crushing Load (N/mm²)", "Deviation", "Status"]]
+                                for idx, val in enumerate(s7['values'], 1):
+                                    dev = val - s7['mean']
+                                    st = "Acceptable" if val >= (0.85 * 0.70 * fcu_val) else "Below Limit"
+                                    s7_table_data.append([f"Cube #{idx}", f"{val:.2f}", f"{dev:+.2f}", st])
+                                t_s7 = Table(s7_table_data, colWidths=[100, 140, 140, 160])
+                                t_s7.setStyle(TableStyle([
+                                    ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1B2A4A")),
+                                    ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+                                    ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+                                    ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+                                    ('FONTSIZE', (0,0), (-1,-1), 7.5),
+                                    ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#CBD5E1")),
+                                    ('TOPPADDING', (0,0), (-1,-1), 3),
+                                    ('BOTTOMPADDING', (0,0), (-1,-1), 3),
+                                ]))
+                                story.append(t_s7)
+                                story.append(Spacer(1, 8))
+
+                            if s14:
+                                story.append(Paragraph("<b>14-Day Stage Test Results (Target Ratio: 85%):</b>", body_style))
+                                s14_table_data = [["Specimen", "Crushing Load (N/mm²)", "Deviation", "Status"]]
+                                for idx, val in enumerate(s14['values'], 1):
+                                    dev = val - s14['mean']
+                                    st = "Acceptable" if val >= (0.85 * 0.85 * fcu_val) else "Below Limit"
+                                    s14_table_data.append([f"Cube #{idx}", f"{val:.2f}", f"{dev:+.2f}", st])
+                                t_s14 = Table(s14_table_data, colWidths=[100, 140, 140, 160])
+                                t_s14.setStyle(TableStyle([
+                                    ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1B2A4A")),
+                                    ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+                                    ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+                                    ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+                                    ('FONTSIZE', (0,0), (-1,-1), 7.5),
+                                    ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#CBD5E1")),
+                                    ('TOPPADDING', (0,0), (-1,-1), 3),
+                                    ('BOTTOMPADDING', (0,0), (-1,-1), 3),
+                                ]))
+                                story.append(t_s14)
+
                             story.append(Spacer(1, 10))
+
+                            # --- PAGE 4: DURABILITY & APPROVAL SIGN-OFF ---
+                            story.append(Paragraph("<b>4. Durability & Quality Assurance Sign-Off</b>", h2_style))
+                            durability_html = f"""
+                            <b>Mix Proportion Durability Audit:</b><br/>
+                            * Cement Content: <b>{cement_input.value} kg/m³</b> (Meets ECP 203 minimum threshold of 350 kg/m³ for reinforced concrete)<br/>
+                            * Free Water Content: <b>{water_input.value} kg/m³</b><br/>
+                            * Calculated Water-Cement Ratio: <b>{float(water_input.value)/float(cement_input.value):.2f}</b> (Maximum allowable limit: 0.45)<br/>
+                            * Governing Inspection Standards: ECP 203, ECP 202, ECP 104, ASTM C39 / C31.
+                            """
+                            story.append(Paragraph(durability_html, body_style))
+                            story.append(Spacer(1, 12))
                             build_pdf_footer_and_signatures(story, qr_buf)
 
                             doc.build(story)
