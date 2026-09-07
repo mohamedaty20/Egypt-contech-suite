@@ -38,7 +38,7 @@ load_dotenv()
 api_key = os.getenv("GEMINI_API_KEY")
 client = genai.Client(api_key=api_key) if api_key else None
 
-# --- CUSTOM TAILWIND & DARK THEME STYLING ---
+# --- CUSTOM TAILWIND & HIGH-TECH SHARP STYLING ---
 app.native.window_args = {"resizable": True}
 
 ui.add_head_html('''
@@ -51,9 +51,9 @@ ui.add_head_html('''
     .custom-card {
         background-color: #1B2A4A;
         border: 1px solid #FF8C00;
-        border-radius: 10px;
+        border-radius: 0px !important;
         padding: 20px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        box-shadow: inset 0 0 10px rgba(0,191,255,0.05), 0 4px 6px rgba(0,0,0,0.4);
         margin-bottom: 15px;
     }
     .primary-btn {
@@ -61,31 +61,56 @@ ui.add_head_html('''
         color: #FFFFFF !important;
         border: 2px solid #FF8C00 !important;
         font-weight: 700 !important;
-        border-radius: 6px !important;
+        border-radius: 0px !important;
+        letter-spacing: 0.5px;
+        transition: all 0.2s ease-in-out;
     }
     .primary-btn:hover {
         background-color: #1E222D !important;
         color: #FF8C00 !important;
         border: 2px solid #00BFFF !important;
+        box-shadow: 0 0 10px rgba(0,191,255,0.3);
     }
     input, select, textarea {
         background-color: #1E222D !important;
         color: #FFFFFF !important;
         border: 1px solid #FF8C00 !important;
-        border-radius: 4px;
-        padding: 6px;
+        border-radius: 0px !important;
+        padding: 8px;
+    }
+    /* Custom Scrollbar & Sharp Table Accents */
+    ::-webkit-scrollbar {
+        width: 6px;
+        height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+        background: #031338;
+    }
+    ::-webkit-scrollbar-thumb {
+        background: #FF8C00;
+        border-radius: 0px;
     }
 </style>
 ''', shared=True)
+
+# --- TEXT & LATEX CLEANING UTILITY ---
+def clean_ai_response(text: str) -> str:
+    """Cleans raw AI LaTeX markers, unwanted markdown hashes, and weird formatting symbols for pristine UI and PDF rendering."""
+    if not text:
+        return ""
+    # Remove standalone dollar signs or inline math wrappers $...$
+    cleaned = re.sub(r'\$(.*?)\$', r'\1', text)
+    cleaned = cleaned.replace("$$", "")
+    # Clean excessive markdown headers if messy
+    cleaned = re.sub(r'#{1,6}\s*', '### ', cleaned)
+    return cleaned
 
 # --- PDF HELPER FUNCTIONS ---
 def format_markdown_for_reportlab(text):
     if not text:
         return ""
-    cleaned = re.sub(r'\$(.*?)\$', r'\1', text)
+    cleaned = clean_ai_response(text)
     cleaned = cleaned.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    cleaned = re.sub(r'[\-\|\:]+', ' ', cleaned)
-    cleaned = re.sub(r'#{1,6}\s*', '', cleaned)
     cleaned = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', cleaned)
     cleaned = re.sub(r'\*(.*?)\*', r'<i>\1</i>', cleaned)
     cleaned = re.sub(r'^\s*[\*\-]\s+', '&bull; ', cleaned, flags=re.MULTILINE)
@@ -143,13 +168,13 @@ def build_pdf_footer_and_signatures(story, qr_img_buffer):
 # --- MAIN APP LAYOUT ---
 @ui.page('/')
 def main_page():
-    # Top Header & Ticker
-    with ui.row().classes('w-full items-center justify-between bg-[#1B2A4A] px-6 py-3 rounded-lg border border-[#FF8C00] mb-4'):
+    # Top Header & Ticker with Sharp Rectangles
+    with ui.row().classes('w-full items-center justify-between bg-[#1B2A4A] px-6 py-3 border border-[#FF8C00] mb-3').style('border-radius: 0px !important;'):
         ui.label('🏗️ Multi-Disciplinary Civil, Geotechnical & Pavement Engineering Auditor').classes('text-xl font-bold text-[#00BFFF]')
         ui.label('Made by Eng. Mohamed Abd Al Aty').classes('text-sm text-white font-semibold')
 
     ticker_html = """
-    <div style="overflow: hidden; white-space: nowrap; background-color: #FF8C00; color: #031338; padding: 6px 0; font-weight: bold; font-size: 13px; margin-bottom: 15px; border-radius: 4px;">
+    <div style="overflow: hidden; white-space: nowrap; background-color: #FF8C00; color: #031338; padding: 6px 0; font-weight: bold; font-size: 13px; margin-bottom: 12px; border-radius: 0px;">
       <div style="display: inline-block; padding-left: 100%; animation: marquee 25s linear infinite;">
         🚀 Core Compliance Active: ECP 203, ECP 202, ECP 104, ASTM, AASHTO, BS, EN, ISO &nbsp;&nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;&nbsp; ⚠️ Multi-Disciplinary Engineering & Geotechnical QA/QC Verifier &nbsp;&nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;&nbsp; 🏗️ Active Site Inspection Portal
       </div>
@@ -161,7 +186,7 @@ def main_page():
     ui.add_head_html(ticker_html)
 
     # --- SIDEBAR CONFIGURATION ---
-    with ui.left_drawer().classes('bg-[#1B2A4A] text-white p-4').style('width: 340px;'):
+    with ui.left_drawer().classes('bg-[#1B2A4A] text-white p-4').style('width: 340px; border-right: 1px solid #FF8C00;'):
         ui.label('PROJECT METADATA').classes('text-[#00BFFF] font-bold text-base mb-2')
         project_name_input = ui.input(label='Project Name', value='Highway Expansion Project').classes('w-full mb-2')
         pour_location_input = ui.input(label='Structural Element / Chainage', value='Highway Section Ch. 12+500').classes('w-full mb-4')
@@ -200,7 +225,7 @@ def main_page():
     logo_upload.on('upload', handle_logo)
 
     # --- TABS / SCREENS NAVIGATION ---
-    with ui.tabs().classes('w-full text-[#00BFFF]') as tabs:
+    with ui.tabs().classes('w-full text-[#00BFFF] bg-[#1B2A4A] border border-[#FF8C00]').style('border-radius: 0px !important;') as tabs:
         t_dash = ui.tab('📊 Concrete Verifier Dashboard', icon='dashboard')
         t_audit = ui.tab('🤖 AI Multi-Standard Auditor', icon='psychology')
         t_defect = ui.tab('🔍 Defect Diagnostic', icon='search')
@@ -249,8 +274,6 @@ def main_page():
                     passed = fcu_char >= target and min(cubes) >= (0.85 * target)
                     return {"mean": mean_v, "std": std_v, "fcu": fcu_char, "target": target, "pass": passed, "count": len(cubes), "min": min(cubes)}
 
-                s7 = evaluate_stage(c7, 0.70)
-                s14 = evaluate_stage(c14, 0.85)
                 s28 = evaluate_stage(c28, 1.00)
 
                 with result_output_area:
@@ -259,7 +282,7 @@ def main_page():
                         
                         if s28:
                             color = 'green' if s28['pass'] else 'red'
-                            ui.markdown(f"**28-Day Characteristic Strength ($f_{{cu}}$):** `{s28['fcu']:.2f} N/mm²` | **Target:** `{s28['target']} N/mm²` | **Verdict:** :{color}[**{'PASS' if s28['pass'] else 'FAIL'}**]")
+                            ui.markdown(f"**28-Day Characteristic Strength (fcu):** `{s28['fcu']:.2f} N/mm²` | **Target:** `{s28['target']} N/mm²` | **Verdict:** :{color}[**{'PASS' if s28['pass'] else 'FAIL'}**]")
                         else:
                             ui.warning('Please provide at least 3 valid cube strength values for 28-day testing.')
 
@@ -303,7 +326,7 @@ def main_page():
 
             def run_ai_audit():
                 if not client:
-                    ui.notify('Gemini API key missing in .env!', type='negative')
+                    ui.notify('Gemini API key missing in .env or Render environment!', type='negative')
                     return
                 if not uploaded_file_data['bytes']:
                     ui.notify('Please upload a file first!', type='warning')
@@ -319,6 +342,7 @@ def main_page():
                     You are an expert senior civil, geotechnical, and highway engineering consultant specializing in core Egyptian Codes (ECP 203, 202, 104) and international standards (ASTM, AASHTO, BS, EN, ISO).
                     Focus: {audit_focus}. Supplementary code: {supp_code_select.value}.
                     Provide a rigorous technical audit identifying compliance, code violations, risks, and required corrective actions.
+                    Do not use raw LaTeX math dollar signs ($...$) in your text response to ensure clean rendering.
                     """
                     
                     contents = [prompt]
@@ -336,7 +360,7 @@ def main_page():
                     with audit_output_container:
                         with ui.column().classes('custom-card w-full'):
                             ui.label('Audit Findings & Compliance Breakdown').classes('text-lg font-bold text-[#00BFFF]')
-                            ui.markdown(response.text)
+                            ui.markdown(clean_ai_response(response.text))
                 except Exception as ex:
                     audit_output_container.clear()
                     with audit_output_container:
@@ -376,13 +400,14 @@ def main_page():
                     1. Element Identification & Defect Classification.
                     2. Root Cause Analysis.
                     3. Applicable Standards and Remediation Procedure using local products (Sika Egypt / Fosroc).
+                    Do not use raw LaTeX math dollar signs ($...$) in your text response.
                     """
                     response = client.models.generate_content(model='gemini-3.5-flash-lite', contents=[prompt, img])
                     defect_output.clear()
                     with defect_output:
                         with ui.column().classes('custom-card w-full'):
                             ui.label('Forensic Diagnosis & Repair Protocol').classes('text-lg font-bold text-[#00BFFF]')
-                            ui.markdown(response.text)
+                            ui.markdown(clean_ai_response(response.text))
                 except Exception as ex:
                     defect_output.clear()
                     with defect_output:
@@ -404,8 +429,8 @@ def main_page():
                 with chat_container:
                     for msg in chat_messages:
                         bg = 'bg-[#121E36]' if msg['role'] == 'assistant' else 'bg-[#2A3F6A]'
-                        with ui.row().classes(f'w-full p-3 rounded-lg mb-2 {bg}'):
-                            ui.markdown(f"**{msg['role'].capitalize()}:** {msg['content']}")
+                        with ui.row().classes(f'w-full p-3 mb-2 {bg}').style('border-radius: 0px !important;'):
+                            ui.markdown(f"**{msg['role'].capitalize()}:** {clean_ai_response(msg['content'])}")
 
             render_chat()
 
@@ -424,7 +449,7 @@ def main_page():
                     return
 
                 try:
-                    sys_prompt = f"You are an expert AI engineering assistant specialized in ECP 203, ECP 202, ECP 104, ASTM, AASHTO, BS, EN, and ISO. Supplementary: {supp_code_select.value}."
+                    sys_prompt = f"You are an expert AI engineering assistant specialized in ECP 203, ECP 202, ECP 104, ASTM, AASHTO, BS, EN, and ISO. Supplementary: {supp_code_select.value}. Do not use raw LaTeX math dollar signs ($...$)."
                     res = client.models.generate_content(model='gemini-3.5-flash-lite', contents=f"{sys_prompt}\n\nQuestion: {q}")
                     chat_messages.append({"role": "assistant", "content": res.text})
                 except Exception as e:
@@ -437,7 +462,7 @@ def main_page():
         with ui.tab_panel(t_handbook):
             ui.label('📖 Multi-Standard Civil Engineering Technical Handbook').classes('text-xl font-bold text-[#FF8C00] mb-4')
             
-            with ui.tabs().classes('w-full text-[#00BFFF]') as hb_tabs:
+            with ui.tabs().classes('w-full text-[#00BFFF] bg-[#1B2A4A] border border-[#FF8C00]').style('border-radius: 0px !important;') as hb_tabs:
                 h1 = ui.tab('ECP 203 & Concrete')
                 h2 = ui.tab('ECP 202 & Soils')
                 h3 = ui.tab('ECP 104 & Roads')
@@ -452,7 +477,6 @@ def main_page():
                     ui.markdown('### Egyptian Code for Roads and Airfields (ECP 104)\n- Subgrade preparation, unbound subbase, bituminous asphalt, and jointed concrete pavements.\n- CBR testing, Marshall stability testing.')
                 with ui.tab_panel(h4):
                     ui.markdown('### International Standards (ASTM, AASHTO, BS, EN, ISO)\n- ASTM C39 / D1557, AASHTO LRFD specifications, Eurocode 2 / BS EN 1992.')
-
 
 import os
 ui.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)), title='Multi-Standard Engineering Auditor', favicon='🏗️', reload=False)
