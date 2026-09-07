@@ -295,7 +295,8 @@ def main_page():
 
     with ui.tab_panels(tabs, value=t_dash).classes('w-full bg-transparent'):
         
-# --- TAB 1: CONCRETE CALCULATION SHEET & VERIFIER ---
+
+       # --- TAB 1: CONCRETE CALCULATION SHEET & VERIFIER ---
         with ui.tab_panel(t_dash):
             ui.label('Comprehensive Concrete Cube Calculation Sheet & Statistical Verifier (ECP 203)').classes('text-2xl font-bold text-white mb-4')
             
@@ -315,6 +316,7 @@ def main_page():
             def run_verification():
                 result_output_area.clear()
                 export_buttons_area.clear()
+                chart_area.clear()
                 
                 if not client:
                     ui.notify('Gemini API key missing in .env!', type='negative')
@@ -362,6 +364,41 @@ def main_page():
                         with ui.column().classes('custom-card w-full'):
                             ui.label('AI-Powered Comprehensive Concrete Calculation Sheet & Statistical Proof').classes('text-xl font-bold text-white mb-2')
                             ui.markdown(res_text)
+
+                    # Compute basic means locally for the Plotly evolution chart
+                    def parse_vals(txt):
+                        try:
+                            vals = [float(x.strip()) for x in txt.split(',') if x.strip()]
+                            return sum(vals)/len(vals) if vals else 0
+                        except:
+                            return 0
+
+                    m7 = parse_vals(c7_input.value)
+                    m14 = parse_vals(c14_input.value)
+                    m28 = parse_vals(c28_input.value)
+                    target_fcu = float(fcu_input.value) if fcu_input.value else 30.0
+
+                    with chart_area:
+                        fig = go.Figure()
+                        fig.add_trace(go.Scatter(
+                            x=['7-Day', '14-Day', '28-Day', 'Target Grade'], 
+                            y=[m7, m14, m28, target_fcu], 
+                            mode='lines+markers+text',
+                            text=[f"{m7:.1f}", f"{m14:.1f}", f"{m28:.1f}", f"{target_fcu:.1f}"], 
+                            textposition="top center",
+                            line=dict(color='#00BFFF', width=3), 
+                            marker=dict(size=10, color='#FF8C00')
+                        ))
+                        fig.add_hline(y=target_fcu, line_dash="dash", line_color="#22C55E", annotation_text=f"Target f_cu ({target_fcu} N/mm²)", annotation_position="bottom right")
+                        fig.update_layout(
+                            title='Compressive Strength Evolution & Target Threshold',
+                            template='plotly_dark',
+                            paper_bgcolor='#1B2A4A',
+                            plot_bgcolor='#1B2A4A',
+                            margin=dict(t=40, b=20, l=40, r=20),
+                            height=300
+                        )
+                        ui.plotly(fig).classes('w-full mt-4')
 
                     with export_buttons_area:
                         unique_uid = f"ECP-AI-{uuid.uuid4().hex[:8].upper()}"
@@ -434,11 +471,11 @@ def main_page():
             ).classes('w-full md:w-1/3 mb-4')
 
             result_output_area = ui.column().classes('w-full')
+            chart_area = ui.column().classes('w-full')
             export_buttons_area = ui.row().classes('w-full gap-4 mt-4')
 
             ui.button('Run AI Statistical Calculation & Verification', on_click=run_verification).classes('primary-btn q-my-md')
             run_verification() # Initial render
-
         # --- TAB 2: AI MULTI-STANDARD AUDITOR ---
         with ui.tab_panel(t_audit):
             ui.label('AI Multi-Standard Engineering Auditor (Master Suite)').classes('text-2xl font-bold text-white mb-2')
