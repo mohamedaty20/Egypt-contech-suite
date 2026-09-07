@@ -1,14 +1,12 @@
 import io
 import datetime
 import os
-import re
 import uuid
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import qrcode
 import pypdf
-from PIL import Image
 
 # Dotenv & FastAPI / NiceGUI
 from dotenv import load_dotenv
@@ -80,7 +78,6 @@ ui.add_head_html('''
     .q-field__native, .q-field__input, .q-field__label {
         color: #FFFFFF !important;
     }
-    /* Fix Quasar Dropdown Menu & Select Box Contrast */
     .q-menu, .q-popover, .q-virtual-scroll__content {
         background-color: #1B2A4A !important;
         color: #FFFFFF !important;
@@ -94,10 +91,18 @@ ui.add_head_html('''
         background-color: #000000 !important;
         color: #FF8C00 !important;
     }
-    /* Instant Tab Transitions (No sliding) */
-    .q-tab-panel {
-        animation: none !important;
-        transition: none !important;
+    /* Fixed Footer layout clearing left drawer */
+    .app-footer {
+        position: relative;
+        width: 100%;
+        background-color: #1B2A4A;
+        border-top: 2px solid #FF8C00;
+        padding: 16px 20px;
+        margin-top: 50px;
+        text-align: center;
+        color: #FFFFFF;
+        font-size: 12px;
+        box-sizing: border-box;
     }
 </style>
 ''', shared=True)
@@ -119,7 +124,6 @@ def build_pdf_header(story, doc_title, subtitle, logo_bytes, engineer, project, 
     sub_style = ParagraphStyle("DocSub", parent=styles["Normal"], fontSize=10, textColor=colors.HexColor("#FF8C00"), spaceAfter=8, alignment=0, fontName="Helvetica-Bold")
     meta_style = ParagraphStyle("MetaStyle", parent=styles["Normal"], fontSize=8, textColor=colors.HexColor("#333333"), leading=12, fontName="Helvetica")
 
-    header_table_data = []
     meta_html = f"""
     <b>Project Name:</b> {project}<br/>
     <b>Structural Element / Location:</b> {location}<br/>
@@ -221,15 +225,15 @@ def main_page():
             value="None (Strictly Core)"
         ).classes('w-full mb-4')
 
-        fcu_input = ui.number(label='Specified 28-Day Grade fcu (N/mm²)', value=30.0, step=5.0).classes('w-full mb-4')
+        fcu_input = ui.number(label='Specified 28-Day Grade fcu (N/mm2)', value=30.0, step=5.0).classes('w-full mb-4')
         
         ui.label('Batch Plant & Site Logs').classes('text-white font-bold text-sm mb-2')
         truck_input = ui.input(label='Mixer Truck No.', value='TRK-104').classes('w-full mb-2')
         ticket_input = ui.input(label='Batch Ticket ID', value='BT-99482').classes('w-full mb-4')
 
         ui.label('Mix Design Parameters').classes('text-white font-bold text-sm mb-2')
-        cement_input = ui.input(label='Cement Content (kg/m³)', value='350.0').classes('w-full mb-2')
-        water_input = ui.input(label='Free Water Content (kg/m³)', value='150.0').classes('w-full mb-4')
+        cement_input = ui.input(label='Cement Content (kg/m3)', value='350.0').classes('w-full mb-2')
+        water_input = ui.input(label='Free Water Content (kg/m3)', value='150.0').classes('w-full mb-4')
         
         engineer_input = ui.input(label='Engineer Name', value='Eng. Mohamed Abd Al Aty').classes('w-full mb-2')
         
@@ -295,13 +299,13 @@ def main_page():
 
                 def evaluate_stage(cubes, ratio):
                     if not cubes or len(cubes) < 3: return None
-                    mean_v = np.mean(cubes)
-                    std_v = np.std(cubes, ddof=1) if len(cubes) > 1 else 0.0
+                    mean_v = float(np.mean(cubes))
+                    std_v = float(np.std(cubes, ddof=1)) if len(cubes) > 1 else 0.0
                     k = 1.91 if len(cubes) < 30 else 1.64
                     fcu_char = max(mean_v - k * std_v, 0.85 * mean_v)
                     target = ratio * fcu_val
                     passed = fcu_char >= target and min(cubes) >= (0.85 * target)
-                    return {"mean": mean_v, "std": std_v, "fcu": fcu_char, "target": target, "pass": passed, "count": len(cubes), "min": min(cubes)}
+                    return {"mean": mean_v, "std": std_v, "fcu": fcu_char, "target": target, "pass": passed, "count": len(cubes), "min": min(cubes), "max": max(cubes)}
 
                 s7 = evaluate_stage(c7, 0.70)
                 s14 = evaluate_stage(c14, 0.85)
@@ -309,22 +313,36 @@ def main_page():
 
                 with result_output_area:
                     with ui.column().classes('custom-card w-full'):
-                        ui.label('Statistical Evaluation Results & Compliance (ECP 203)').classes('text-xl font-bold text-white mb-2')
+                        ui.label('Comprehensive Statistical Evaluation & Engineering Breakdown (ECP 203)').classes('text-xl font-bold text-white mb-3')
                         
                         if s28:
                             color = 'green' if s28['pass'] else 'red'
-                            ui.markdown(f"**28-Day Characteristic Strength (fcu):** `{s28['fcu']:.2f} N/mm²` | **Target:** `{s28['target']} N/mm²` | **Verdict:** :{color}[**{'PASS' if s28['pass'] else 'FAIL'}**]")
-                            ui.markdown(f"• **Mean Strength:** `{s28['mean']:.2f} N/mm²` | **Standard Deviation:** `{s28['std']:.2f}` | **Sample Size:** `{s28['count']}`")
+                            verdict_text = 'PASS (Fully Compliant)' if s28['pass'] else 'FAIL (Non-Compliant with ECP 203 Limits)'
+                            
+                            ui.markdown(f"### Overall 28-Day Compliance Verdict: :{color}[**{verdict_text}**]")
+                            ui.markdown(f"""
+                            **Detailed Statistical Analysis & Mathematical Formulation:**
+                            * **Specified Characteristic Strength (fcu):** `{fcu_val:.2f} N/mm²`
+                            * **Calculated 28-Day Characteristic Strength (fcu,act):** `max(Mean - k * sigma, 0.85 * Mean)` = `**{s28['fcu']:.2f} N/mm²**`
+                            * **Statistical Mean Strength (Mean):** `{s28['mean']:.2f} N/mm²` (Average of {s28['count']} samples: `{c28_input.value}`)
+                            * **Standard Deviation (sigma):** `{s28['std']:.2f} N/mm²` (Calculated with Bessel's correction $N-1$)
+                            * **Safety Factor Multiplier (k):** `1.91` for sample size `n = {s28['count']}` under ECP 203 guidelines.
+                            * **Minimum Individual Cube Value:** `{s28['min']:.2f} N/mm²` (Required minimum threshold: `0.85 * fcu = {0.85 * fcu_val:.2f} N/mm²`). Max value: `{s28['max']:.2f} N/mm²`.
+                            """)
+                            
+                            try:
+                                cem_v = float(cement_input.value)
+                                wat_v = float(water_input.value)
+                                wc = wat_v / cem_v if cem_v > 0 else 0
+                                ui.markdown(f"""
+                                **Mix Design & Durability Verification (ECP 203):**
+                                * **Water-Cement Ratio (W/C):** `{wc:.2f}` (Calculated as `{wat_v} kg/m³` water / `{cem_v} kg/m³` cement). Maximum permissible ratio for normal structural concrete under ECP 203 is `0.45`.
+                                * **Cement Content Compliance:** `{cem_v} kg/m³` (Minimum required for standard structural exposure is `350 kg/m³`).
+                                """)
+                            except ValueError:
+                                pass
                         else:
-                            ui.warning('Please provide at least 3 valid cube strength values for 28-day testing.')
-
-                        try:
-                            cem_v = float(cement_input.value)
-                            wat_v = float(water_input.value)
-                            wc = wat_v / cem_v if cem_v > 0 else 0
-                            ui.markdown(f"• **Calculated W/C Ratio:** `{wc:.2f}` (Max allowed under ECP 203: `0.45`órico)")
-                        except ValueError:
-                            pass
+                            ui.warning('Please provide at least 3 valid cube strength values for 28-day testing to generate statistical evaluations.')
 
                         stages = ['7-Day', '14-Day', '28-Day', 'Target Grade']
                         means = [
@@ -451,6 +469,7 @@ def main_page():
             ui.upload(label='Select PDF or Image File', auto_upload=True, on_upload=handle_audit_upload).props('flat dark').classes('w-full mb-4 bg-[#1E293B] rounded-lg')
 
             audit_output_container = ui.column().classes('w-full')
+            audit_export_container = ui.row().classes('w-full gap-4 mt-4')
 
             def run_ai_audit():
                 if not client:
@@ -461,6 +480,8 @@ def main_page():
                     return
 
                 audit_output_container.clear()
+                audit_export_container.clear()
+                
                 with audit_output_container:
                     ui.spinner('ios', size='lg').classes('self-center text-[#00BFFF]')
                     ui.label('Running multi-standard AI engineering audit...').classes('self-center text-sm')
@@ -482,12 +503,65 @@ def main_page():
                         contents.append(img_part)
 
                     response = client.models.generate_content(model='gemini-3.5-flash-lite', contents=contents)
+                    audit_result_text = response.text
                     
                     audit_output_container.clear()
                     with audit_output_container:
                         with ui.column().classes('custom-card w-full'):
                             ui.label('Audit Findings & Compliance Breakdown').classes('text-xl font-bold text-white mb-2')
-                            ui.markdown(response.text)
+                            ui.markdown(audit_result_text)
+
+                    # Add Export Options for AI Audit
+                    with audit_export_container:
+                        unique_uid = f"AUDIT-{uuid.uuid4().hex[:8].upper()}"
+
+                        def download_audit_pdf():
+                            try:
+                                buffer = io.BytesIO()
+                                doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=36, leftMargin=36, topMargin=36, bottomMargin=36)
+                                story = []
+                                rep_date = datetime.date.today().strftime('%Y-%m-%d')
+                                qr_buf = generate_qr_code(f"UID: {unique_uid} | AI Audit - {project_name_input.value}")
+
+                                build_pdf_header(
+                                    story, 
+                                    "AI MULTI-STANDARD ENGINEERING AUDIT REPORT", 
+                                    f"Focus: {audit_focus}", 
+                                    logo_bytes_holder['bytes'], 
+                                    engineer_input.value, 
+                                    project_name_input.value, 
+                                    pour_location_input.value, 
+                                    rep_date,
+                                    ticket_input.value,
+                                    unique_uid
+                                )
+                                styles = getSampleStyleSheet()
+                                body_style = ParagraphStyle("AuditBody", parent=styles["Normal"], fontSize=8.5, textColor=colors.HexColor("#222222"), leading=13)
+                                
+                                # Clean markdown asterisks for reportlab basic paragraph
+                                clean_text = audit_result_text.replace('#', '').replace('**', '<b>').replace('**', '</b>')
+                                story.append(Paragraph(clean_text.replace('\n', '<br/>'), body_style))
+                                story.append(Spacer(1, 10))
+                                build_pdf_footer_and_signatures(story, qr_buf)
+
+                                doc.build(story)
+                                buffer.seek(0)
+                                ui.download(buffer.getvalue(), filename=f"AI_Audit_Report_{ticket_input.value}.pdf")
+                                ui.notify('AI Audit PDF Report downloaded successfully!', type='positive')
+                            except Exception as ex:
+                                ui.notify(f'PDF Export Error: {str(ex)}', type='negative')
+
+                        def download_audit_csv():
+                            df = pd.DataFrame({
+                                "Audit Field": ["Project Name", "Focus", "Source File", "Engineer", "Verification UID", "Summary Findings"],
+                                "Value": [project_name_input.value, audit_focus, uploaded_file_data['name'], engineer_input.value, unique_uid, audit_result_text[:300].replace('\n', ' ')]
+                            })
+                            ui.download(df.to_csv(index=False).encode('utf-8'), filename=f"AI_Audit_{ticket_input.value}.csv")
+                            ui.notify('AI Audit CSV Summary downloaded!', type='positive')
+
+                        ui.button('Download AI Audit PDF Report', on_click=download_audit_pdf).classes('primary-btn flex-1')
+                        ui.button('Export Audit CSV', on_click=download_audit_csv).classes('primary-btn flex-1')
+
                 except Exception as ex:
                     audit_output_container.clear()
                     with audit_output_container:
@@ -549,7 +623,7 @@ def main_page():
 
             ui.button('Diagnose Defect & Get Repair Protocol', on_click=run_defect_diagnosis).classes('primary-btn')
 
-        # --- TAB 4: AI CHATBOT ---
+        # --- TAB 4: AI CHATBOT (STABLE STATE) ---
         with ui.tab_panel(t_chat):
             ui.label('Core-Code Intelligent Assistant Chatbot').classes('text-2xl font-bold text-white mb-2')
             ui.markdown('Ask any engineering, mix design, geotechnical, or pavement question based strictly on core codes (ECP 203, ECP 202, ECP 104, ASTM, AASHTO, BS, EN, ISO).')
@@ -571,14 +645,16 @@ def main_page():
             user_msg = ui.input(placeholder='Type your engineering question here...').classes('w-full mb-2')
 
             def send_chat():
-                if not user_msg.value.strip(): return
                 q = user_msg.value
+                if not q or not q.strip(): 
+                    return
+                
                 chat_messages.append({"role": "user", "content": q})
                 user_msg.value = ''
                 render_chat()
 
                 if not client:
-                    chat_messages.append({"role": "assistant", "content": "GEMINI_API_KEY is not configured."})
+                    chat_messages.append({"role": "assistant", "content": "GEMINI_API_KEY is not configured in environment variables."})
                     render_chat()
                     return
 
@@ -587,7 +663,8 @@ def main_page():
                     res = client.models.generate_content(model='gemini-3.5-flash-lite', contents=f"{sys_prompt}\n\nQuestion: {q}")
                     chat_messages.append({"role": "assistant", "content": res.text})
                 except Exception as e:
-                    chat_messages.append({"role": "assistant", "content": f"Error: {e}"})
+                    chat_messages.append({"role": "assistant", "content": f"Error communicating with Gemini model: {str(e)}"})
+                
                 render_chat()
 
             ui.button('Send Query', on_click=send_chat).classes('primary-btn')
@@ -609,55 +686,49 @@ def main_page():
                     * **Chapter 1: Scope & General Requirements**
                       - Governs design, material specification, batching, mixing, transport, casting, and curing of normal and high-strength concrete.
                     * **Chapter 2: Materials Specifications**
-                      - **Cement:** CEM I (Ordinary Portland Cement) or CEM II conforming to ES 4756-1 / EN 197-1. Minimum cement content for structural elements exposed to severe environments is 350 kg/m³.
+                      - **Cement:** CEM I (Ordinary Portland Cement) or CEM II conforming to ES 4756-1 / EN 197-1. Minimum cement content for structural elements exposed to severe environments is 350 kg/m3.
                       - **Aggregates:** Clean, graded coarse and fine aggregates conforming to ES 1109 / ASTM C33. Maximum aggregate size limited to 1/5 narrowest dimension or 3/4 clear spacing between rebars.
                       - **Water:** Potable water free of organic impurities, chlorides (< 500 ppm for reinforced concrete), and sulfates (< 1000 ppm).
                     * **Chapter 3: Mix Design & Characteristic Strength (fcu)**
                       - Characteristic strength fcu evaluated via standard 150mm cube crushing tests at 28 days.
-                      - Statistical compliance: fcu,min >= fcu + 1.64 * sigma or verified through rolling batches with target mean margin 1.34s to 2.33s.
+                      - Statistical compliance: fcu,min >= fcu + 1.64 * sigma or verified through rolling batches with target mean margin.
                       - Maximum water-cement ratio (W/C ratio) capped at 0.45 for standard structural applications and 0.40 for water-retaining structures.
                     * **Chapter 4: Construction & Curing Protocols**
                       - Continuous curing required for a minimum of 7 days using wet hessian, curing compounds, or ponding.
-                      - Formwork stripping times: Sides of beams/columns (24-48 hours), soffits of slabs (7-14 days depending on span and prop conditions).
                     ''')
                 with ui.tab_panel(h2):
                     ui.markdown('''
                     ### Egyptian Code for Soil Mechanics & Foundations (ECP 202) - Comprehensive Reference
                     * **Chapter 1: Subsurface Investigation & Soil Exploration**
-                      - Mandatory borehole drilling, Standard Penetration Testing (SPT - ASTM D1586), Cone Penetration Testing (CPT), and undisturbed sampling for deep and shallow foundations.
+                      - Mandatory borehole drilling, Standard Penetration Testing (SPT - ASTM D1586), Cone Penetration Testing (CPT), and undisturbed sampling.
                     * **Chapter 2: Shallow Foundations & Bearing Capacity**
                       - Ultimate bearing capacity calculated using Terzaghi, Meyerhof, or Hansen bearing capacity equations factoring cohesion (c), surcharge (q), and unit weight (gamma).
                       - Allowable bearing capacity determined by applying a minimum Factor of Safety (F.S. = 3.0 for static loads, 2.5 for seismic/wind combinations). Total settlement limited to 25-50mm.
                     * **Chapter 3: Deep Foundations & Pile Load Testing**
-                      - Bored and driven pile design including skin friction (fs) and end bearing (qb) evaluation.
-                      - Static load testing mandated up to 2.0 times the working load in accordance with ASTM D1143 / ECP 202 specifications. Integrity testing (PIT / Sonic Logging) required on 100% of major bridge/high-rise piles.
-                    * **Chapter 4: Earthworks & Compaction Control**
-                      - Subgrade compaction specifications: Minimum 95% to 98% Modified Proctor Maximum Dry Density (ASTM D1557 / AASHTO T180) at optimum moisture content (+/- 2%).
+                      - Static load testing mandated up to 2.0 times working load in accordance with ASTM D1143 / ECP 202.
                     ''')
                 with ui.tab_panel(h3):
                     ui.markdown('''
                     ### Egyptian Code for Roads, Highways and Airfields (ECP 104) - Comprehensive Reference
                     * **Chapter 1: Highway Geometrics & Classification**
-                      - Design speed, horizontal and vertical alignment curves, superelevation, and sight distance requirements for expressways, arterial, and local roads.
+                      - Design speed, horizontal and vertical alignment curves, superelevation, and sight distance requirements.
                     * **Chapter 2: Subgrade & Embankment Engineering**
-                      - CBR (California Bearing Ratio) testing requirements (ASTM D1883). Minimum subgrade CBR of 10% for heavy traffic loads; stabilized subgrade required if CBR < 7%.
-                    * **Chapter 3: Unbound Subbase & Base Course Layers**
-                      - Crushed stone aggregate base course (ABC) grading limits. Minimum relative compaction of 100% Modified Proctor. Layer thickness tolerances within +/- 10 mm.
-                    * **Chapter 4: Bituminous Pavements & Asphalt Mix Design**
-                      - Marshall Mix Design method (ASTM D6915 / AASHTO T245): Optimum bitumen content, stability, flow, air voids (3-5%), and voids in mineral aggregate (VMA).
+                      - CBR (California Bearing Ratio) testing requirements (ASTM D1883). Minimum subgrade CBR of 10% for heavy traffic loads.
+                    * **Chapter 3: Bituminous Pavements & Asphalt Mix Design**
+                      - Marshall Mix Design method (ASTM D6915 / AASHTO T245): Optimum bitumen content, stability, flow, and air voids (3-5%).
                     ''')
                 with ui.tab_panel(h4):
                     ui.markdown('''
                     ### International Engineering Standards (ASTM, AASHTO, BS, EN, ISO)
-                    * **ASTM Standards:** ASTM C39 (Compressive Strength of Cylindrical Concrete Specimens), ASTM C143 (Slump Test), ASTM D1557 (Modified Proctor Compaction), ASTM D698 (Standard Proctor).
-                    * **AASHTO Specifications:** AASHTO LRFD Bridge Design Specifications, AASHTO M 145 (Classification of Soils and Soil-Aggregate Mixtures for Highway Construction).
-                    * **BS EN / Eurocodes:** BS EN 1992 (Eurocode 2: Design of Concrete Structures), BS EN 1997 (Eurocode 7: Geotechnical Design), BS 1881 (Testing Concrete).
-                    * **ISO Quality Management:** ISO 9001 (Quality Management Systems in Construction), ISO 14001 (Environmental Management), ISO 45001 (Occupational Health & Safety).
+                    * **ASTM Standards:** ASTM C39 (Compressive Strength of Cylindrical Concrete Specimens), ASTM C143 (Slump Test), ASTM D1557 (Modified Proctor Compaction).
+                    * **AASHTO Specifications:** AASHTO LRFD Bridge Design Specifications, AASHTO M 145 (Classification of Soils and Soil-Aggregate Mixtures).
+                    * **BS EN / Eurocodes:** BS EN 1992 (Eurocode 2: Concrete Structures), BS EN 1997 (Eurocode 7: Geotechnical Design).
+                    * **ISO Quality Management:** ISO 9001 (Quality Management Systems), ISO 14001, ISO 45001.
                     ''')
 
-    # --- PROFESSIONAL COMPACT 100% FULL-WIDTH FOOTER BAR ---
+    # --- PROFESSIONAL FOOTER BAR (CLEARED FROM SIDEBAR) ---
     ui.markdown('''
-    <div style="width: 100vw; position: relative; left: 50%; right: 50%; margin-left: -50vw; margin-right: -50vw; background-color: #1B2A4A; border-top: 2px solid #FF8C00; padding: 12px 20px; margin-top: 40px; text-align: center; color: #FFFFFF; font-size: 11px; box-sizing: border-box;">
+    <div class="app-footer">
         <b>Multi-Standard Engineering Quality Assurance Portal</b> &nbsp;|&nbsp; Automated compliance verification across ECP 203, ECP 202, ECP 104, ASTM, AASHTO, BS, EN, and ISO standards.<br>
         <b>Official Direct Contacts & Professional Network:</b> 
         LinkedIn: <a href="https://www.linkedin.com/in/mohamed-abdalaty" target="_blank" style="color: #00BFFF; text-decoration: underline;">Mohamed Abd Al Aty</a> &nbsp;|&nbsp; 
