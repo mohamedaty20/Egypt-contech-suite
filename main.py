@@ -1500,12 +1500,13 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                     ui.button('Download Chat PDF Transcript', on_click=download_chat_pdf).classes('primary-btn flex-1')
 
             # =========================================================================
-            # TAB 5: PROFESSIONAL BOQ TAKEOFF
+            # TAB 5: PROFESSIONAL BOQ TAKEOFF (FIXED)
             # =========================================================================
             with ui.tab_panel(t_boq):
                 ui.label('Professional AI BOQ Takeoff & Cost Estimation').classes('text-2xl font-bold text-white mb-2')
                 ui.markdown('Upload project drawings (PDF, JPG, PNG). AI will extract quantities, and the engine will compute costs with wastage.').classes('markdown-body mb-2')
                 ui.markdown('*Designed to give accurate results with success rate near 98%, but results should be rechecked by a qualified engineer.*').classes('text-xs text-amber-400 mb-4')
+                ui.markdown('*For large PDFs (>10 MB), the extraction may take longer. Please be patient.*').classes('text-xs text-yellow-400 mb-4')
 
                 boq_status_label = ui.label('Status: No file uploaded yet').classes('text-xs text-amber-400 font-semibold mb-2')
                 boq_file_data = {'bytes': None, 'type': None}
@@ -1517,7 +1518,7 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                             boq_file_data['type'] = 'application/pdf'
                         else:
                             boq_file_data['type'] = 'image/jpeg'
-                        boq_status_label.set_text(f'File Ready: {e.file.name}')
+                        boq_status_label.set_text(f'File Ready: {e.file.name} ({(len(boq_file_data["bytes"])/1024/1024):.1f} MB)')
                         boq_status_label.classes(replace='text-xs text-emerald-400 font-semibold mb-2')
                         ui.notify(f'File uploaded: {e.file.name}', type='positive')
                     except Exception as ex:
@@ -1573,7 +1574,7 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                     boq_export_area.clear()
                     with boq_output_container:
                         ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
-                        ui.label('AI is extracting quantities from drawings... (this may take a moment)').classes('self-center text-sm')
+                        ui.label('AI is extracting quantities from drawings... (may take up to 2 minutes)').classes('self-center text-sm')
 
                     try:
                         arch_params = {
@@ -1639,35 +1640,42 @@ Example:
 ...
 """
                         contents = [prompt]
+
+                        # Process PDF or image
                         if boq_file_data['type'] == 'application/pdf':
                             try:
                                 reader = pypdf.PdfReader(io.BytesIO(boq_file_data['bytes']))
+                                # Read only first 5 pages to avoid huge text
                                 pages_text = []
                                 for i, page in enumerate(reader.pages[:5]):
                                     try:
-                                        pages_text.append(page.extract_text() or "")
+                                        txt = page.extract_text() or ""
+                                        pages_text.append(txt)
                                     except:
                                         pass
-                                text = "".join(pages_text)
-                                if len(text) > 8000:
-                                    text = text[:8000] + "\n... (truncated)"
-                                if text.strip():
-                                    contents.append(f"Extracted Text from Drawings (first pages):\n{text}")
+                                full_text = "".join(pages_text)
+                                if len(full_text) > 8000:
+                                    full_text = full_text[:8000] + "\n... (text truncated to 8000 chars)"
+                                if full_text.strip():
+                                    contents.append(f"Extracted Text from Drawings (first 5 pages):\n{full_text}")
                                 else:
-                                    contents.append("No readable text found in PDF. The AI will rely on image analysis if provided as image.")
+                                    # No text extracted - send PDF as document (Gemini may process it)
+                                    contents.append(types.Part.from_bytes(data=boq_file_data['bytes'], mime_type='application/pdf'))
+                                    ui.notify('No readable text in PDF – sending as image/document.', type='info')
                             except Exception as pdf_err:
-                                ui.notify(f'PDF reading error: {str(pdf_err)}. Trying image mode.', type='warning')
-                                img_part = types.Part.from_bytes(data=boq_file_data['bytes'], mime_type='application/pdf')
-                                contents.append(img_part)
+                                ui.notify(f'PDF reading error: {str(pdf_err)}. Sending as image.', type='warning')
+                                contents.append(types.Part.from_bytes(data=boq_file_data['bytes'], mime_type='application/pdf'))
                         else:
+                            # Image
                             img_part = types.Part.from_bytes(data=boq_file_data['bytes'], mime_type=boq_file_data['type'])
                             contents.append(img_part)
 
-                        extraction_text = await call_gemini(contents, temperature=0.1, timeout=90)
+                        # AI call with increased timeout
+                        extraction_text = await call_gemini(contents, temperature=0.1, timeout=120)
                         extracted_items = parse_ai_extraction(extraction_text)
 
                         if not extracted_items:
-                            ui.notify('AI could not extract any items. Please check the drawing.', type='warning')
+                            ui.notify('AI could not extract any items. Please ensure the drawing contains readable dimensions and labels.', type='warning')
                             boq_output_container.clear()
                             with boq_output_container:
                                 ui.markdown('No items extracted. Ensure the drawing contains readable dimensions and labels.').classes('text-amber-400')
