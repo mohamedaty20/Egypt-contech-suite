@@ -295,9 +295,7 @@ def main_page():
 
     with ui.tab_panels(tabs, value=t_dash).classes('w-full bg-transparent'):
         
-
-       # --- TAB 1: CONCRETE CALCULATION SHEET & VERIFIER ---
-       # --- TAB 1: CONCRETE CALCULATION SHEET & VERIFIER ---
+        # --- TAB 1: CONCRETE CALCULATION SHEET & VERIFIER ---
         with ui.tab_panel(t_dash):
             ui.label('Comprehensive Concrete Cube Calculation Sheet & Statistical Verifier (ECP 203)').classes('text-2xl font-bold text-white mb-4')
             
@@ -351,7 +349,7 @@ def main_page():
                     """
 
                     response = client.models.generate_content(
-                        model='gemini-3.5-flash-lite',
+                        model='gemini-2.5-flash',
                         contents=prompt,
                         config=types.GenerateContentConfig(temperature=0.1)
                     )
@@ -475,6 +473,7 @@ def main_page():
 
             ui.button('Run AI Statistical Calculation & Verification', on_click=run_verification).classes('primary-btn q-my-md')
             run_verification() # Initial render
+
         # --- TAB 2: AI MULTI-STANDARD AUDITOR ---
         with ui.tab_panel(t_audit):
             ui.label('AI Multi-Standard Engineering Auditor (Master Suite)').classes('text-2xl font-bold text-white mb-2')
@@ -547,7 +546,7 @@ def main_page():
 
                     config = types.GenerateContentConfig(temperature=0.1)
                     response = client.models.generate_content(
-                        model='gemini-3.5-flash-lite', 
+                        model='gemini-2.5-flash', 
                         contents=contents,
                         config=config
                     )
@@ -652,7 +651,7 @@ def main_page():
                 try:
                     img = types.Part.from_bytes(data=defect_file_data['bytes'], mime_type=defect_file_data['type'])
                     prompt = "Perform forensic structural evaluation and list repair products (Sika/Fosroc) complying with ECP 203 and ASTM."
-                    response = client.models.generate_content(model='gemini-3.5-flash-lite', contents=[prompt, img])
+                    response = client.models.generate_content(model='gemini-2.5-flash', contents=[prompt, img])
                     res_text = clean_ai_text(response.text)
                     defect_result_holder['text'] = res_text
 
@@ -710,7 +709,7 @@ def main_page():
             ui.button('Diagnose Defect & Get Repair Protocol', on_click=run_defect_diagnosis).classes('primary-btn')
 
         # --- TAB 4: AI CHATBOT ---
-       with ui.tab_panel(t_chat):
+        with ui.tab_panel(t_chat):
             ui.label('Core-Code Intelligent Assistant Chatbot (Master Engine)').classes('text-2xl font-bold text-white mb-2')
             ui.markdown('Ask any engineering, mix design, geotechnical, or pavement question based strictly on core codes (**ECP 203, ECP 202, ECP 104, ASTM, AASHTO, BS, EN, and ISO**).')
 
@@ -752,7 +751,7 @@ def main_page():
                     )
 
                     res = client.models.generate_content(
-                        model='gemini-3.5-flash-lite',
+                        model='gemini-2.5-flash',
                         contents=q,
                         config=types.GenerateContentConfig(
                             temperature=0.1,
