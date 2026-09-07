@@ -145,13 +145,11 @@ def clean_for_reportlab(text):
 def clean_ai_text(text):
     if not text:
         return ""
-    # Remove raw markdown table formatting lines and LaTeX dollar signs for pristine UI display
-    text = text.replace('$', '')
+    # Clean LaTeX dollar signs, backslashes, and markdown artifacts for pristine UI display
+    text = text.replace('$', '').replace('\\times', '*').replace('\\ge', '>=').replace('\\le', '<=')
     lines = text.split('\n')
     cleaned_lines = []
     for line in lines:
-        if re.search(r'^\s*\|?\s*[:\-]+\s*\|?', line):
-            continue
         cleaned_lines.append(line)
     return "\n".join(cleaned_lines)
 
@@ -237,10 +235,14 @@ def main_page():
     """
     ui.add_head_html(ticker_html)
 
-    # --- SIDEBAR CONFIGURATION ---
+    # --- SIDEBAR CONFIGURATION WITH COLLAPSE ARROW BUTTON ---
     supp_code_select = None
-    with ui.left_drawer().classes('bg-[#1B2A4A] text-white p-4').style('width: 340px;'):
-        ui.label('PROJECT METADATA').classes('text-white font-bold text-base mb-2')
+    sidebar = ui.left_drawer().classes('bg-[#1B2A4A] text-white p-4').style('width: 340px;')
+    with sidebar:
+        with ui.row().classes('w-full items-center justify-between mb-2'):
+            ui.label('PROJECT METADATA').classes('text-white font-bold text-base')
+            ui.button(icon='menu', on_click=sidebar.toggle).classes('primary-btn p-1 text-xs')
+            
         project_name_input = ui.input(label='Project Name', value='Highway Expansion Project').classes('w-full mb-2')
         pour_location_input = ui.input(label='Structural Element / Chainage', value='Highway Section Ch. 12+500').classes('w-full mb-4')
 
@@ -284,6 +286,9 @@ def main_page():
                 ui.notify(f'Error reading logo: {str(ex)}', type='negative')
 
         ui.upload(label='Upload Company Logo', auto_upload=True, on_upload=handle_logo_upload).props('flat dark').classes('w-full mb-2')
+
+    # Sidebar toggle floating button if closed
+    ui.button(icon='menu', on_click=sidebar.toggle).classes('fixed top-4 left-4 z-50 bg-[#1B2A4A] text-white border border-[#FF8C00] p-2 rounded shadow-lg')
 
     # --- TABS NAVIGATION ---
     with ui.tabs().classes('w-full text-white bg-[#1B2A4A] rounded-lg') as tabs:
@@ -344,12 +349,12 @@ def main_page():
 
                     REQUIREMENTS:
                     1. Use strictly METRIC (SI) plain text units (N/mm², MPa, kg/m³). DO NOT use complex LaTeX math strings or backslashes for formulas. Write them out in simple readable text (e.g., Mean, Standard Deviation S, CoV %, Characteristic Strength).
-                    2. Provide clear Markdown Data Tables for each stage showing Specimen ID, Crushing Load, Deviation from Mean, and Individual Limit Check vs 0.85 * target limit.
+                    2. Provide clear Markdown Data Tables wrapped properly for each stage showing Specimen ID, Crushing Load, Deviation from Mean, and Individual Limit Check vs 0.85 * target limit.
                     3. Deliver a clear final compliance verdict (PASS / FAIL) based on ECP 203 criteria.
                     """
 
                     response = client.models.generate_content(
-                        model='gemini-3.5-flash-lite',
+                        model='gemini-2.5-flash',
                         contents=prompt,
                         config=types.GenerateContentConfig(temperature=0.1)
                     )
@@ -532,7 +537,7 @@ def main_page():
                     You are a Principal Civil, Geotechnical and Highway Engineering Consultant and Lead Auditor specializing in core Egyptian Codes (ECP 203, ECP 202, ECP 104) alongside international frameworks (ASTM, AASHTO, BS EN, ISO).
                     Audit Focus: {audit_focus}
                     Active Supplementary Standard: {supp_val}
-                    Perform a comprehensive, rigorous technical audit of the provided document or image. Structure your report using clear markdown sections and clean data tables without raw markdown formatting errors.
+                    Perform a comprehensive, rigorous technical audit of the provided document or image. Structure your report using clear markdown sections and clean data tables in proper plain text without raw LaTeX or formatting errors.
                     """
                     
                     contents = [prompt]
@@ -546,7 +551,7 @@ def main_page():
 
                     config = types.GenerateContentConfig(temperature=0.1)
                     response = client.models.generate_content(
-                        model='gemini-3.5-flash-lite', 
+                        model='gemini-2.5-flash', 
                         contents=contents,
                         config=config
                     )
@@ -650,8 +655,8 @@ def main_page():
 
                 try:
                     img = types.Part.from_bytes(data=defect_file_data['bytes'], mime_type=defect_file_data['type'])
-                    prompt = "Perform forensic structural evaluation and list repair products (Sika/Fosroc) complying with ECP 203 and ASTM."
-                    response = client.models.generate_content(model='gemini-3.5-flash-lite', contents=[prompt, img])
+                    prompt = "Perform forensic structural evaluation and list repair products (Sika/Fosroc) complying with ECP 203 and ASTM in clean formatted tables."
+                    response = client.models.generate_content(model='gemini-2.5-flash', contents=[prompt, img])
                     res_text = clean_ai_text(response.text)
                     defect_result_holder['text'] = res_text
 
@@ -751,7 +756,7 @@ def main_page():
                     )
 
                     res = client.models.generate_content(
-                        model='gemini-3.5-flash-lite',
+                        model='gemini-2.5-flash',
                         contents=q,
                         config=types.GenerateContentConfig(
                             temperature=0.1,
