@@ -9,6 +9,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import qrcode
 import pypdf
+import fitz  # PyMuPDF
 
 # Dotenv & FastAPI / NiceGUI
 from dotenv import load_dotenv
@@ -1500,13 +1501,13 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                     ui.button('Download Chat PDF Transcript', on_click=download_chat_pdf).classes('primary-btn flex-1')
 
             # =========================================================================
-            # TAB 5: PROFESSIONAL BOQ TAKEOFF (FIXED)
+            # TAB 5: PROFESSIONAL BOQ TAKEOFF (FIXED with PyMuPDF)
             # =========================================================================
             with ui.tab_panel(t_boq):
                 ui.label('Professional AI BOQ Takeoff & Cost Estimation').classes('text-2xl font-bold text-white mb-2')
                 ui.markdown('Upload project drawings (PDF, JPG, PNG). AI will extract quantities, and the engine will compute costs with wastage.').classes('markdown-body mb-2')
                 ui.markdown('*Designed to give accurate results with success rate near 98%, but results should be rechecked by a qualified engineer.*').classes('text-xs text-amber-400 mb-4')
-                ui.markdown('*For large PDFs (>10 MB), the extraction may take longer. Please be patient.*').classes('text-xs text-yellow-400 mb-4')
+                ui.markdown('*For large PDFs, we convert the first 2 pages to images for better analysis.*').classes('text-xs text-yellow-400 mb-4')
 
                 boq_status_label = ui.label('Status: No file uploaded yet').classes('text-xs text-amber-400 font-semibold mb-2')
                 boq_file_data = {'bytes': None, 'type': None}
@@ -1644,26 +1645,43 @@ Example:
                         # Process PDF or image
                         if boq_file_data['type'] == 'application/pdf':
                             try:
-                                reader = pypdf.PdfReader(io.BytesIO(boq_file_data['bytes']))
-                                # Read only first 5 pages to avoid huge text
+                                # Extract text from first 3 pages
+                                pdf_bytes = boq_file_data['bytes']
+                                reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
                                 pages_text = []
-                                for i, page in enumerate(reader.pages[:5]):
+                                for i, page in enumerate(reader.pages[:3]):
                                     try:
                                         txt = page.extract_text() or ""
                                         pages_text.append(txt)
                                     except:
                                         pass
                                 full_text = "".join(pages_text)
-                                if len(full_text) > 8000:
-                                    full_text = full_text[:8000] + "\n... (text truncated to 8000 chars)"
                                 if full_text.strip():
-                                    contents.append(f"Extracted Text from Drawings (first 5 pages):\n{full_text}")
+                                    if len(full_text) > 8000:
+                                        full_text = full_text[:8000] + "\n... (truncated)"
+                                    contents.append(f"Extracted Text from Drawings (first 3 pages):\n{full_text}")
                                 else:
-                                    # No text extracted - send PDF as document (Gemini may process it)
-                                    contents.append(types.Part.from_bytes(data=boq_file_data['bytes'], mime_type='application/pdf'))
-                                    ui.notify('No readable text in PDF – sending as image/document.', type='info')
-                            except Exception as pdf_err:
-                                ui.notify(f'PDF reading error: {str(pdf_err)}. Sending as image.', type='warning')
+                                    # No text, we'll send images of first 2 pages
+                                    pass
+
+                                # Also convert first 2 pages to images using PyMuPDF for visual context
+                                doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+                                img_parts = []
+                                for page_num in range(min(2, len(doc))):
+                                    page = doc.load_page(page_num)
+                                    # Render at 150 DPI for decent quality but small size
+                                    mat = fitz.Matrix(1.5, 1.5)
+                                    pix = page.get_pixmap(matrix=mat)
+                                    img_bytes = pix.tobytes("jpeg")
+                                    img_part = types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg")
+                                    img_parts.append(img_part)
+                                doc.close()
+                                # Add images to contents
+                                contents.extend(img_parts)
+                                ui.notify(f'Added {len(img_parts)} page image(s) to AI input.', type='info')
+                            except Exception as e:
+                                ui.notify(f'Error processing PDF: {str(e)}. Sending raw PDF.', type='warning')
+                                # Fallback: send the whole PDF as document part
                                 contents.append(types.Part.from_bytes(data=boq_file_data['bytes'], mime_type='application/pdf'))
                         else:
                             # Image
@@ -1671,7 +1689,7 @@ Example:
                             contents.append(img_part)
 
                         # AI call with increased timeout
-                        extraction_text = await call_gemini(contents, temperature=0.1, timeout=120)
+                        extraction_text = await call_gemini(contents, temperature=0.1, timeout=150)
                         extracted_items = parse_ai_extraction(extraction_text)
 
                         if not extracted_items:
