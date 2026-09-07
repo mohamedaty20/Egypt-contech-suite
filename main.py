@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from nicegui import app, ui, run
 
-# Google GenAI SDK
+# Google GenAI SDK (using google-genai package)
 from google import genai
 from google.genai import types
 
@@ -1500,7 +1500,7 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                     ui.button('Download Chat PDF Transcript', on_click=download_chat_pdf).classes('primary-btn flex-1')
 
             # =========================================================================
-            # TAB 5: PROFESSIONAL BOQ TAKEOFF (fixed - no tabulate)
+            # TAB 5: PROFESSIONAL BOQ TAKEOFF
             # =========================================================================
             with ui.tab_panel(t_boq):
                 ui.label('Professional AI BOQ Takeoff & Cost Estimation').classes('text-2xl font-bold text-white mb-2')
@@ -1679,14 +1679,10 @@ Example:
 
                         # Manual markdown table generation (no tabulate)
                         def df_to_markdown(df):
-                            # convert DataFrame to markdown table
                             lines = []
-                            # Header
                             headers = list(df.columns)
                             lines.append("| " + " | ".join(headers) + " |")
-                            # Separator
                             lines.append("|" + "|".join(["---"] * len(headers)) + "|")
-                            # Rows
                             for _, row in df.iterrows():
                                 row_str = "| " + " | ".join(str(val) for val in row) + " |"
                                 lines.append(row_str)
