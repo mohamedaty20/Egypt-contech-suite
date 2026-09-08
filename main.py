@@ -2118,6 +2118,9 @@ Ensure all tables are proper Markdown tables with header and separator rows.
             # =========================================================================
             # TAB 5: PROFESSIONAL BOQ TAKEOFF (IMPROVED VERSION)
             # =========================================================================
+                       # =========================================================================
+            # TAB 5: PROFESSIONAL BOQ TAKEOFF (FIXED)
+            # =========================================================================
             with ui.tab_panel(t_boq):
                 ui.label('Professional AI BOQ Takeoff & Cost Estimation').classes('text-2xl font-bold text-white mb-2')
                 ui.markdown('Upload project drawings (PDF, JPG, PNG). AI will extract mass quantities automatically.').classes('markdown-body mb-2')
@@ -2141,7 +2144,7 @@ Ensure all tables are proper Markdown tables with header and separator rows.
 
                 with ui.tab_panels(boq_main_tabs, value=arch_tab).classes('w-full bg-transparent mt-4'):
 
-                    # ========== ARCHITECTURAL BRANCH (improved) ==========
+                    # ========== ARCHITECTURAL BRANCH ==========
                     with ui.tab_panel(arch_tab):
                         with ui.tabs().classes('w-full text-white bg-[#0d1a35] rounded-lg') as arch_sub_tabs:
                             arch_elements = ['Flooring', 'Wall Finishing', 'Ceilings', 'Doors/Windows', 'Grand Total']
@@ -2442,7 +2445,7 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                                 ui.button('Refresh Grand Total', on_click=update_arch_grand_total).classes('primary-btn')
                                 update_arch_grand_total()
 
-                    # ========== STRUCTURAL BRANCH (improved with extra instruction for columns) ==========
+                    # ========== STRUCTURAL BRANCH (FIXED) ==========
                     with ui.tab_panel(struct_tab):
                         with ui.tabs().classes('w-full text-white bg-[#0d1a35] rounded-lg') as struct_sub_tabs:
                             struct_elements = ['Columns', 'Beams', 'Slabs', 'Footings', 'Walls', 'Grand Total']
@@ -2454,6 +2457,121 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                             mass_file_data_dict = {}
                             rebar_file_data_dict = {}
 
+                            # Define the improved extraction function with extra instruction for columns
+                            async def extract_mass_with_ai_fixed(element_type, file_bytes, file_type, user_params, code_basis, retry=True):
+                                """Extract mass quantities using AI with a simple JSON array.
+                                For columns: only count columns inside the structural grid, ignore schedule/detail sheets.
+                                """
+                                contents = []
+                                schema_info = MASS_SCHEMAS.get(element_type)
+                                if not schema_info:
+                                    raise ValueError(f"Unsupported element type: {element_type}")
+
+                                # Build a prompt with extra instruction for columns
+                                extra_instruction = ""
+                                if element_type == 'columns':
+                                    extra_instruction = " IMPORTANT: Only count columns that are part of the structural grid/plan. Ignore any columns shown in a separate schedule, detail sheet, or table. "
+
+                                prompt = f"""
+You are an expert Quantity Surveyor. Your task is to EXTRACT raw data from the provided drawing(s) and return ONLY a JSON array of objects.
+
+Extract the following fields for each group:
+{', '.join(schema_info['required'])}
+
+If a dimension is not clearly visible, set it to null.
+{extra_instruction}
+Return ONLY the JSON array, no extra text, no explanations, no markdown.
+
+Example for columns:
+[{{"label":"C1","count":6,"width_mm":300,"depth_mm":300,"height_mm":3000}}]
+
+Now extract from the drawing. Look at all pages.
+"""
+                                contents.append(prompt)
+
+                                # Process file – send up to 6 pages as high-quality PNG images
+                                if file_type == 'application/pdf':
+                                    try:
+                                        # Extract text from first 3 pages for context
+                                        reader = pypdf.PdfReader(io.BytesIO(file_bytes))
+                                        pages_text = []
+                                        for i in range(min(3, len(reader.pages))):
+                                            try:
+                                                txt = reader.pages[i].extract_text() or ""
+                                                pages_text.append(txt)
+                                            except:
+                                                pass
+                                        full_text = "".join(pages_text)
+                                        if full_text.strip():
+                                            contents.append(f"Extracted text from PDF:\n{full_text[:6000]}")
+                                        # Send up to 6 pages as PNG images
+                                        doc = fitz.open(stream=file_bytes, filetype="pdf")
+                                        for page_num in range(min(6, len(doc))):
+                                            page = doc.load_page(page_num)
+                                            mat = fitz.Matrix(2.0, 2.0)  # higher resolution
+                                            pix = page.get_pixmap(matrix=mat)
+                                            img_bytes = pix.tobytes("png")
+                                            img_part = types.Part.from_bytes(data=img_bytes, mime_type="image/png")
+                                            contents.append(img_part)
+                                        doc.close()
+                                    except Exception as e:
+                                        # Fallback: send full PDF as binary
+                                        contents.append(types.Part.from_bytes(data=file_bytes, mime_type='application/pdf'))
+                                else:
+                                    # Image – we'll send as is (PNG or JPEG)
+                                    img_part = types.Part.from_bytes(data=file_bytes, mime_type=file_type)
+                                    contents.append(img_part)
+
+                                try:
+                                    response_text = await call_gemini_json(contents, temperature=0, timeout=240)
+                                    # Try to extract JSON array
+                                    json_str = response_text.strip()
+                                    # Remove markdown fences if present
+                                    json_str = re.sub(r'^```json\s*', '', json_str)
+                                    json_str = re.sub(r'\s*```$', '', json_str)
+                                    # Find the first '[' and last ']'
+                                    start = json_str.find('[')
+                                    end = json_str.rfind(']')
+                                    if start != -1 and end != -1:
+                                        json_str = json_str[start:end+1]
+                                    data = json.loads(json_str)
+                                    return data
+                                except Exception as e:
+                                    if retry:
+                                        # Simplified retry: prompt without images, only text
+                                        prompt2 = f"""
+Return a JSON array of objects with fields: {', '.join(schema_info['required'])}.
+{extra_instruction}
+If the drawing is unclear, return an empty array [].
+"""
+                                        contents2 = [prompt2]
+                                        # Try to extract text again
+                                        if file_type == 'application/pdf':
+                                            try:
+                                                reader = pypdf.PdfReader(io.BytesIO(file_bytes))
+                                                txt = "".join([p.extract_text() or "" for p in reader.pages[:6]])
+                                                if txt.strip():
+                                                    contents2.append(f"Extracted text from PDF:\n{txt[:6000]}")
+                                            except:
+                                                pass
+                                        try:
+                                            response_text2 = await call_gemini_json(contents2, temperature=0, timeout=240)
+                                            json_str2 = response_text2.strip()
+                                            json_str2 = re.sub(r'^```json\s*', '', json_str2)
+                                            json_str2 = re.sub(r'\s*```$', '', json_str2)
+                                            start = json_str2.find('[')
+                                            end = json_str2.rfind(']')
+                                            if start != -1 and end != -1:
+                                                json_str2 = json_str2[start:end+1]
+                                            data2 = json.loads(json_str2)
+                                            return data2
+                                        except:
+                                            # If still fails, return empty array
+                                            return []
+                                    else:
+                                        return []
+
+                            # Now the loop for structural elements
                             for el_display, el_key in [('Columns', 'columns'), ('Beams', 'beams'), ('Slabs', 'slabs'), ('Footings', 'footings'), ('Walls', 'walls')]:
                                 with ui.tab_panel(struct_tab_objects[el_display]):
                                     ui.label(f'{el_display} - Mass & Rebar Takeoff').classes('text-xl font-bold text-white mb-2')
@@ -2505,15 +2623,17 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                                                         'wastage': wastage_percent_global.value,
                                                     }
                                                     code_basis = code_basis_select.value
-                                                    # Call AI extraction (with special instruction for columns)
-                                                    data = await extract_mass_with_ai(key, file_data['bytes'], file_data['type'], user_params, code_basis)
+                                                    # Call the fixed extraction function
+                                                    data = await extract_mass_with_ai_fixed(key, file_data['bytes'], file_data['type'], user_params, code_basis)
                                                     # Compute quantities
                                                     results, total_concrete, _ = compute_mass_from_ai_data(key, data, user_params)
                                                     if not results:
-                                                        ui.notify('AI could not extract complete data. Please ensure the drawing has clear dimensions.', type='warning')
+                                                        # Show raw AI response for debugging
+                                                        raw_display = data if data else "Empty data received."
                                                         output.clear()
                                                         with output:
                                                             ui.label('No valid groups extracted. Ensure the drawing contains clear dimensions and labels.').classes('text-amber-400')
+                                                            ui.markdown(f"**AI Response:**\n```json\n{json.dumps(raw_display, indent=2)[:1000]}\n```").classes('text-xs text-gray-400')
                                                         return
                                                     df = generate_boq_table(results, 'structural', key, wastage_percent_global.value, 'mass')
                                                     df_holder[0] = df
@@ -2778,7 +2898,6 @@ Return ONLY valid JSON array.
 
                                 ui.button('Refresh Grand Total', on_click=update_struct_grand_total).classes('primary-btn')
                                 update_struct_grand_total()
-
         # ---------------- FOOTER (unchanged) ----------------
         ui.html('''
         <div class="app-footer">
