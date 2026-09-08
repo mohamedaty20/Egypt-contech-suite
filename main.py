@@ -8,6 +8,7 @@ import json
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+import plotly.express as px
 import qrcode
 import pypdf
 import fitz  # PyMuPDF
@@ -1116,7 +1117,7 @@ def compute_mass_from_ai_data(element_type, data, user_params):
         total_concrete += vol
         results.append({
             'label': group.get('label', 'Unknown'),
-            'count': group.get('count', 1),
+            'count': group['count'],
             'concrete_m3': vol,
             'rebar_ton': 0
         })
@@ -1126,43 +1127,123 @@ def compute_mass_from_ai_data(element_type, data, user_params):
 
 
 def generate_boq_table(results, branch, element_type, wastage, mode):
-    """Create a Pandas DataFrame for display and export."""
+    """Create a Pandas DataFrame for display and export.
+       Includes Count column, rounded numbers, and a total row.
+    """
     rows = []
     if mode == 'mass':
         for r in results:
             if 'concrete_m3' in r:
                 rows.append({
                     'Item': f"{element_type.capitalize()} - {r.get('label', '')}",
-                    'Unit': 'm3',
-                    'Quantity (net)': r['concrete_m3'],
+                    'Count': r.get('count', 1),
+                    'Unit': 'm³',
+                    'Quantity (net)': round(r['concrete_m3'], 2),
                     'Wastage %': wastage,
                     'Quantity (with waste)': round(r['concrete_m3'] * (1 + wastage/100), 2),
-                    'Unit Rate (EGP)': UNIT_RATES.get('Concrete (C30/37)', 2500),
+                    'Unit Rate (EGP)': round(UNIT_RATES.get('Concrete (C30/37)', 2500), 2),
                     'Total Cost (EGP)': round(r['concrete_m3'] * (1 + wastage/100) * UNIT_RATES.get('Concrete (C30/37)', 2500), 2)
                 })
+        # Add total row
+        if rows:
+            total_row = {
+                'Item': 'TOTAL',
+                'Count': '',
+                'Unit': '',
+                'Quantity (net)': round(sum(r['Quantity (net)'] for r in rows), 2),
+                'Wastage %': '',
+                'Quantity (with waste)': round(sum(r['Quantity (with waste)'] for r in rows), 2),
+                'Unit Rate (EGP)': '',
+                'Total Cost (EGP)': round(sum(r['Total Cost (EGP)'] for r in rows), 2)
+            }
+            rows.append(total_row)
     else:  # rebar
         for r in results:
             if 'rebar_ton' in r:
                 rows.append({
                     'Item': f"{element_type.capitalize()} - {r.get('label', '')} - Rebar",
+                    'Count': r.get('count', 1),
                     'Unit': 'ton',
-                    'Quantity (net)': r['rebar_ton'],
+                    'Quantity (net)': round(r['rebar_ton'], 2),
                     'Wastage %': wastage,
                     'Quantity (with waste)': round(r['rebar_ton'] * (1 + wastage/100), 2),
-                    'Unit Rate (EGP)': UNIT_RATES.get('Rebar (Grade 400)', 15000),
+                    'Unit Rate (EGP)': round(UNIT_RATES.get('Rebar (Grade 400)', 15000), 2),
                     'Total Cost (EGP)': round(r['rebar_ton'] * (1 + wastage/100) * UNIT_RATES.get('Rebar (Grade 400)', 15000), 2)
                 })
             if 'concrete_m3' in r:
                 rows.append({
                     'Item': f"{element_type.capitalize()} - {r.get('label', '')} - Concrete",
-                    'Unit': 'm3',
-                    'Quantity (net)': r['concrete_m3'],
+                    'Count': r.get('count', 1),
+                    'Unit': 'm³',
+                    'Quantity (net)': round(r['concrete_m3'], 2),
                     'Wastage %': wastage,
                     'Quantity (with waste)': round(r['concrete_m3'] * (1 + wastage/100), 2),
-                    'Unit Rate (EGP)': UNIT_RATES.get('Concrete (C30/37)', 2500),
+                    'Unit Rate (EGP)': round(UNIT_RATES.get('Concrete (C30/37)', 2500), 2),
                     'Total Cost (EGP)': round(r['concrete_m3'] * (1 + wastage/100) * UNIT_RATES.get('Concrete (C30/37)', 2500), 2)
                 })
+        # Add total row
+        if rows:
+            total_row = {
+                'Item': 'TOTAL',
+                'Count': '',
+                'Unit': '',
+                'Quantity (net)': round(sum(r['Quantity (net)'] for r in rows), 2),
+                'Wastage %': '',
+                'Quantity (with waste)': round(sum(r['Quantity (with waste)'] for r in rows), 2),
+                'Unit Rate (EGP)': '',
+                'Total Cost (EGP)': round(sum(r['Total Cost (EGP)'] for r in rows), 2)
+            }
+            rows.append(total_row)
     return pd.DataFrame(rows)
+
+
+def generate_charts(df, element_type):
+    """Generate bar chart for concrete volume and pie chart for cost distribution."""
+    # Filter out the total row
+    df_no_total = df[df['Item'] != 'TOTAL'].copy()
+    if df_no_total.empty:
+        return None, None
+
+    # Bar chart: concrete volume per group
+    fig_bar = go.Figure()
+    fig_bar.add_trace(go.Bar(
+        x=df_no_total['Item'],
+        y=df_no_total['Quantity (net)'],
+        name='Concrete Volume (m³)',
+        marker_color='#FF8C00',
+        text=df_no_total['Quantity (net)'],
+        textposition='auto',
+    ))
+    fig_bar.update_layout(
+        title=f'{element_type.capitalize()} - Concrete Volume per Group',
+        template='plotly_dark',
+        paper_bgcolor='#0d1a35',
+        plot_bgcolor='#0d1a35',
+        font=dict(color='white'),
+        margin=dict(t=40, b=20, l=40, r=20),
+        height=400,
+        xaxis_tickangle=-45,
+    )
+
+    # Pie chart: cost distribution
+    fig_pie = go.Figure(data=[go.Pie(
+        labels=df_no_total['Item'],
+        values=df_no_total['Total Cost (EGP)'],
+        hole=0.4,
+        marker=dict(colors=px.colors.sequential.Oranges_r),
+        textinfo='label+percent',
+        textposition='auto',
+    )])
+    fig_pie.update_layout(
+        title=f'{element_type.capitalize()} - Cost Distribution',
+        template='plotly_dark',
+        paper_bgcolor='#0d1a35',
+        plot_bgcolor='#0d1a35',
+        font=dict(color='white'),
+        margin=dict(t=40, b=20, l=40, r=20),
+        height=400,
+    )
+    return fig_bar, fig_pie
 
 
 # Helper function for rebar quantities
@@ -1212,7 +1293,7 @@ def compute_rebar_quantities(element_type, data, user_params):
 
 
 # =====================================================================================
-# MAIN APP LAYOUT (unchanged except BOQ tab - now AI extraction works)
+# MAIN APP LAYOUT (unchanged except BOQ tab - now with charts and formatting)
 # =====================================================================================
 @ui.page('/')
 def main_page():
@@ -2094,13 +2175,42 @@ Return ONLY valid JSON.
                                                         'quantity': it['count'],
                                                         'unit': 'nos'
                                                     })
-                                        df = generate_boq_table(results, 'architectural', key, wastage_percent_global.value, 'mass')
+                                        # Architectural items are treated as mass mode but with no concrete
+                                        # We'll just generate a table with Count field omitted (or set to 1)
+                                        # We'll create a custom table
+                                        rows = []
+                                        for r in results:
+                                            rows.append({
+                                                'Item': f"{key.capitalize()} - {r.get('type', '')}",
+                                                'Count': 1,
+                                                'Unit': r.get('unit', ''),
+                                                'Quantity (net)': r['quantity'],
+                                                'Wastage %': wastage_percent_global.value,
+                                                'Quantity (with waste)': round(r['quantity'] * (1 + wastage_percent_global.value/100), 2),
+                                                'Unit Rate (EGP)': UNIT_RATES.get(r.get('type', ''), 0),
+                                                'Total Cost (EGP)': round(r['quantity'] * (1 + wastage_percent_global.value/100) * UNIT_RATES.get(r.get('type', ''), 0), 2)
+                                            })
+                                        # Add total row
+                                        if rows:
+                                            total_row = {
+                                                'Item': 'TOTAL',
+                                                'Count': '',
+                                                'Unit': '',
+                                                'Quantity (net)': round(sum(r['Quantity (net)'] for r in rows), 2),
+                                                'Wastage %': '',
+                                                'Quantity (with waste)': round(sum(r['Quantity (with waste)'] for r in rows), 2),
+                                                'Unit Rate (EGP)': '',
+                                                'Total Cost (EGP)': round(sum(r['Total Cost (EGP)'] for r in rows), 2)
+                                            }
+                                            rows.append(total_row)
+                                        df = pd.DataFrame(rows)
                                         arch_df_holders[key] = df
                                         boq_results['architectural'][key] = df
                                         output_container.clear()
                                         with output_container:
                                             with ui.column().classes('output-card w-full'):
                                                 ui.label(f'{key.capitalize()} BOQ').classes('text-xl font-bold text-white mb-2')
+                                                # Show table as markdown
                                                 def df_to_md(df):
                                                     lines = []
                                                     headers = list(df.columns)
@@ -2111,6 +2221,24 @@ Return ONLY valid JSON.
                                                         lines.append(row_str)
                                                     return "\n".join(lines)
                                                 ui.markdown(df_to_md(df)).classes('markdown-body')
+                                                # Add charts for architectural (if applicable)
+                                                # For architectural, we can show a pie chart of cost distribution
+                                                fig = go.Figure(data=[go.Pie(
+                                                    labels=df[df['Item'] != 'TOTAL']['Item'],
+                                                    values=df[df['Item'] != 'TOTAL']['Total Cost (EGP)'],
+                                                    hole=0.4,
+                                                    marker=dict(colors=px.colors.qualitative.Set3),
+                                                    textinfo='label+percent',
+                                                )])
+                                                fig.update_layout(
+                                                    title=f'{key.capitalize()} - Cost Distribution',
+                                                    template='plotly_dark',
+                                                    paper_bgcolor='#0d1a35',
+                                                    plot_bgcolor='#0d1a35',
+                                                    font=dict(color='white'),
+                                                    height=400,
+                                                )
+                                                ui.plotly(fig).classes('w-full mt-2')
                                         with export_area:
                                             def download_arch_pdf(df=df, element=key):
                                                 try:
@@ -2156,6 +2284,8 @@ Return ONLY valid JSON.
                                             ui.markdown('No architectural quantities extracted yet.').classes('text-amber-400')
                                         return
                                     combined = pd.concat(all_dfs, ignore_index=True)
+                                    # Remove any 'TOTAL' rows before summing
+                                    combined = combined[combined['Item'] != 'TOTAL']
                                     grand = combined.groupby('Item').agg({
                                         'Quantity (net)': 'sum',
                                         'Quantity (with waste)': 'sum',
@@ -2317,6 +2447,7 @@ Return ONLY valid JSON.
                                                                 with output:
                                                                     with ui.column().classes('output-card w-full'):
                                                                         ui.label(f'{el_display} Mass Quantities').classes('text-xl font-bold text-white mb-2')
+                                                                        # Display table
                                                                         def df_to_md(df):
                                                                             lines = []
                                                                             headers = list(df.columns)
@@ -2327,6 +2458,12 @@ Return ONLY valid JSON.
                                                                                 lines.append(row_str)
                                                                             return "\n".join(lines)
                                                                         ui.markdown(df_to_md(df)).classes('markdown-body')
+                                                                        # Add charts
+                                                                        fig_bar, fig_pie = generate_charts(df, el_display)
+                                                                        if fig_bar:
+                                                                            ui.plotly(fig_bar).classes('w-full mt-2')
+                                                                        if fig_pie:
+                                                                            ui.plotly(fig_pie).classes('w-full mt-2')
                                                                 with export:
                                                                     def download_mass_pdf(df=df):
                                                                         try:
@@ -2383,6 +2520,12 @@ Return ONLY valid JSON.
                                                                     lines.append(row_str)
                                                                 return "\n".join(lines)
                                                             ui.markdown(df_to_md(df)).classes('markdown-body')
+                                                            # Add charts
+                                                            fig_bar, fig_pie = generate_charts(df, el_display)
+                                                            if fig_bar:
+                                                                ui.plotly(fig_bar).classes('w-full mt-2')
+                                                            if fig_pie:
+                                                                ui.plotly(fig_pie).classes('w-full mt-2')
                                                     with export:
                                                         def download_mass_pdf(df=df):
                                                             try:
@@ -2508,6 +2651,7 @@ Return ONLY valid JSON array.
                                                                     lines.append(row_str)
                                                                 return "\n".join(lines)
                                                             ui.markdown(df_to_md(df)).classes('markdown-body')
+                                                            # Charts for rebar could be similar but we skip for brevity
                                                     with export:
                                                         def download_rebar_pdf(df=df):
                                                             try:
@@ -2556,7 +2700,9 @@ Return ONLY valid JSON array.
                                         with struct_grand_output:
                                             ui.markdown('No structural quantities extracted yet.').classes('text-amber-400')
                                         return
+                                    # Combine all DFs, remove TOTAL rows
                                     combined = pd.concat(all_dfs, ignore_index=True)
+                                    combined = combined[combined['Item'] != 'TOTAL']
                                     grand = combined.groupby('Item').agg({
                                         'Quantity (net)': 'sum',
                                         'Quantity (with waste)': 'sum',
