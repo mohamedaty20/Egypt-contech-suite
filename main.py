@@ -1180,13 +1180,6 @@ def validate_boj_data(data, element_type, mode):
                 label = item.get('type', f'Item {idx+1}')
                 missing_groups.append({'label': label, 'idx': idx, 'missing': item_missing})
 
-    # Also check global missing_data field
-    if 'missing_data' in data and isinstance(data['missing_data'], list):
-        for m in data['missing_data']:
-            # If the missing field is not tied to a specific group, we'll add a global entry
-            # But we already handle per-group, so we'll just add a note
-            pass
-
     return missing_groups
 
 
@@ -1283,7 +1276,7 @@ def compute_quantities(element_type, mode, data, user_params):
                 count = g.get('count', 1)
                 if element_type == 'columns':
                     height_m = (g.get('height_mm') or user_params.get('floor_height_mm', 3000)) / 1000
-                    main_length = height_m * 4 * count  # 4 main bars
+                    main_length = height_m * 4 * count
                     perimeter = 2 * ((g['width_mm'] + g['depth_mm']) / 1000)
                     num_stirrups = (height_m / (spacing/1000)) + 1
                     stirrup_length = perimeter * num_stirrups * count
@@ -1329,15 +1322,11 @@ def compute_quantities(element_type, mode, data, user_params):
                     continue
                 vol = a['area_m2'] * (a['thickness_mm']/1000)
                 total_concrete += vol
-                # Rebar for slabs: assume two layers, both directions
                 rebar = a.get('rebar', {})
                 top_d = rebar.get('top_diameter_mm', 0)
                 bottom_d = rebar.get('bottom_diameter_mm', 0)
                 spacing = rebar.get('spacing_mm', 200)
-                # Simplified: total length = area / spacing * 2 (for both directions) * 2 layers
-                # We'll just compute approximate weight
-                total_length = (a['area_m2'] / (spacing/1000)) * 2 * 2  # two layers, two directions
-                # Assume average diameter
+                total_length = (a['area_m2'] / (spacing/1000)) * 2 * 2
                 avg_d = (top_d + bottom_d) / 2 if (top_d > 0 and bottom_d > 0) else max(top_d, bottom_d)
                 weight = total_length * ( (3.1416 * (avg_d/1000)**2 / 4) * 7850 )
                 total_rebar += weight
@@ -2094,11 +2083,11 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                                     arch_export_areas[el_key] = export_area
                                     arch_df_holders[el_key] = None
 
-                                    async def run_arch_extraction(element_key=el_key):
+                                    async def run_arch_extraction(key=el_key):
                                         if not client:
                                             ui.notify('GEMINI_API_KEY missing!', type='negative')
                                             return
-                                        if not arch_file_data[element_key]['bytes']:
+                                        if not arch_file_data[key]['bytes']:
                                             ui.notify('Please upload a drawing file for this element.', type='warning')
                                             return
                                         output_container.clear()
@@ -2115,7 +2104,6 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                                             }
                                             code_basis = code_basis_select.value
 
-                                            # Architectural extraction uses a simple prompt, but we need to handle missing data per group
                                             arch_schemas = {
                                                 'flooring': {
                                                     "schema": {
@@ -2150,13 +2138,13 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                                                     "required": ["count"]
                                                 }
                                             }
-                                            schema_info = arch_schemas[element_key]
+                                            schema_info = arch_schemas[key]
                                             prompt = f"""
 You are an expert Quantity Surveyor. Extract raw data from the drawing(s) and return ONLY a JSON object following the exact schema below.
 DO NOT PERFORM ANY CALCULATIONS.
 If a quantity is not clearly visible, set it to null and add the field name to the "missing_data" list.
 
-ELEMENT TYPE: {element_key}
+ELEMENT TYPE: {key}
 SCHEMA:
 {json.dumps(schema_info['schema'], indent=2)}
 
@@ -2167,9 +2155,9 @@ Return ONLY valid JSON.
 """
                                             contents = [prompt]
                                             # Process file
-                                            if arch_file_data[element_key]['type'] == 'application/pdf':
+                                            if arch_file_data[key]['type'] == 'application/pdf':
                                                 try:
-                                                    reader = pypdf.PdfReader(io.BytesIO(arch_file_data[element_key]['bytes']))
+                                                    reader = pypdf.PdfReader(io.BytesIO(arch_file_data[key]['bytes']))
                                                     pages_text = []
                                                     for i in range(min(5, len(reader.pages))):
                                                         try:
@@ -2180,7 +2168,7 @@ Return ONLY valid JSON.
                                                     full_text = "".join(pages_text)
                                                     if full_text.strip():
                                                         contents.append(f"Extracted text from PDF:\n{full_text[:8000]}")
-                                                    doc = fitz.open(stream=arch_file_data[element_key]['bytes'], filetype="pdf")
+                                                    doc = fitz.open(stream=arch_file_data[key]['bytes'], filetype="pdf")
                                                     for page_num in range(min(5, len(doc))):
                                                         page = doc.load_page(page_num)
                                                         mat = fitz.Matrix(1.5, 1.5)
@@ -2190,9 +2178,9 @@ Return ONLY valid JSON.
                                                         contents.append(img_part)
                                                     doc.close()
                                                 except:
-                                                    contents.append(types.Part.from_bytes(data=arch_file_data[element_key]['bytes'], mime_type='application/pdf'))
+                                                    contents.append(types.Part.from_bytes(data=arch_file_data[key]['bytes'], mime_type='application/pdf'))
                                             else:
-                                                img_part = types.Part.from_bytes(data=arch_file_data[element_key]['bytes'], mime_type=arch_file_data[element_key]['type'])
+                                                img_part = types.Part.from_bytes(data=arch_file_data[key]['bytes'], mime_type=arch_file_data[key]['type'])
                                                 contents.append(img_part)
 
                                             response = await call_gemini(contents, temperature=0, timeout=120)
@@ -2201,7 +2189,6 @@ Return ONLY valid JSON.
                                             json_str = re.sub(r'\s*```$', '', json_str)
                                             data = json.loads(json_str)
 
-                                            # Check for missing data per group
                                             missing_groups = []
                                             if 'areas' in data and isinstance(data['areas'], list):
                                                 for idx, area in enumerate(data['areas']):
@@ -2234,7 +2221,6 @@ Return ONLY valid JSON.
                                                             label = FIELD_LABELS.get(field, field)
                                                             inputs[f"{group['idx']}_{field}"] = ui.number(label=label, value=None).classes('w-full')
                                                     async def confirm_missing():
-                                                        # Update data with filled values
                                                         for group in missing_groups:
                                                             for field in group['missing']:
                                                                 key = f"{group['idx']}_{field}"
@@ -2244,25 +2230,25 @@ Return ONLY valid JSON.
                                                                     elif group['type'] == 'item':
                                                                         data['items'][group['idx']][field] = inputs[key].value
                                                         modal.close()
-                                                        await finish_arch_extraction(data, element_key)
+                                                        await finish_arch_extraction(data, key)
                                                     ui.button('Confirm & Calculate', on_click=confirm_missing).classes('primary-btn')
                                                 modal.open()
                                                 return
                                             else:
-                                                await finish_arch_extraction(data, element_key)
+                                                await finish_arch_extraction(data, key)
                                         except Exception as ex:
                                             output_container.clear()
                                             with output_container:
                                                 ui.notify(f'Extraction failed: {str(ex)}', type='negative')
 
-                                    async def finish_arch_extraction(data, element_key):
+                                    async def finish_arch_extraction(data, key):
                                         user_params = {
                                             'floor_height_mm': floor_height_global.value,
                                             'use_floor_height': use_floor_height_check.value,
                                             'wastage': wastage_percent_global.value,
                                         }
                                         results = []
-                                        if element_key in ['flooring', 'wall_finishing', 'ceilings']:
+                                        if key in ['flooring', 'wall_finishing', 'ceilings']:
                                             areas = data.get('areas', [])
                                             for a in areas:
                                                 if a.get('area_m2') is not None:
@@ -2271,7 +2257,7 @@ Return ONLY valid JSON.
                                                         'quantity': a['area_m2'],
                                                         'unit': 'm2'
                                                     })
-                                        elif element_key == 'doors_windows':
+                                        elif key == 'doors_windows':
                                             items = data.get('items', [])
                                             for it in items:
                                                 if it.get('count') is not None:
@@ -2280,13 +2266,13 @@ Return ONLY valid JSON.
                                                         'quantity': it['count'],
                                                         'unit': 'nos'
                                                     })
-                                        df = generate_boq_table(results, 'architectural', element_key, wastage_percent_global.value, 'mass')
-                                        arch_df_holders[element_key] = df
-                                        boq_results['architectural'][element_key] = df
+                                        df = generate_boq_table(results, 'architectural', key, wastage_percent_global.value, 'mass')
+                                        arch_df_holders[key] = df
+                                        boq_results['architectural'][key] = df
                                         output_container.clear()
                                         with output_container:
                                             with ui.column().classes('output-card w-full'):
-                                                ui.label(f'{element_key.capitalize()} BOQ').classes('text-xl font-bold text-white mb-2')
+                                                ui.label(f'{key.capitalize()} BOQ').classes('text-xl font-bold text-white mb-2')
                                                 def df_to_md(df):
                                                     lines = []
                                                     headers = list(df.columns)
@@ -2298,7 +2284,7 @@ Return ONLY valid JSON.
                                                     return "\n".join(lines)
                                                 ui.markdown(df_to_md(df)).classes('markdown-body')
                                         with export_area:
-                                            def download_arch_pdf(df=df, element=element_key):
+                                            def download_arch_pdf(df=df, element=key):
                                                 try:
                                                     meta = current_meta('BOQ')
                                                     pdf_bytes = build_report_pdf(
@@ -2312,7 +2298,7 @@ Return ONLY valid JSON.
                                                     ui.notify('PDF downloaded', type='positive')
                                                 except Exception as ex:
                                                     ui.notify(f'PDF Error: {str(ex)}', type='negative')
-                                            def download_arch_excel(df=df, element=element_key):
+                                            def download_arch_excel(df=df, element=key):
                                                 try:
                                                     excel_buffer = io.BytesIO()
                                                     with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
@@ -2400,7 +2386,7 @@ Return ONLY valid JSON.
                                 ui.button('Refresh Grand Total', on_click=update_arch_grand_total).classes('primary-btn')
                                 update_arch_grand_total()
 
-                    # ========== STRUCTURAL BRANCH (RESTRUCTURED with improved modal) ==========
+                    # ========== STRUCTURAL BRANCH (FIXED VARIABLE CAPTURE) ==========
                     with ui.tab_panel(struct_tab):
                         with ui.tabs().classes('w-full text-white bg-[#0d1a35] rounded-lg') as struct_sub_tabs:
                             struct_elements = ['Columns', 'Beams', 'Slabs', 'Footings', 'Walls', 'Grand Total']
@@ -2409,20 +2395,25 @@ Return ONLY valid JSON.
                                 struct_tab_objects[el] = ui.tab(el).classes('text-white font-bold')
 
                         with ui.tab_panels(struct_sub_tabs, value=struct_tab_objects['Columns']).classes('w-full bg-transparent mt-4'):
+                            # For each structural element, define the mass and rebar tabs
                             for el_display, el_key in [('Columns', 'columns'), ('Beams', 'beams'), ('Slabs', 'slabs'), ('Footings', 'footings'), ('Walls', 'walls')]:
                                 with ui.tab_panel(struct_tab_objects[el_display]):
                                     ui.label(f'{el_display} - Mass & Rebar Takeoff').classes('text-xl font-bold text-white mb-2')
+                                    # Create two sub-tabs within this panel
                                     with ui.tabs().classes('w-full text-white bg-[#0d1a35] rounded-lg') as mode_tabs:
                                         mass_tab = ui.tab('Mass Quantities').classes('text-white font-bold')
                                         rebar_tab = ui.tab('Reinforcement').classes('text-white font-bold')
                                     with ui.tab_panels(mode_tabs, value=mass_tab).classes('w-full bg-transparent mt-2'):
+
                                         # ---- Mass Quantities ----
                                         with ui.tab_panel(mass_tab):
                                             ui.label(f'{el_display} - Mass Quantities (Concrete volume, area, count)').classes('text-lg font-bold text-white mb-2')
+                                            # Store file data in a dict with a unique key for this tab
                                             mass_file_data = {'bytes': None, 'type': None}
                                             mass_status = ui.label('Status: No file uploaded').classes('text-xs text-amber-400 font-semibold mb-2')
                                             async def handle_mass_upload(e, key=el_key):
                                                 try:
+                                                    # We store in a dict that is unique per tab
                                                     mass_file_data['bytes'] = await e.file.read()
                                                     mass_file_data['type'] = 'application/pdf' if e.file.name.lower().endswith('.pdf') else 'image/jpeg'
                                                     mass_status.set_text(f'File Ready: {e.file.name}')
@@ -2435,16 +2426,17 @@ Return ONLY valid JSON.
                                             mass_export = ui.row().classes('w-full gap-4 mt-4')
                                             mass_df_holder = [None]
 
-                                            async def run_mass_extraction():
+                                            # Define the extraction function capturing the current el_key and mass_file_data
+                                            async def run_mass_extraction(key=el_key, file_data=mass_file_data, output=mass_output, export=mass_export, df_holder=mass_df_holder):
                                                 if not client:
                                                     ui.notify('GEMINI_API_KEY missing!', type='negative')
                                                     return
-                                                if not mass_file_data['bytes']:
+                                                if not file_data['bytes']:
                                                     ui.notify('Please upload a drawing for mass quantities.', type='warning')
                                                     return
-                                                mass_output.clear()
-                                                mass_export.clear()
-                                                with mass_output:
+                                                output.clear()
+                                                export.clear()
+                                                with output:
                                                     ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
                                                     ui.label('Extracting mass quantities...').classes('self-center text-sm')
                                                 try:
@@ -2454,8 +2446,8 @@ Return ONLY valid JSON.
                                                         'wastage': wastage_percent_global.value,
                                                     }
                                                     code_basis = code_basis_select.value
-                                                    data = await extract_boq_with_ai(el_key, 'mass', mass_file_data['bytes'], mass_file_data['type'], user_params, code_basis)
-                                                    missing_groups = validate_boj_data(data, el_key, 'mass')
+                                                    data = await extract_boq_with_ai(key, 'mass', file_data['bytes'], file_data['type'], user_params, code_basis)
+                                                    missing_groups = validate_boj_data(data, key, 'mass')
                                                     if missing_groups:
                                                         modal = ui.dialog()
                                                         with modal, ui.card().classes('w-full max-w-2xl bg-[#0d1a35]'):
@@ -2466,20 +2458,18 @@ Return ONLY valid JSON.
                                                                 ui.label(f"**{group['label']}**").classes('text-white font-bold mt-2')
                                                                 for field in group['missing']:
                                                                     label = FIELD_LABELS.get(field, field)
-                                                                    # If it's height and user enabled floor height, we can prefill and disable
                                                                     if field == 'height_mm' and use_floor_height_check.value:
                                                                         inputs[f"{group['idx']}_{field}"] = ui.number(label=label, value=floor_height_global.value).props('disable')
                                                                     else:
                                                                         inputs[f"{group['idx']}_{field}"] = ui.number(label=label, value=None).classes('w-full')
                                                             async def confirm_missing():
-                                                                # Update data with filled values
                                                                 for group in missing_groups:
                                                                     for field in group['missing']:
-                                                                        key = f"{group['idx']}_{field}"
-                                                                        if key in inputs and inputs[key].value is not None:
+                                                                        key_input = f"{group['idx']}_{field}"
+                                                                        if key_input in inputs and inputs[key_input].value is not None:
                                                                             # For groups, we set inside 'groups' list
                                                                             if 'groups' in data:
-                                                                                data['groups'][group['idx']][field] = inputs[key].value
+                                                                                data['groups'][group['idx']][field] = inputs[key_input].value
                                                                 modal.close()
                                                                 await finish_mass_extraction(data)
                                                             ui.button('Confirm & Calculate', on_click=confirm_missing).classes('primary-btn')
@@ -2488,10 +2478,11 @@ Return ONLY valid JSON.
                                                     else:
                                                         await finish_mass_extraction(data)
                                                 except Exception as ex:
-                                                    mass_output.clear()
-                                                    with mass_output:
+                                                    output.clear()
+                                                    with output:
                                                         ui.notify(f'Extraction failed: {str(ex)}', type='negative')
 
+                                            # Define the finish function
                                             async def finish_mass_extraction(data):
                                                 user_params = {
                                                     'floor_height_mm': floor_height_global.value,
@@ -2565,16 +2556,16 @@ Return ONLY valid JSON.
                                             rebar_export = ui.row().classes('w-full gap-4 mt-4')
                                             rebar_df_holder = [None]
 
-                                            async def run_rebar_extraction():
+                                            async def run_rebar_extraction(key=el_key, file_data=rebar_file_data, output=rebar_output, export=rebar_export, df_holder=rebar_df_holder):
                                                 if not client:
                                                     ui.notify('GEMINI_API_KEY missing!', type='negative')
                                                     return
-                                                if not rebar_file_data['bytes']:
+                                                if not file_data['bytes']:
                                                     ui.notify('Please upload a drawing for reinforcement.', type='warning')
                                                     return
-                                                rebar_output.clear()
-                                                rebar_export.clear()
-                                                with rebar_output:
+                                                output.clear()
+                                                export.clear()
+                                                with output:
                                                     ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
                                                     ui.label('Extracting reinforcement details...').classes('self-center text-sm')
                                                 try:
@@ -2584,8 +2575,8 @@ Return ONLY valid JSON.
                                                         'wastage': wastage_percent_global.value,
                                                     }
                                                     code_basis = code_basis_select.value
-                                                    data = await extract_boq_with_ai(el_key, 'rebar', rebar_file_data['bytes'], rebar_file_data['type'], user_params, code_basis)
-                                                    missing_groups = validate_boj_data(data, el_key, 'rebar')
+                                                    data = await extract_boq_with_ai(key, 'rebar', file_data['bytes'], file_data['type'], user_params, code_basis)
+                                                    missing_groups = validate_boj_data(data, key, 'rebar')
                                                     if missing_groups:
                                                         modal = ui.dialog()
                                                         with modal, ui.card().classes('w-full max-w-2xl bg-[#0d1a35]'):
@@ -2603,16 +2594,16 @@ Return ONLY valid JSON.
                                                             async def confirm_missing():
                                                                 for group in missing_groups:
                                                                     for field in group['missing']:
-                                                                        key = f"{group['idx']}_{field}"
-                                                                        if key in inputs and inputs[key].value is not None:
-                                                                            # For nested rebar fields, we need to set inside rebar object
+                                                                        key_input = f"{group['idx']}_{field}"
+                                                                        if key_input in inputs and inputs[key_input].value is not None:
+                                                                            # For nested rebar fields, set inside rebar object
                                                                             if '.' in field:
                                                                                 parent, child = field.split('.')
                                                                                 if parent not in data['groups'][group['idx']]:
                                                                                     data['groups'][group['idx']][parent] = {}
-                                                                                data['groups'][group['idx']][parent][child] = inputs[key].value
+                                                                                data['groups'][group['idx']][parent][child] = inputs[key_input].value
                                                                             else:
-                                                                                data['groups'][group['idx']][field] = inputs[key].value
+                                                                                data['groups'][group['idx']][field] = inputs[key_input].value
                                                                 modal.close()
                                                                 await finish_rebar_extraction(data)
                                                             ui.button('Confirm & Calculate', on_click=confirm_missing).classes('primary-btn')
@@ -2621,8 +2612,8 @@ Return ONLY valid JSON.
                                                     else:
                                                         await finish_rebar_extraction(data)
                                                 except Exception as ex:
-                                                    rebar_output.clear()
-                                                    with rebar_output:
+                                                    output.clear()
+                                                    with output:
                                                         ui.notify(f'Extraction failed: {str(ex)}', type='negative')
 
                                             async def finish_rebar_extraction(data):
