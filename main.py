@@ -781,10 +781,10 @@ async def call_gemini(contents, system_instruction=None, temperature=0.1, timeou
 
 
 # =====================================================================================
-# BOQ CALCULATION ENGINE (NEW DETERMINISTIC VERSION)
+# BOQ CALCULATION ENGINE (NEW DETERMINISTIC VERSION - STRUCTURED WITH MODES)
 # =====================================================================================
 
-# Global storage for BOQ results per branch and element
+# Global storage for BOQ results per branch, element, and mode
 boq_results = {
     'architectural': {},
     'structural': {}
@@ -814,185 +814,227 @@ UNIT_RATES = {
     "Foundation Concrete": 2800,
 }
 
-# ---- Element-specific JSON schemas for AI prompts ----
-ELEMENT_SCHEMAS = {
-    "columns": {
-        "description": "Columns are vertical structural members. Extract each group (e.g., C1, C2) with count, width (mm), depth (mm), height (mm) if visible, and rebar details if present.",
-        "schema": {
-            "element": "columns",
-            "groups": [
-                {
-                    "label": "string",
-                    "count": "integer",
-                    "width_mm": "number or null",
-                    "depth_mm": "number or null",
-                    "height_mm": "number or null",
-                    "rebar": {
-                        "main_diameter_mm": "number or null",
-                        "stirrup_diameter_mm": "number or null",
-                        "spacing_mm": "number or null"
-                    }  # optional
-                }
-            ],
-            "missing_data": ["list of strings"]
-        },
-        "required": ["width_mm", "depth_mm", "height_mm"],  # fields that must be present or user must supply
-        "formula": lambda group, floor_height: (
-            group['width_mm'] / 1000 * group['depth_mm'] / 1000 * (group.get('height_mm') or floor_height) / 1000
-        )  # returns m3 per column
-    },
-    "beams": {
-        "description": "Beams are horizontal members. Extract each beam group with count, width (mm), depth (mm), length (mm), and rebar details.",
-        "schema": {
-            "element": "beams",
-            "groups": [
-                {
-                    "label": "string",
-                    "count": "integer",
-                    "width_mm": "number or null",
-                    "depth_mm": "number or null",
-                    "length_mm": "number or null",
-                    "rebar": {
-                        "main_diameter_mm": "number or null",
-                        "stirrup_diameter_mm": "number or null",
-                        "spacing_mm": "number or null"
+# ---- Element-specific schemas and configurations ----
+# We now have two modes: 'mass' and 'rebar'
+ELEMENT_MODES = {
+    'columns': {
+        'mass': {
+            'required': ['width_mm', 'depth_mm', 'height_mm'],
+            'schema': {
+                "element": "columns",
+                "groups": [
+                    {
+                        "label": "string",
+                        "count": "integer",
+                        "width_mm": "number or null",
+                        "depth_mm": "number or null",
+                        "height_mm": "number or null"
                     }
-                }
-            ],
-            "missing_data": ["list of strings"]
-        },
-        "required": ["width_mm", "depth_mm", "length_mm"],
-        "formula": lambda group, _: (
-            group['width_mm'] / 1000 * group['depth_mm'] / 1000 * group['length_mm'] / 1000
-        )
-    },
-    "slabs": {
-        "description": "Slabs are horizontal flat elements. Extract areas (m2) and thickness (mm) for each slab region.",
-        "schema": {
-            "element": "slabs",
-            "areas": [
-                {
-                    "label": "string",
-                    "thickness_mm": "number or null",
-                    "area_m2": "number or null"
-                }
-            ],
-            "rebar": {
-                "top_diameter_mm": "number or null",
-                "bottom_diameter_mm": "number or null",
-                "spacing_mm": "number or null"
+                ],
+                "missing_data": ["list of strings"]
             },
-            "missing_data": ["list of strings"]
+            'formula': lambda group, floor_height: (
+                group['width_mm'] / 1000 * group['depth_mm'] / 1000 * (group.get('height_mm') or floor_height) / 1000
+            )
         },
-        "required": ["thickness_mm", "area_m2"],
-        "formula": lambda area, _: area['area_m2'] * area['thickness_mm'] / 1000  # m3
+        'rebar': {
+            'required': ['width_mm', 'depth_mm', 'height_mm', 'main_diameter_mm', 'stirrup_diameter_mm', 'spacing_mm'],
+            'schema': {
+                "element": "columns",
+                "groups": [
+                    {
+                        "label": "string",
+                        "count": "integer",
+                        "width_mm": "number or null",
+                        "depth_mm": "number or null",
+                        "height_mm": "number or null",
+                        "rebar": {
+                            "main_diameter_mm": "number or null",
+                            "stirrup_diameter_mm": "number or null",
+                            "spacing_mm": "number or null"
+                        }
+                    }
+                ],
+                "missing_data": ["list of strings"]
+            },
+            'formula': None  # handled separately
+        }
     },
-    "footings": {
-        "description": "Footings are foundation elements. Extract each footing group with count, width (mm), depth (mm), length (mm).",
-        "schema": {
-            "element": "footings",
-            "groups": [
-                {
-                    "label": "string",
-                    "count": "integer",
-                    "width_mm": "number or null",
-                    "depth_mm": "number or null",
-                    "length_mm": "number or null",
-                }
-            ],
-            "missing_data": ["list of strings"]
+    'beams': {
+        'mass': {
+            'required': ['width_mm', 'depth_mm', 'length_mm'],
+            'schema': {
+                "element": "beams",
+                "groups": [
+                    {
+                        "label": "string",
+                        "count": "integer",
+                        "width_mm": "number or null",
+                        "depth_mm": "number or null",
+                        "length_mm": "number or null"
+                    }
+                ],
+                "missing_data": ["list of strings"]
+            },
+            'formula': lambda group, _: (
+                group['width_mm'] / 1000 * group['depth_mm'] / 1000 * group['length_mm'] / 1000
+            )
         },
-        "required": ["width_mm", "depth_mm", "length_mm"],
-        "formula": lambda group, _: (
-            group['width_mm'] / 1000 * group['depth_mm'] / 1000 * group['length_mm'] / 1000
-        )
+        'rebar': {
+            'required': ['width_mm', 'depth_mm', 'length_mm', 'main_diameter_mm', 'stirrup_diameter_mm', 'spacing_mm'],
+            'schema': {
+                "element": "beams",
+                "groups": [
+                    {
+                        "label": "string",
+                        "count": "integer",
+                        "width_mm": "number or null",
+                        "depth_mm": "number or null",
+                        "length_mm": "number or null",
+                        "rebar": {
+                            "main_diameter_mm": "number or null",
+                            "stirrup_diameter_mm": "number or null",
+                            "spacing_mm": "number or null"
+                        }
+                    }
+                ],
+                "missing_data": ["list of strings"]
+            },
+            'formula': None
+        }
     },
-    "walls": {
-        "description": "Walls (retaining or shear). Extract each wall group with length (m), height (m), thickness (mm).",
-        "schema": {
-            "element": "walls",
-            "groups": [
-                {
-                    "label": "string",
-                    "count": "integer",
-                    "length_m": "number or null",
-                    "height_m": "number or null",
-                    "thickness_mm": "number or null"
-                }
-            ],
-            "missing_data": ["list of strings"]
+    'slabs': {
+        'mass': {
+            'required': ['thickness_mm', 'area_m2'],
+            'schema': {
+                "element": "slabs",
+                "areas": [
+                    {
+                        "label": "string",
+                        "thickness_mm": "number or null",
+                        "area_m2": "number or null"
+                    }
+                ],
+                "missing_data": ["list of strings"]
+            },
+            'formula': lambda area, _: area['area_m2'] * area['thickness_mm'] / 1000
         },
-        "required": ["length_m", "height_m", "thickness_mm"],
-        "formula": lambda group, _: group['length_m'] * group['height_m'] * group['thickness_mm'] / 1000
+        'rebar': {
+            'required': ['thickness_mm', 'area_m2', 'top_diameter_mm', 'bottom_diameter_mm', 'spacing_mm'],
+            'schema': {
+                "element": "slabs",
+                "areas": [
+                    {
+                        "label": "string",
+                        "thickness_mm": "number or null",
+                        "area_m2": "number or null",
+                        "rebar": {
+                            "top_diameter_mm": "number or null",
+                            "bottom_diameter_mm": "number or null",
+                            "spacing_mm": "number or null"
+                        }
+                    }
+                ],
+                "missing_data": ["list of strings"]
+            },
+            'formula': None
+        }
     },
-    "flooring": {
-        "description": "Floor finishes. Extract area (m2) per type.",
-        "schema": {
-            "element": "flooring",
-            "areas": [
-                {
-                    "type": "string",  # ceramic, marble, tiles
-                    "area_m2": "number or null"
-                }
-            ],
-            "missing_data": ["list of strings"]
+    'footings': {
+        'mass': {
+            'required': ['width_mm', 'depth_mm', 'length_mm'],
+            'schema': {
+                "element": "footings",
+                "groups": [
+                    {
+                        "label": "string",
+                        "count": "integer",
+                        "width_mm": "number or null",
+                        "depth_mm": "number or null",
+                        "length_mm": "number or null"
+                    }
+                ],
+                "missing_data": ["list of strings"]
+            },
+            'formula': lambda group, _: (
+                group['width_mm'] / 1000 * group['depth_mm'] / 1000 * group['length_mm'] / 1000
+            )
         },
-        "required": ["area_m2"],
-        "formula": lambda area, _: area['area_m2']
+        'rebar': {
+            'required': ['width_mm', 'depth_mm', 'length_mm', 'main_diameter_mm', 'spacing_mm'],
+            'schema': {
+                "element": "footings",
+                "groups": [
+                    {
+                        "label": "string",
+                        "count": "integer",
+                        "width_mm": "number or null",
+                        "depth_mm": "number or null",
+                        "length_mm": "number or null",
+                        "rebar": {
+                            "main_diameter_mm": "number or null",
+                            "spacing_mm": "number or null"
+                        }
+                    }
+                ],
+                "missing_data": ["list of strings"]
+            },
+            'formula': None
+        }
     },
-    "wall_finishing": {
-        "description": "Wall finishes like paint, plaster. Extract area (m2) per type.",
-        "schema": {
-            "element": "wall_finishing",
-            "areas": [
-                {
-                    "type": "string",
-                    "area_m2": "number or null"
-                }
-            ],
-            "missing_data": ["list of strings"]
+    'walls': {
+        'mass': {
+            'required': ['length_m', 'height_m', 'thickness_mm'],
+            'schema': {
+                "element": "walls",
+                "groups": [
+                    {
+                        "label": "string",
+                        "count": "integer",
+                        "length_m": "number or null",
+                        "height_m": "number or null",
+                        "thickness_mm": "number or null"
+                    }
+                ],
+                "missing_data": ["list of strings"]
+            },
+            'formula': lambda group, _: group['length_m'] * group['height_m'] * group['thickness_mm'] / 1000
         },
-        "required": ["area_m2"],
-        "formula": lambda area, _: area['area_m2']
-    },
-    "ceilings": {
-        "description": "Ceiling finishes. Extract area (m2) per type.",
-        "schema": {
-            "element": "ceilings",
-            "areas": [
-                {
-                    "type": "string",
-                    "area_m2": "number or null"
-                }
-            ],
-            "missing_data": ["list of strings"]
-        },
-        "required": ["area_m2"],
-        "formula": lambda area, _: area['area_m2']
-    },
-    "doors_windows": {
-        "description": "Doors and windows. Extract count per type.",
-        "schema": {
-            "element": "doors_windows",
-            "items": [
-                {
-                    "type": "string",  # door, window
-                    "count": "integer"
-                }
-            ],
-            "missing_data": ["list of strings"]
-        },
-        "required": ["count"],
-        "formula": lambda item, _: item['count']
+        'rebar': {
+            'required': ['length_m', 'height_m', 'thickness_mm', 'main_diameter_mm', 'spacing_mm'],
+            'schema': {
+                "element": "walls",
+                "groups": [
+                    {
+                        "label": "string",
+                        "count": "integer",
+                        "length_m": "number or null",
+                        "height_m": "number or null",
+                        "thickness_mm": "number or null",
+                        "rebar": {
+                            "main_diameter_mm": "number or null",
+                            "spacing_mm": "number or null"
+                        }
+                    }
+                ],
+                "missing_data": ["list of strings"]
+            },
+            'formula': None
+        }
     }
 }
 
 
-def get_element_prompt(element_type, user_params, code_basis):
-    """Build a strict JSON-only prompt for the AI."""
-    schema_info = ELEMENT_SCHEMAS[element_type]
-    schema_example = json.dumps(schema_info['schema'], indent=2)
-    required_fields = ", ".join(schema_info['required'])
+def get_element_prompt(element_type, mode, user_params, code_basis):
+    """Build a strict JSON-only prompt for the AI based on mode."""
+    mode_config = ELEMENT_MODES[element_type][mode]
+    schema_example = json.dumps(mode_config['schema'], indent=2)
+    required_fields = ", ".join(mode_config['required'])
+    extra_instruction = ""
+    if mode == 'mass':
+        extra_instruction = "Do NOT extract any rebar information. Only extract dimensions and counts."
+    else:
+        extra_instruction = "Extract rebar details (diameters, spacing) as part of each group. These fields are required."
     prompt = f"""
 You are an expert Quantity Surveyor. Your task is to EXTRACT raw data from the provided drawing(s) and return ONLY a JSON object following the exact schema below.
 
@@ -1001,7 +1043,8 @@ DO NOT GUESS OR ESTIMATE.
 If a dimension is not clearly visible, set it to null and add the field name to the "missing_data" list.
 
 ELEMENT TYPE: {element_type}
-DESCRIPTION: {schema_info['description']}
+MODE: {mode} ({'Mass Quantities' if mode=='mass' else 'Reinforcement'})
+DESCRIPTION: {extra_instruction}
 
 REQUIRED FIELDS (must be present or marked missing): {required_fields}
 
@@ -1018,16 +1061,15 @@ Return ONLY valid JSON, no extra text, no markdown, no explanations.
     return prompt
 
 
-async def extract_boq_with_ai(element_type, file_bytes, file_type, user_params, code_basis, retry=True):
+async def extract_boq_with_ai(element_type, mode, file_bytes, file_type, user_params, code_basis, retry=True):
     """Send images/text to Gemini and return parsed JSON."""
     contents = []
-    prompt = get_element_prompt(element_type, user_params, code_basis)
+    prompt = get_element_prompt(element_type, mode, user_params, code_basis)
     contents.append(prompt)
 
     # Process file (PDF or image)
     if file_type == 'application/pdf':
         try:
-            # Extract text from first 5 pages
             reader = pypdf.PdfReader(io.BytesIO(file_bytes))
             pages_text = []
             for i in range(min(5, len(reader.pages))):
@@ -1039,7 +1081,6 @@ async def extract_boq_with_ai(element_type, file_bytes, file_type, user_params, 
             full_text = "".join(pages_text)
             if full_text.strip():
                 contents.append(f"Extracted text from PDF (first 5 pages):\n{full_text[:8000]}")
-            # Convert first 5 pages to images
             doc = fitz.open(stream=file_bytes, filetype="pdf")
             for page_num in range(min(5, len(doc))):
                 page = doc.load_page(page_num)
@@ -1049,29 +1090,23 @@ async def extract_boq_with_ai(element_type, file_bytes, file_type, user_params, 
                 img_part = types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg")
                 contents.append(img_part)
             doc.close()
-        except Exception as e:
-            # Fallback: send PDF as binary
+        except Exception:
             contents.append(types.Part.from_bytes(data=file_bytes, mime_type='application/pdf'))
     else:
-        # Image
         img_part = types.Part.from_bytes(data=file_bytes, mime_type=file_type)
         contents.append(img_part)
 
-    # First attempt
     try:
         response = await call_gemini(contents, temperature=0, timeout=120)
-        # Try to parse JSON
         json_str = response.strip()
-        # Remove any markdown code fences if present
         json_str = re.sub(r'^```json\s*', '', json_str)
         json_str = re.sub(r'\s*```$', '', json_str)
         data = json.loads(json_str)
         return data
     except Exception as e:
         if retry:
-            # Second attempt with ultra-strict prompt
-            strict_prompt = get_element_prompt(element_type, user_params, code_basis) + "\n\nREMEMBER: Return ONLY valid JSON. No explanations."
-            contents2 = [strict_prompt] + contents[1:]  # keep images/text
+            strict_prompt = get_element_prompt(element_type, mode, user_params, code_basis) + "\n\nREMEMBER: Return ONLY valid JSON. No explanations."
+            contents2 = [strict_prompt] + contents[1:]
             try:
                 response2 = await call_gemini(contents2, temperature=0, timeout=120)
                 json_str2 = response2.strip()
@@ -1085,12 +1120,12 @@ async def extract_boq_with_ai(element_type, file_bytes, file_type, user_params, 
             raise Exception(f"JSON parse error: {str(e)}")
 
 
-def validate_boj_data(data, element_type):
-    """Check if all required fields are present (not null) and return missing list."""
-    schema_info = ELEMENT_SCHEMAS[element_type]
-    required = schema_info['required']
+def validate_boj_data(data, element_type, mode):
+    """Check if all required fields are present (not null) for the given mode."""
+    mode_config = ELEMENT_MODES[element_type][mode]
+    required = mode_config['required']
     missing = []
-    # Recursively check required fields
+
     def check_obj(obj, path=""):
         if isinstance(obj, dict):
             for key in required:
@@ -1103,7 +1138,6 @@ def validate_boj_data(data, element_type):
             for idx, item in enumerate(obj):
                 check_obj(item, path + f"[{idx}]")
     check_obj(data)
-    # Also check if "missing_data" field exists and add any listed there
     if 'missing_data' in data and isinstance(data['missing_data'], list):
         for m in data['missing_data']:
             if m not in missing:
@@ -1111,125 +1145,191 @@ def validate_boj_data(data, element_type):
     return list(set(missing))
 
 
-def compute_quantities(element_type, data, user_params):
+def compute_quantities(element_type, mode, data, user_params):
     """Calculate volumes, areas, rebar tonnage based on extracted data and user parameters."""
-    schema_info = ELEMENT_SCHEMAS[element_type]
-    formula = schema_info['formula']
+    mode_config = ELEMENT_MODES[element_type][mode]
     results = []
     total_concrete = 0
     total_rebar = 0
+    floor_height = user_params.get('floor_height_mm', 3000) / 1000
 
-    # Get global floor height if needed
-    floor_height = user_params.get('floor_height_mm', 3000) / 1000  # convert to meters
+    if mode == 'mass':
+        # Only concrete volume
+        if element_type in ['columns', 'beams', 'footings', 'walls']:
+            groups = data.get('groups', [])
+            for g in groups:
+                # Use floor height if height missing and allowed
+                if element_type == 'columns' and g.get('height_mm') is None and user_params.get('use_floor_height', False):
+                    g['height_mm'] = user_params.get('floor_height_mm', 3000)
+                # Check if all required fields are present for this group (except those that might have been filled)
+                # We'll compute only if all required are not null
+                required_fields = mode_config['required']
+                all_present = True
+                for req in required_fields:
+                    if req not in g or g[req] is None:
+                        all_present = False
+                        break
+                if not all_present:
+                    continue  # skip this group
+                vol = mode_config['formula'](g, floor_height) if callable(mode_config['formula']) else 0
+                total_concrete += vol * g.get('count', 1)
+                results.append({
+                    'label': g.get('label', 'Unknown'),
+                    'count': g.get('count', 1),
+                    'concrete_m3': vol * g.get('count', 1),
+                    'rebar_ton': 0
+                })
+        elif element_type in ['slabs']:
+            areas = data.get('areas', [])
+            for a in areas:
+                required_fields = mode_config['required']
+                all_present = True
+                for req in required_fields:
+                    if req not in a or a[req] is None:
+                        all_present = False
+                        break
+                if not all_present:
+                    continue
+                vol = mode_config['formula'](a, None) if callable(mode_config['formula']) else 0
+                total_concrete += vol
+                results.append({
+                    'label': a.get('label', 'Slab'),
+                    'area_m2': a.get('area_m2', 0),
+                    'thickness_mm': a.get('thickness_mm', 0),
+                    'concrete_m3': vol
+                })
+        total_concrete = round(total_concrete, 2)
 
-    if element_type in ['columns', 'beams', 'footings', 'walls']:
-        groups = data.get('groups', [])
-        for g in groups:
-            # Fill missing dimensions with floor_height if allowed and missing
-            if element_type == 'columns' and g.get('height_mm') is None and user_params.get('use_floor_height', False):
-                g['height_mm'] = user_params.get('floor_height_mm', 3000)
-            # Compute concrete volume per group
-            vol = formula(g, floor_height) if callable(formula) else 0
-            total_concrete += vol * g.get('count', 1)
-            # Rebar extraction if present
-            rebar_ton = 0
-            if 'rebar' in g and g['rebar']:
-                # Approximate rebar weight: assume main bars run full height/length
-                # Simplified: main rebar weight = number of bars * length * unit weight
-                # We'll compute a rough estimate: assume 4 main bars for columns, 2 top + 2 bottom for beams, etc.
-                # For simplicity, we'll just report the extracted diameters and spacing, but not calculate tonnage yet.
-                # But we can provide a placeholder.
-                pass
-            results.append({
-                'label': g.get('label', 'Unknown'),
-                'count': g.get('count', 1),
-                'concrete_m3': vol * g.get('count', 1),
-                'rebar_ton': 0  # placeholder
-            })
-        total_concrete = round(total_concrete, 2)
-        total_rebar = 0
-    elif element_type in ['slabs']:
-        areas = data.get('areas', [])
-        for a in areas:
-            vol = formula(a, None) if callable(formula) else 0
-            total_concrete += vol
-            results.append({
-                'label': a.get('label', 'Slab'),
-                'area_m2': a.get('area_m2', 0),
-                'thickness_mm': a.get('thickness_mm', 0),
-                'concrete_m3': vol
-            })
-        total_concrete = round(total_concrete, 2)
-    elif element_type in ['flooring', 'wall_finishing', 'ceilings']:
-        areas = data.get('areas', [])
-        for a in areas:
-            qty = formula(a, None) if callable(formula) else 0
-            results.append({
-                'type': a.get('type', 'Unknown'),
-                'quantity': qty,
-                'unit': 'm2'
-            })
-        total_concrete = 0
-    elif element_type == 'doors_windows':
-        items = data.get('items', [])
-        for it in items:
-            qty = formula(it, None) if callable(formula) else 0
-            results.append({
-                'type': it.get('type', 'Unknown'),
-                'quantity': qty,
-                'unit': 'nos'
-            })
-        total_concrete = 0
+    else:  # rebar mode
+        # Compute rebar quantities; also compute concrete volume if possible
+        # For each group, we need dimensions and rebar details
+        if element_type in ['columns', 'beams', 'footings', 'walls']:
+            groups = data.get('groups', [])
+            for g in groups:
+                # Check if all required fields are present (including rebar subfields)
+                required_fields = mode_config['required']
+                all_present = True
+                for req in required_fields:
+                    # For nested rebar fields, we need to check inside g['rebar']
+                    if '.' in req:
+                        parent, child = req.split('.')
+                        if parent not in g or g[parent] is None or child not in g[parent] or g[parent][child] is None:
+                            all_present = False
+                            break
+                    else:
+                        if req not in g or g[req] is None:
+                            all_present = False
+                            break
+                if not all_present:
+                    continue
+                # Now we have all data; compute concrete volume (if dimensions present)
+                if element_type == 'columns':
+                    height = g.get('height_mm') or user_params.get('floor_height_mm', 3000)
+                    vol = (g['width_mm']/1000) * (g['depth_mm']/1000) * (height/1000) * g.get('count', 1)
+                elif element_type == 'beams':
+                    vol = (g['width_mm']/1000) * (g['depth_mm']/1000) * (g['length_mm']/1000) * g.get('count', 1)
+                elif element_type == 'footings':
+                    vol = (g['width_mm']/1000) * (g['depth_mm']/1000) * (g['length_mm']/1000) * g.get('count', 1)
+                elif element_type == 'walls':
+                    vol = g['length_m'] * g['height_m'] * (g['thickness_mm']/1000) * g.get('count', 1)
+                else:
+                    vol = 0
+                total_concrete += vol
+
+                # Compute rebar weight (simplified)
+                # For columns: assume 4 main bars, stirrups every spacing
+                # For beams: assume 4 main bars (2 top, 2 bottom), stirrups
+                # For footings: assume grid of bars
+                # For walls: assume two layers of bars
+                rebar = g.get('rebar', {})
+                main_d = rebar.get('main_diameter_mm', 0)
+                stirrup_d = rebar.get('stirrup_diameter_mm', 0)
+                spacing = rebar.get('spacing_mm', 200)
+                count = g.get('count', 1)
+                # Simplified estimation: we will compute approximate length of main bars and stirrups
+                # For columns: main bars length = height (or floor height) + development
+                # We'll just use height (in meters)
+                if element_type == 'columns':
+                    height_m = height / 1000
+                    # main bars: 4 bars per column
+                    main_length = height_m * 4 * count
+                    # stirrups: perimeter of column / spacing * height
+                    perimeter = 2 * ((g['width_mm'] + g['depth_mm']) / 1000)
+                    num_stirrups = (height_m / (spacing/1000)) + 1
+                    stirrup_length = perimeter * num_stirrups * count
+                    # Convert to kg: density 7850 kg/m3, area = pi*d^2/4
+                    main_weight = main_length * ( (3.1416 * (main_d/1000)**2 / 4) * 7850 )
+                    stirrup_weight = stirrup_length * ( (3.1416 * (stirrup_d/1000)**2 / 4) * 7850 )
+                    total_rebar += (main_weight + stirrup_weight)
+                elif element_type == 'beams':
+                    length_m = g['length_mm'] / 1000
+                    # main bars: 4 bars per beam
+                    main_length = length_m * 4 * count
+                    # stirrups: perimeter of beam / spacing * length
+                    perimeter = 2 * ((g['width_mm'] + g['depth_mm']) / 1000)
+                    num_stirrups = (length_m / (spacing/1000)) + 1
+                    stirrup_length = perimeter * num_stirrups * count
+                    main_weight = main_length * ( (3.1416 * (main_d/1000)**2 / 4) * 7850 )
+                    stirrup_weight = stirrup_length * ( (3.1416 * (stirrup_d/1000)**2 / 4) * 7850 )
+                    total_rebar += (main_weight + stirrup_weight)
+                # For simplicity, we'll just store the computed rebar tonnage per group
+                # But we need to return results per group for display
+                results.append({
+                    'label': g.get('label', 'Unknown'),
+                    'count': count,
+                    'concrete_m3': vol,
+                    'rebar_ton': (main_weight + stirrup_weight) / 1000  # convert to tons
+                })
+            total_concrete = round(total_concrete, 2)
+            total_rebar = round(total_rebar / 1000, 2)  # tons
+
     return results, total_concrete, total_rebar
 
 
-def generate_boq_table(results, branch, element_type, wastage):
+def generate_boq_table(results, branch, element_type, wastage, mode):
     """Create a Pandas DataFrame for display and export."""
     rows = []
-    for r in results:
-        if 'concrete_m3' in r:
-            rows.append({
-                'Item': f"{element_type.capitalize()} - {r.get('label', '')}",
-                'Unit': 'm3',
-                'Quantity (net)': r['concrete_m3'],
-                'Wastage %': wastage,
-                'Quantity (with waste)': round(r['concrete_m3'] * (1 + wastage/100), 2),
-                'Unit Rate (EGP)': UNIT_RATES.get('Concrete (C30/37)', 2500),  # placeholder
-                'Total Cost (EGP)': round(r['concrete_m3'] * (1 + wastage/100) * UNIT_RATES.get('Concrete (C30/37)', 2500), 2)
-            })
-        elif 'quantity' in r:
-            unit = r.get('unit', 'm2')
-            rate_key = None
-            if branch == 'architectural':
-                if element_type == 'flooring':
-                    rate_key = f"Flooring ({r['type']})" if r.get('type') else None
-                elif element_type == 'wall_finishing':
-                    rate_key = f"Wall Finishing ({r['type']})" if r.get('type') else None
-                elif element_type == 'ceilings':
-                    rate_key = f"Ceiling ({r['type']})" if r.get('type') else None
-                elif element_type == 'doors_windows':
-                    rate_key = f"Doors ({r['type']})" if r.get('type') else None
-            else:
-                # Structural elements already handled above, but we could add more
-                rate_key = None
-            if rate_key and rate_key in UNIT_RATES:
-                rate = UNIT_RATES[rate_key]
-            else:
-                rate = 0
-            rows.append({
-                'Item': f"{element_type.capitalize()} - {r.get('type', '')}",
-                'Unit': unit,
-                'Quantity (net)': r['quantity'],
-                'Wastage %': wastage,
-                'Quantity (with waste)': round(r['quantity'] * (1 + wastage/100), 2),
-                'Unit Rate (EGP)': rate,
-                'Total Cost (EGP)': round(r['quantity'] * (1 + wastage/100) * rate, 2)
-            })
+    if mode == 'mass':
+        # Only concrete
+        for r in results:
+            if 'concrete_m3' in r:
+                rows.append({
+                    'Item': f"{element_type.capitalize()} - {r.get('label', '')}",
+                    'Unit': 'm3',
+                    'Quantity (net)': r['concrete_m3'],
+                    'Wastage %': wastage,
+                    'Quantity (with waste)': round(r['concrete_m3'] * (1 + wastage/100), 2),
+                    'Unit Rate (EGP)': UNIT_RATES.get('Concrete (C30/37)', 2500),
+                    'Total Cost (EGP)': round(r['concrete_m3'] * (1 + wastage/100) * UNIT_RATES.get('Concrete (C30/37)', 2500), 2)
+                })
+    else:  # rebar
+        for r in results:
+            if 'rebar_ton' in r:
+                rows.append({
+                    'Item': f"{element_type.capitalize()} - {r.get('label', '')} - Rebar",
+                    'Unit': 'ton',
+                    'Quantity (net)': r['rebar_ton'],
+                    'Wastage %': wastage,
+                    'Quantity (with waste)': round(r['rebar_ton'] * (1 + wastage/100), 2),
+                    'Unit Rate (EGP)': UNIT_RATES.get('Rebar (Grade 400)', 15000),
+                    'Total Cost (EGP)': round(r['rebar_ton'] * (1 + wastage/100) * UNIT_RATES.get('Rebar (Grade 400)', 15000), 2)
+                })
+            # Optionally also show concrete volume if needed
+            if 'concrete_m3' in r:
+                rows.append({
+                    'Item': f"{element_type.capitalize()} - {r.get('label', '')} - Concrete",
+                    'Unit': 'm3',
+                    'Quantity (net)': r['concrete_m3'],
+                    'Wastage %': wastage,
+                    'Quantity (with waste)': round(r['concrete_m3'] * (1 + wastage/100), 2),
+                    'Unit Rate (EGP)': UNIT_RATES.get('Concrete (C30/37)', 2500),
+                    'Total Cost (EGP)': round(r['concrete_m3'] * (1 + wastage/100) * UNIT_RATES.get('Concrete (C30/37)', 2500), 2)
+                })
     return pd.DataFrame(rows)
 
 
 # =====================================================================================
-# MAIN APP LAYOUT (unchanged except BOQ tab)
+# MAIN APP LAYOUT (unchanged except BOQ tab - restructured structural)
 # =====================================================================================
 @ui.page('/')
 def main_page():
@@ -1330,7 +1430,6 @@ def main_page():
             # TAB 1: CONCRETE CUBE VERIFIER (unchanged)
             # =========================================================================
             with ui.tab_panel(t_dash):
-                # ... (keep the existing code as is)
                 ui.label('Concrete Cube Calculation Sheet & Statistical Verifier').classes('text-2xl font-bold text-white mb-4')
 
                 with ui.row().classes('w-full gap-4 mb-4'):
@@ -1862,7 +1961,7 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                     ui.button('Download Chat PDF Transcript', on_click=download_chat_pdf).classes('primary-btn flex-1')
 
             # =========================================================================
-            # TAB 5: PROFESSIONAL BOQ TAKEOFF (REPLACED WITH NEW IMPLEMENTATION)
+            # TAB 5: PROFESSIONAL BOQ TAKEOFF (RESTRUCTURED)
             # =========================================================================
             with ui.tab_panel(t_boq):
                 ui.label('Professional AI BOQ Takeoff & Cost Estimation').classes('text-2xl font-bold text-white mb-2')
@@ -1880,25 +1979,6 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                         rebar_grade_global = ui.input(label='Rebar Grade', value='400/600').classes('w-1/2')
                     wastage_percent_global = ui.number(label='Wastage Allowance (%)', value=5, step=1, min=0, max=20).classes('w-1/2')
 
-                # File upload (shared)
-                boq_status_label = ui.label('Status: No file uploaded yet').classes('text-xs text-amber-400 font-semibold mb-2')
-                boq_file_data = {'bytes': None, 'type': None}
-
-                async def handle_boq_upload(e):
-                    try:
-                        boq_file_data['bytes'] = await e.file.read()
-                        if e.file.name.lower().endswith('.pdf'):
-                            boq_file_data['type'] = 'application/pdf'
-                        else:
-                            boq_file_data['type'] = 'image/jpeg'
-                        boq_status_label.set_text(f'File Ready: {e.file.name} ({(len(boq_file_data["bytes"])/1024/1024):.1f} MB)')
-                        boq_status_label.classes(replace='text-xs text-emerald-400 font-semibold mb-2')
-                        ui.notify(f'File uploaded: {e.file.name}', type='positive')
-                    except Exception as ex:
-                        ui.notify(f'Error: {str(ex)}', type='negative')
-
-                ui.upload(label='Upload Drawings (PDF/Image)', auto_upload=True, on_upload=handle_boq_upload).props('flat dark').classes('w-full mb-4')
-
                 # --- Nested Tabs ---
                 with ui.tabs().classes('w-full text-white bg-[#0d1a35] rounded-lg') as boq_main_tabs:
                     arch_tab = ui.tab('Architectural', icon='home').classes('text-white font-bold')
@@ -1906,7 +1986,7 @@ Ensure all tables are proper Markdown tables with header and separator rows.
 
                 with ui.tab_panels(boq_main_tabs, value=arch_tab).classes('w-full bg-transparent mt-4'):
 
-                    # ========== ARCHITECTURAL BRANCH ==========
+                    # ========== ARCHITECTURAL BRANCH (unchanged) ==========
                     with ui.tab_panel(arch_tab):
                         with ui.tabs().classes('w-full text-white bg-[#0d1a35] rounded-lg') as arch_sub_tabs:
                             arch_elements = ['Flooring', 'Wall Finishing', 'Ceilings', 'Doors/Windows', 'Grand Total']
@@ -1915,7 +1995,6 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                                 arch_tab_objects[el] = ui.tab(el).classes('text-white font-bold')
 
                         with ui.tab_panels(arch_sub_tabs, value=arch_tab_objects['Flooring']).classes('w-full bg-transparent mt-4'):
-                            # For each architectural element
                             arch_element_map = {
                                 'Flooring': 'flooring',
                                 'Wall Finishing': 'wall_finishing',
@@ -1925,14 +2004,25 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                             arch_result_containers = {}
                             arch_export_areas = {}
                             arch_df_holders = {}
-                            arch_result_text_holders = {}
+                            arch_file_data = {}  # each element stores its own file bytes/type
 
                             for el_display, el_key in arch_element_map.items():
                                 with ui.tab_panel(arch_tab_objects[el_display]):
                                     ui.label(f'{el_display} Takeoff').classes('text-xl font-bold text-white mb-2')
-                                    # Parameters specific to this element (optional)
-                                    # For now, just use global parameters
-                                    # Output area
+                                    # File upload for this specific element
+                                    arch_file_data[el_key] = {'bytes': None, 'type': None}
+                                    arch_status_label = ui.label('Status: No file uploaded yet').classes('text-xs text-amber-400 font-semibold mb-2')
+                                    async def handle_arch_upload(e, key=el_key):
+                                        try:
+                                            arch_file_data[key]['bytes'] = await e.file.read()
+                                            arch_file_data[key]['type'] = 'application/pdf' if e.file.name.lower().endswith('.pdf') else 'image/jpeg'
+                                            arch_status_label.set_text(f'File Ready: {e.file.name}')
+                                            arch_status_label.classes(replace='text-xs text-emerald-400 font-semibold mb-2')
+                                            ui.notify(f'File uploaded: {e.file.name}', type='positive')
+                                        except Exception as ex:
+                                            ui.notify(f'Error: {str(ex)}', type='negative')
+                                    ui.upload(label='Upload Drawing', auto_upload=True, on_upload=handle_arch_upload).props('flat dark').classes('w-full mb-4')
+
                                     output_container = ui.column().classes('w-full')
                                     export_area = ui.row().classes('w-full gap-4 mt-4')
                                     arch_result_containers[el_key] = output_container
@@ -1943,10 +2033,9 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                                         if not client:
                                             ui.notify('GEMINI_API_KEY missing!', type='negative')
                                             return
-                                        if not boq_file_data['bytes']:
-                                            ui.notify('Please upload a drawing file first.', type='warning')
+                                        if not arch_file_data[element_key]['bytes']:
+                                            ui.notify('Please upload a drawing file for this element.', type='warning')
                                             return
-                                        # Clear output
                                         output_container.clear()
                                         export_area.clear()
                                         with output_container:
@@ -1960,65 +2049,138 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                                                 'wastage': wastage_percent_global.value,
                                             }
                                             code_basis = code_basis_select.value
+                                            # For architectural, we use a simplified extraction (no mode needed)
+                                            # We'll reuse the old extraction but without rebar
+                                            # Actually we can just call the same function with a dummy mode
+                                            # But we need to adapt: we'll have a separate prompt for architectural elements
+                                            # For simplicity, we'll keep the old extract_boq_with_ai but with a dummy mode
+                                            # We'll just use a generic prompt for architectural
+                                            # Let's create a helper
+                                            async def extract_arch_ai(element_key, file_bytes, file_type, user_params, code_basis):
+                                                # Build prompt for architectural
+                                                arch_schemas = {
+                                                    'flooring': {
+                                                        "schema": {
+                                                            "element": "flooring",
+                                                            "areas": [{"type": "string", "area_m2": "number or null"}],
+                                                            "missing_data": ["list of strings"]
+                                                        },
+                                                        "required": ["area_m2"]
+                                                    },
+                                                    'wall_finishing': {
+                                                        "schema": {
+                                                            "element": "wall_finishing",
+                                                            "areas": [{"type": "string", "area_m2": "number or null"}],
+                                                            "missing_data": ["list of strings"]
+                                                        },
+                                                        "required": ["area_m2"]
+                                                    },
+                                                    'ceilings': {
+                                                        "schema": {
+                                                            "element": "ceilings",
+                                                            "areas": [{"type": "string", "area_m2": "number or null"}],
+                                                            "missing_data": ["list of strings"]
+                                                        },
+                                                        "required": ["area_m2"]
+                                                    },
+                                                    'doors_windows': {
+                                                        "schema": {
+                                                            "element": "doors_windows",
+                                                            "items": [{"type": "string", "count": "integer"}],
+                                                            "missing_data": ["list of strings"]
+                                                        },
+                                                        "required": ["count"]
+                                                    }
+                                                }
+                                                schema_info = arch_schemas[element_key]
+                                                prompt = f"""
+You are an expert Quantity Surveyor. Extract raw data from the drawing(s) and return ONLY a JSON object following the exact schema below.
+DO NOT PERFORM ANY CALCULATIONS.
+If a quantity is not clearly visible, set it to null and add the field name to the "missing_data" list.
 
-                                            # Call AI
-                                            data = await extract_boq_with_ai(
-                                                element_key,
-                                                boq_file_data['bytes'],
-                                                boq_file_data['type'],
-                                                user_params,
-                                                code_basis
-                                            )
+ELEMENT TYPE: {element_key}
+SCHEMA:
+{json.dumps(schema_info['schema'], indent=2)}
 
+USER PARAMETERS: {user_params}
+CODE BASIS: {code_basis}
+
+Return ONLY valid JSON.
+"""
+                                                contents = [prompt]
+                                                # Process file
+                                                if file_type == 'application/pdf':
+                                                    try:
+                                                        reader = pypdf.PdfReader(io.BytesIO(file_bytes))
+                                                        pages_text = []
+                                                        for i in range(min(5, len(reader.pages))):
+                                                            try:
+                                                                txt = reader.pages[i].extract_text() or ""
+                                                                pages_text.append(txt)
+                                                            except:
+                                                                pass
+                                                        full_text = "".join(pages_text)
+                                                        if full_text.strip():
+                                                            contents.append(f"Extracted text from PDF:\n{full_text[:8000]}")
+                                                        doc = fitz.open(stream=file_bytes, filetype="pdf")
+                                                        for page_num in range(min(5, len(doc))):
+                                                            page = doc.load_page(page_num)
+                                                            mat = fitz.Matrix(1.5, 1.5)
+                                                            pix = page.get_pixmap(matrix=mat)
+                                                            img_bytes = pix.tobytes("jpeg")
+                                                            img_part = types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg")
+                                                            contents.append(img_part)
+                                                        doc.close()
+                                                    except:
+                                                        contents.append(types.Part.from_bytes(data=file_bytes, mime_type='application/pdf'))
+                                                else:
+                                                    img_part = types.Part.from_bytes(data=file_bytes, mime_type=file_type)
+                                                    contents.append(img_part)
+                                                response = await call_gemini(contents, temperature=0, timeout=120)
+                                                json_str = response.strip()
+                                                json_str = re.sub(r'^```json\s*', '', json_str)
+                                                json_str = re.sub(r'\s*```$', '', json_str)
+                                                return json.loads(json_str)
+
+                                            data = await extract_arch_ai(element_key, arch_file_data[element_key]['bytes'], arch_file_data[element_key]['type'], user_params, code_basis)
                                             # Validate missing data
-                                            missing = validate_boj_data(data, element_key)
+                                            missing = []
+                                            schema_info = arch_schemas[element_key]
+                                            required = schema_info['required']
+                                            # Check required fields
+                                            def check_arch_missing(obj):
+                                                if isinstance(obj, dict):
+                                                    for req in required:
+                                                        if req not in obj or obj[req] is None:
+                                                            missing.append(req)
+                                                    for k, v in obj.items():
+                                                        if isinstance(v, (dict, list)):
+                                                            check_arch_missing(v)
+                                                elif isinstance(obj, list):
+                                                    for item in obj:
+                                                        check_arch_missing(item)
+                                            check_arch_missing(data)
+                                            if 'missing_data' in data:
+                                                for m in data['missing_data']:
+                                                    if m not in missing:
+                                                        missing.append(m)
                                             if missing:
-                                                # Show modal for missing data
                                                 modal = ui.dialog()
                                                 with modal, ui.card().classes('w-full max-w-2xl'):
                                                     ui.label('Missing Required Data').classes('text-xl font-bold text-[#FF8C00]')
-                                                    ui.markdown(f'The following fields could not be extracted and are required: **{", ".join(missing)}**')
+                                                    ui.markdown(f'The following fields could not be extracted: **{", ".join(missing)}**')
                                                     inputs = {}
                                                     for m in missing:
-                                                        if m == 'height_mm' and use_floor_height_check.value:
-                                                            inputs[m] = ui.number(label=f'{m} (mm) - using floor height', value=floor_height_global.value).props('disable')
-                                                        else:
-                                                            inputs[m] = ui.number(label=f'{m} (mm)', value=None)
-
+                                                        inputs[m] = ui.number(label=f'{m} (value)', value=None)
                                                     async def confirm_missing():
-                                                        # Helper to set nested dictionary values
-                                                        def set_nested(obj, path, val):
-                                                            keys = path.split('.')
-                                                            for k in keys[:-1]:
-                                                                if k.isdigit():
-                                                                    obj = obj[int(k)]
-                                                                else:
-                                                                    obj = obj[k]
-                                                            last = keys[-1]
-                                                            if last.isdigit():
-                                                                obj[int(last)] = val
-                                                            else:
-                                                                obj[last] = val
-
-                                                        # Fill missing data from modal inputs
                                                         for m in missing:
-                                                            if m in inputs and inputs[m].value is not None:
-                                                                val = inputs[m].value
-                                                                # If the missing field is a simple key, set it at top level
-                                                                if '.' not in m:
-                                                                    # For groups, we may need to set it in each group
-                                                                    if 'groups' in data and isinstance(data['groups'], list):
-                                                                        for g in data['groups']:
-                                                                            if m in g:
-                                                                                g[m] = val
-                                                                    else:
-                                                                        data[m] = val
-                                                                else:
-                                                                    set_nested(data, m, val)
+                                                            if inputs[m].value is not None:
+                                                                # Set the value in data
+                                                                # For simplicity, we'll just set at top level if possible
+                                                                data[m] = inputs[m].value
                                                         modal.close()
-                                                        # Proceed with calculation using filled data
+                                                        # Proceed with calculation
                                                         await finish_arch_extraction(data, element_key)
-
                                                     ui.button('Confirm & Calculate', on_click=confirm_missing).classes('primary-btn')
                                                 modal.open()
                                                 return
@@ -2030,24 +2192,38 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                                                 ui.notify(f'Extraction failed: {str(ex)}', type='negative')
 
                                     async def finish_arch_extraction(data, element_key):
-                                        # Compute quantities
                                         user_params = {
                                             'floor_height_mm': floor_height_global.value,
                                             'use_floor_height': use_floor_height_check.value,
                                             'wastage': wastage_percent_global.value,
                                         }
-                                        results, total_concrete, total_rebar = compute_quantities(element_key, data, user_params)
-                                        # Generate DataFrame
-                                        df = generate_boq_table(results, 'architectural', element_key, wastage_percent_global.value)
+                                        # Compute quantities
+                                        results = []
+                                        if element_key in ['flooring', 'wall_finishing', 'ceilings']:
+                                            areas = data.get('areas', [])
+                                            for a in areas:
+                                                if a.get('area_m2') is not None:
+                                                    results.append({
+                                                        'type': a.get('type', 'Unknown'),
+                                                        'quantity': a['area_m2'],
+                                                        'unit': 'm2'
+                                                    })
+                                        elif element_key == 'doors_windows':
+                                            items = data.get('items', [])
+                                            for it in items:
+                                                if it.get('count') is not None:
+                                                    results.append({
+                                                        'type': it.get('type', 'Unknown'),
+                                                        'quantity': it['count'],
+                                                        'unit': 'nos'
+                                                    })
+                                        df = generate_boq_table(results, 'architectural', element_key, wastage_percent_global.value, 'mass')
                                         arch_df_holders[element_key] = df
-                                        # Store in global boq_results
                                         boq_results['architectural'][element_key] = df
-                                        # Display
                                         output_container.clear()
                                         with output_container:
                                             with ui.column().classes('output-card w-full'):
                                                 ui.label(f'{element_key.capitalize()} BOQ').classes('text-xl font-bold text-white mb-2')
-                                                # Convert df to markdown
                                                 def df_to_md(df):
                                                     lines = []
                                                     headers = list(df.columns)
@@ -2058,7 +2234,6 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                                                         lines.append(row_str)
                                                     return "\n".join(lines)
                                                 ui.markdown(df_to_md(df)).classes('markdown-body')
-                                        # Export buttons
                                         with export_area:
                                             def download_arch_pdf(df=df, element=element_key):
                                                 try:
@@ -2103,18 +2278,14 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                                         with grand_output:
                                             ui.markdown('No architectural quantities extracted yet.').classes('text-amber-400')
                                         return
-                                    # Concatenate all DFs
                                     combined = pd.concat(all_dfs, ignore_index=True)
-                                    # Group by Item and sum quantities
                                     grand = combined.groupby('Item').agg({
                                         'Quantity (net)': 'sum',
                                         'Quantity (with waste)': 'sum',
                                         'Total Cost (EGP)': 'sum'
                                     }).reset_index()
-                                    # Add Unit Rate (approximate)
                                     grand['Unit Rate (EGP)'] = grand['Total Cost (EGP)'] / grand['Quantity (with waste)']
                                     grand = grand.round(2)
-                                    # Add a total row
                                     total_row = pd.DataFrame({
                                         'Item': ['GRAND TOTAL'],
                                         'Quantity (net)': [grand['Quantity (net)'].sum()],
@@ -2123,7 +2294,6 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                                         'Total Cost (EGP)': [grand['Total Cost (EGP)'].sum()]
                                     })
                                     grand = pd.concat([grand, total_row], ignore_index=True)
-                                    # Display as markdown
                                     with grand_output:
                                         ui.markdown('### Architectural Grand Total Summary')
                                         def df_to_md(df):
@@ -2136,7 +2306,6 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                                                 lines.append(row_str)
                                             return "\n".join(lines)
                                         ui.markdown(df_to_md(grand)).classes('markdown-body')
-                                    # Export buttons
                                     with grand_export:
                                         def download_grand_pdf():
                                             try:
@@ -2165,12 +2334,10 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                                         ui.button('Download PDF', on_click=download_grand_pdf).classes('primary-btn flex-1')
                                         ui.button('Export Excel', on_click=download_grand_excel).classes('primary-btn flex-1')
 
-                                # Refresh grand total when any architectural extraction is done
-                                # We can add a refresh button
                                 ui.button('Refresh Grand Total', on_click=update_arch_grand_total).classes('primary-btn')
                                 update_arch_grand_total()
 
-                    # ========== STRUCTURAL BRANCH ==========
+                    # ========== STRUCTURAL BRANCH (RESTRUCTURED with mass & rebar modes) ==========
                     with ui.tab_panel(struct_tab):
                         with ui.tabs().classes('w-full text-white bg-[#0d1a35] rounded-lg') as struct_sub_tabs:
                             struct_elements = ['Columns', 'Beams', 'Slabs', 'Footings', 'Walls', 'Grand Total']
@@ -2179,164 +2346,302 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                                 struct_tab_objects[el] = ui.tab(el).classes('text-white font-bold')
 
                         with ui.tab_panels(struct_sub_tabs, value=struct_tab_objects['Columns']).classes('w-full bg-transparent mt-4'):
-                            struct_element_map = {
-                                'Columns': 'columns',
-                                'Beams': 'beams',
-                                'Slabs': 'slabs',
-                                'Footings': 'footings',
-                                'Walls': 'walls'
-                            }
-                            struct_result_containers = {}
-                            struct_export_areas = {}
-                            struct_df_holders = {}
-
-                            for el_display, el_key in struct_element_map.items():
+                            # For each structural element, we create two sub-tabs: Mass and Rebar
+                            for el_display, el_key in [('Columns', 'columns'), ('Beams', 'beams'), ('Slabs', 'slabs'), ('Footings', 'footings'), ('Walls', 'walls')]:
                                 with ui.tab_panel(struct_tab_objects[el_display]):
-                                    ui.label(f'{el_display} Takeoff').classes('text-xl font-bold text-white mb-2')
-                                    output_container = ui.column().classes('w-full')
-                                    export_area = ui.row().classes('w-full gap-4 mt-4')
-                                    struct_result_containers[el_key] = output_container
-                                    struct_export_areas[el_key] = export_area
-                                    struct_df_holders[el_key] = None
+                                    ui.label(f'{el_display} - Mass & Rebar Takeoff').classes('text-xl font-bold text-white mb-2')
+                                    # Create two sub-tabs within this panel
+                                    with ui.tabs().classes('w-full text-white bg-[#0d1a35] rounded-lg') as mode_tabs:
+                                        mass_tab = ui.tab('Mass Quantities').classes('text-white font-bold')
+                                        rebar_tab = ui.tab('Reinforcement').classes('text-white font-bold')
+                                    with ui.tab_panels(mode_tabs, value=mass_tab).classes('w-full bg-transparent mt-2'):
+                                        # ---- Mass Quantities ----
+                                        with ui.tab_panel(mass_tab):
+                                            ui.label(f'{el_display} - Mass Quantities (Concrete volume, area, count)').classes('text-lg font-bold text-white mb-2')
+                                            # File upload
+                                            mass_file_data = {'bytes': None, 'type': None}
+                                            mass_status = ui.label('Status: No file uploaded').classes('text-xs text-amber-400 font-semibold mb-2')
+                                            async def handle_mass_upload(e, key=el_key):
+                                                try:
+                                                    mass_file_data['bytes'] = await e.file.read()
+                                                    mass_file_data['type'] = 'application/pdf' if e.file.name.lower().endswith('.pdf') else 'image/jpeg'
+                                                    mass_status.set_text(f'File Ready: {e.file.name}')
+                                                    mass_status.classes(replace='text-xs text-emerald-400 font-semibold mb-2')
+                                                    ui.notify(f'Mass file uploaded: {e.file.name}', type='positive')
+                                                except Exception as ex:
+                                                    ui.notify(f'Error: {str(ex)}', type='negative')
+                                            ui.upload(label='Upload Drawing for Mass', auto_upload=True, on_upload=handle_mass_upload).props('flat dark').classes('w-full mb-4')
+                                            mass_output = ui.column().classes('w-full')
+                                            mass_export = ui.row().classes('w-full gap-4 mt-4')
+                                            mass_df_holder = [None]
 
-                                    async def run_struct_extraction(element_key=el_key):
-                                        if not client:
-                                            ui.notify('GEMINI_API_KEY missing!', type='negative')
-                                            return
-                                        if not boq_file_data['bytes']:
-                                            ui.notify('Please upload a drawing file first.', type='warning')
-                                            return
-                                        output_container.clear()
-                                        export_area.clear()
-                                        with output_container:
-                                            ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
-                                            ui.label('Extracting structural quantities...').classes('self-center text-sm')
-
-                                        try:
-                                            user_params = {
-                                                'floor_height_mm': floor_height_global.value,
-                                                'use_floor_height': use_floor_height_check.value,
-                                                'wastage': wastage_percent_global.value,
-                                                'concrete_grade': concrete_grade_global.value,
-                                                'rebar_grade': rebar_grade_global.value,
-                                            }
-                                            code_basis = code_basis_select.value
-
-                                            data = await extract_boq_with_ai(
-                                                element_key,
-                                                boq_file_data['bytes'],
-                                                boq_file_data['type'],
-                                                user_params,
-                                                code_basis
-                                            )
-
-                                            missing = validate_boj_data(data, element_key)
-                                            if missing:
-                                                modal = ui.dialog()
-                                                with modal, ui.card().classes('w-full max-w-2xl'):
-                                                    ui.label('Missing Required Data').classes('text-xl font-bold text-[#FF8C00]')
-                                                    ui.markdown(f'The following fields could not be extracted and are required: **{", ".join(missing)}**')
-                                                    inputs = {}
-                                                    for m in missing:
-                                                        if m == 'height_mm' and use_floor_height_check.value:
-                                                            inputs[m] = ui.number(label=f'{m} (mm) - using floor height', value=floor_height_global.value).props('disable')
-                                                        else:
-                                                            inputs[m] = ui.number(label=f'{m} (mm)', value=None)
-
-                                                    async def confirm_missing():
-                                                        def set_nested(obj, path, val):
-                                                            keys = path.split('.')
-                                                            for k in keys[:-1]:
-                                                                if k.isdigit():
-                                                                    obj = obj[int(k)]
+                                            async def run_mass_extraction():
+                                                if not client:
+                                                    ui.notify('GEMINI_API_KEY missing!', type='negative')
+                                                    return
+                                                if not mass_file_data['bytes']:
+                                                    ui.notify('Please upload a drawing for mass quantities.', type='warning')
+                                                    return
+                                                mass_output.clear()
+                                                mass_export.clear()
+                                                with mass_output:
+                                                    ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
+                                                    ui.label('Extracting mass quantities...').classes('self-center text-sm')
+                                                try:
+                                                    user_params = {
+                                                        'floor_height_mm': floor_height_global.value,
+                                                        'use_floor_height': use_floor_height_check.value,
+                                                        'wastage': wastage_percent_global.value,
+                                                    }
+                                                    code_basis = code_basis_select.value
+                                                    data = await extract_boq_with_ai(el_key, 'mass', mass_file_data['bytes'], mass_file_data['type'], user_params, code_basis)
+                                                    missing = validate_boj_data(data, el_key, 'mass')
+                                                    if missing:
+                                                        modal = ui.dialog()
+                                                        with modal, ui.card().classes('w-full max-w-2xl'):
+                                                            ui.label('Missing Required Data').classes('text-xl font-bold text-[#FF8C00]')
+                                                            ui.markdown(f'The following fields could not be extracted: **{", ".join(missing)}**')
+                                                            inputs = {}
+                                                            for m in missing:
+                                                                if m == 'height_mm' and use_floor_height_check.value:
+                                                                    inputs[m] = ui.number(label=f'{m} (mm) - using floor height', value=floor_height_global.value).props('disable')
                                                                 else:
-                                                                    obj = obj[k]
-                                                            last = keys[-1]
-                                                            if last.isdigit():
-                                                                obj[int(last)] = val
-                                                            else:
-                                                                obj[last] = val
-
-                                                        for m in missing:
-                                                            if m in inputs and inputs[m].value is not None:
-                                                                val = inputs[m].value
-                                                                if '.' not in m:
-                                                                    if 'groups' in data and isinstance(data['groups'], list):
-                                                                        for g in data['groups']:
-                                                                            if m in g:
-                                                                                g[m] = val
+                                                                    inputs[m] = ui.number(label=f'{m} (mm)', value=None)
+                                                            async def confirm_missing():
+                                                                def set_nested(obj, path, val):
+                                                                    keys = path.split('.')
+                                                                    for k in keys[:-1]:
+                                                                        if k.isdigit():
+                                                                            obj = obj[int(k)]
+                                                                        else:
+                                                                            obj = obj[k]
+                                                                    last = keys[-1]
+                                                                    if last.isdigit():
+                                                                        obj[int(last)] = val
                                                                     else:
-                                                                        data[m] = val
+                                                                        obj[last] = val
+                                                                for m in missing:
+                                                                    if m in inputs and inputs[m].value is not None:
+                                                                        val = inputs[m].value
+                                                                        if '.' not in m:
+                                                                            if 'groups' in data and isinstance(data['groups'], list):
+                                                                                for g in data['groups']:
+                                                                                    if m in g:
+                                                                                        g[m] = val
+                                                                            else:
+                                                                                data[m] = val
+                                                                        else:
+                                                                            set_nested(data, m, val)
+                                                                modal.close()
+                                                                await finish_mass_extraction(data)
+                                                            ui.button('Confirm & Calculate', on_click=confirm_missing).classes('primary-btn')
+                                                        modal.open()
+                                                        return
+                                                    else:
+                                                        await finish_mass_extraction(data)
+                                                except Exception as ex:
+                                                    mass_output.clear()
+                                                    with mass_output:
+                                                        ui.notify(f'Extraction failed: {str(ex)}', type='negative')
+
+                                            async def finish_mass_extraction(data):
+                                                user_params = {
+                                                    'floor_height_mm': floor_height_global.value,
+                                                    'use_floor_height': use_floor_height_check.value,
+                                                    'wastage': wastage_percent_global.value,
+                                                }
+                                                results, total_concrete, _ = compute_quantities(el_key, 'mass', data, user_params)
+                                                df = generate_boq_table(results, 'structural', el_key, wastage_percent_global.value, 'mass')
+                                                mass_df_holder[0] = df
+                                                # Store in global results with mode key
+                                                boq_results['structural'][f"{el_key}_mass"] = df
+                                                mass_output.clear()
+                                                with mass_output:
+                                                    with ui.column().classes('output-card w-full'):
+                                                        ui.label(f'{el_display} Mass Quantities').classes('text-xl font-bold text-white mb-2')
+                                                        def df_to_md(df):
+                                                            lines = []
+                                                            headers = list(df.columns)
+                                                            lines.append("| " + " | ".join(headers) + " |")
+                                                            lines.append("|" + "|".join(["---"] * len(headers)) + "|")
+                                                            for _, row in df.iterrows():
+                                                                row_str = "| " + " | ".join(str(val) for val in row) + " |"
+                                                                lines.append(row_str)
+                                                            return "\n".join(lines)
+                                                        ui.markdown(df_to_md(df)).classes('markdown-body')
+                                                with mass_export:
+                                                    def download_mass_pdf(df=df):
+                                                        try:
+                                                            meta = current_meta('BOQ')
+                                                            pdf_bytes = build_report_pdf(
+                                                                f"Mass BOQ - {el_display}",
+                                                                f"Structural Mass Takeoff",
+                                                                df_to_md(df),
+                                                                meta,
+                                                                logo_bytes_holder['bytes'],
+                                                            )
+                                                            ui.download(pdf_bytes, filename=f"Mass_{el_key}_{ticket_input.value}.pdf")
+                                                            ui.notify('PDF downloaded', type='positive')
+                                                        except Exception as ex:
+                                                            ui.notify(f'PDF Error: {str(ex)}', type='negative')
+                                                    def download_mass_excel(df=df):
+                                                        try:
+                                                            excel_buffer = io.BytesIO()
+                                                            with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
+                                                                df.to_excel(writer, sheet_name='Mass', index=False)
+                                                            excel_buffer.seek(0)
+                                                            ui.download(excel_buffer.getvalue(), filename=f"Mass_{el_key}_{ticket_input.value}.xlsx")
+                                                            ui.notify('Excel downloaded', type='positive')
+                                                        except Exception as ex:
+                                                            ui.notify(f'Excel Error: {str(ex)}', type='negative')
+                                                    ui.button('Download PDF', on_click=download_mass_pdf).classes('primary-btn flex-1')
+                                                    ui.button('Export Excel', on_click=download_mass_excel).classes('primary-btn flex-1')
+
+                                            ui.button('Extract Mass Quantities', on_click=run_mass_extraction).classes('primary-btn mt-2')
+
+                                        # ---- Reinforcement ----
+                                        with ui.tab_panel(rebar_tab):
+                                            ui.label(f'{el_display} - Reinforcement Takeoff').classes('text-lg font-bold text-white mb-2')
+                                            rebar_file_data = {'bytes': None, 'type': None}
+                                            rebar_status = ui.label('Status: No file uploaded').classes('text-xs text-amber-400 font-semibold mb-2')
+                                            async def handle_rebar_upload(e, key=el_key):
+                                                try:
+                                                    rebar_file_data['bytes'] = await e.file.read()
+                                                    rebar_file_data['type'] = 'application/pdf' if e.file.name.lower().endswith('.pdf') else 'image/jpeg'
+                                                    rebar_status.set_text(f'File Ready: {e.file.name}')
+                                                    rebar_status.classes(replace='text-xs text-emerald-400 font-semibold mb-2')
+                                                    ui.notify(f'Rebar file uploaded: {e.file.name}', type='positive')
+                                                except Exception as ex:
+                                                    ui.notify(f'Error: {str(ex)}', type='negative')
+                                            ui.upload(label='Upload Drawing for Reinforcement', auto_upload=True, on_upload=handle_rebar_upload).props('flat dark').classes('w-full mb-4')
+                                            rebar_output = ui.column().classes('w-full')
+                                            rebar_export = ui.row().classes('w-full gap-4 mt-4')
+                                            rebar_df_holder = [None]
+
+                                            async def run_rebar_extraction():
+                                                if not client:
+                                                    ui.notify('GEMINI_API_KEY missing!', type='negative')
+                                                    return
+                                                if not rebar_file_data['bytes']:
+                                                    ui.notify('Please upload a drawing for reinforcement.', type='warning')
+                                                    return
+                                                rebar_output.clear()
+                                                rebar_export.clear()
+                                                with rebar_output:
+                                                    ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
+                                                    ui.label('Extracting reinforcement details...').classes('self-center text-sm')
+                                                try:
+                                                    user_params = {
+                                                        'floor_height_mm': floor_height_global.value,
+                                                        'use_floor_height': use_floor_height_check.value,
+                                                        'wastage': wastage_percent_global.value,
+                                                    }
+                                                    code_basis = code_basis_select.value
+                                                    data = await extract_boq_with_ai(el_key, 'rebar', rebar_file_data['bytes'], rebar_file_data['type'], user_params, code_basis)
+                                                    missing = validate_boj_data(data, el_key, 'rebar')
+                                                    if missing:
+                                                        modal = ui.dialog()
+                                                        with modal, ui.card().classes('w-full max-w-2xl'):
+                                                            ui.label('Missing Required Data').classes('text-xl font-bold text-[#FF8C00]')
+                                                            ui.markdown(f'The following fields could not be extracted: **{", ".join(missing)}**')
+                                                            inputs = {}
+                                                            for m in missing:
+                                                                if m == 'height_mm' and use_floor_height_check.value:
+                                                                    inputs[m] = ui.number(label=f'{m} (mm) - using floor height', value=floor_height_global.value).props('disable')
                                                                 else:
-                                                                    set_nested(data, m, val)
-                                                        modal.close()
-                                                        await finish_struct_extraction(data, element_key)
-
-                                                    ui.button('Confirm & Calculate', on_click=confirm_missing).classes('primary-btn')
-                                                modal.open()
-                                                return
-                                            else:
-                                                await finish_struct_extraction(data, element_key)
-                                        except Exception as ex:
-                                            output_container.clear()
-                                            with output_container:
-                                                ui.notify(f'Extraction failed: {str(ex)}', type='negative')
-
-                                    async def finish_struct_extraction(data, element_key):
-                                        user_params = {
-                                            'floor_height_mm': floor_height_global.value,
-                                            'use_floor_height': use_floor_height_check.value,
-                                            'wastage': wastage_percent_global.value,
-                                        }
-                                        results, total_concrete, total_rebar = compute_quantities(element_key, data, user_params)
-                                        df = generate_boq_table(results, 'structural', element_key, wastage_percent_global.value)
-                                        struct_df_holders[element_key] = df
-                                        boq_results['structural'][element_key] = df
-                                        output_container.clear()
-                                        with output_container:
-                                            with ui.column().classes('output-card w-full'):
-                                                ui.label(f'{element_key.capitalize()} BOQ').classes('text-xl font-bold text-white mb-2')
-                                                def df_to_md(df):
-                                                    lines = []
-                                                    headers = list(df.columns)
-                                                    lines.append("| " + " | ".join(headers) + " |")
-                                                    lines.append("|" + "|".join(["---"] * len(headers)) + "|")
-                                                    for _, row in df.iterrows():
-                                                        row_str = "| " + " | ".join(str(val) for val in row) + " |"
-                                                        lines.append(row_str)
-                                                    return "\n".join(lines)
-                                                ui.markdown(df_to_md(df)).classes('markdown-body')
-                                        with export_area:
-                                            def download_struct_pdf(df=df, element=element_key):
-                                                try:
-                                                    meta = current_meta('BOQ')
-                                                    pdf_bytes = build_report_pdf(
-                                                        f"BOQ - {element.capitalize()}",
-                                                        f"Structural Takeoff",
-                                                        df_to_md(df),
-                                                        meta,
-                                                        logo_bytes_holder['bytes'],
-                                                    )
-                                                    ui.download(pdf_bytes, filename=f"BOQ_{element}_{ticket_input.value}.pdf")
-                                                    ui.notify('PDF downloaded', type='positive')
+                                                                    inputs[m] = ui.number(label=f'{m} (mm)', value=None)
+                                                            async def confirm_missing():
+                                                                def set_nested(obj, path, val):
+                                                                    keys = path.split('.')
+                                                                    for k in keys[:-1]:
+                                                                        if k.isdigit():
+                                                                            obj = obj[int(k)]
+                                                                        else:
+                                                                            obj = obj[k]
+                                                                    last = keys[-1]
+                                                                    if last.isdigit():
+                                                                        obj[int(last)] = val
+                                                                    else:
+                                                                        obj[last] = val
+                                                                for m in missing:
+                                                                    if m in inputs and inputs[m].value is not None:
+                                                                        val = inputs[m].value
+                                                                        if '.' not in m:
+                                                                            if 'groups' in data and isinstance(data['groups'], list):
+                                                                                for g in data['groups']:
+                                                                                    if m in g:
+                                                                                        g[m] = val
+                                                                            else:
+                                                                                data[m] = val
+                                                                        else:
+                                                                            set_nested(data, m, val)
+                                                                modal.close()
+                                                                await finish_rebar_extraction(data)
+                                                            ui.button('Confirm & Calculate', on_click=confirm_missing).classes('primary-btn')
+                                                        modal.open()
+                                                        return
+                                                    else:
+                                                        await finish_rebar_extraction(data)
                                                 except Exception as ex:
-                                                    ui.notify(f'PDF Error: {str(ex)}', type='negative')
-                                            def download_struct_excel(df=df, element=element_key):
-                                                try:
-                                                    excel_buffer = io.BytesIO()
-                                                    with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
-                                                        df.to_excel(writer, sheet_name='BOQ', index=False)
-                                                    excel_buffer.seek(0)
-                                                    ui.download(excel_buffer.getvalue(), filename=f"BOQ_{element}_{ticket_input.value}.xlsx")
-                                                    ui.notify('Excel downloaded', type='positive')
-                                                except Exception as ex:
-                                                    ui.notify(f'Excel Error: {str(ex)}', type='negative')
-                                            ui.button('Download PDF', on_click=download_struct_pdf).classes('primary-btn flex-1')
-                                            ui.button('Export Excel', on_click=download_struct_excel).classes('primary-btn flex-1')
+                                                    rebar_output.clear()
+                                                    with rebar_output:
+                                                        ui.notify(f'Extraction failed: {str(ex)}', type='negative')
 
-                                    ui.button(f'Extract {el_display} Quantities', on_click=run_struct_extraction).classes('primary-btn mt-2')
+                                            async def finish_rebar_extraction(data):
+                                                user_params = {
+                                                    'floor_height_mm': floor_height_global.value,
+                                                    'use_floor_height': use_floor_height_check.value,
+                                                    'wastage': wastage_percent_global.value,
+                                                }
+                                                results, total_concrete, total_rebar = compute_quantities(el_key, 'rebar', data, user_params)
+                                                df = generate_boq_table(results, 'structural', el_key, wastage_percent_global.value, 'rebar')
+                                                rebar_df_holder[0] = df
+                                                boq_results['structural'][f"{el_key}_rebar"] = df
+                                                rebar_output.clear()
+                                                with rebar_output:
+                                                    with ui.column().classes('output-card w-full'):
+                                                        ui.label(f'{el_display} Reinforcement BOQ').classes('text-xl font-bold text-white mb-2')
+                                                        def df_to_md(df):
+                                                            lines = []
+                                                            headers = list(df.columns)
+                                                            lines.append("| " + " | ".join(headers) + " |")
+                                                            lines.append("|" + "|".join(["---"] * len(headers)) + "|")
+                                                            for _, row in df.iterrows():
+                                                                row_str = "| " + " | ".join(str(val) for val in row) + " |"
+                                                                lines.append(row_str)
+                                                            return "\n".join(lines)
+                                                        ui.markdown(df_to_md(df)).classes('markdown-body')
+                                                with rebar_export:
+                                                    def download_rebar_pdf(df=df):
+                                                        try:
+                                                            meta = current_meta('BOQ')
+                                                            pdf_bytes = build_report_pdf(
+                                                                f"Rebar BOQ - {el_display}",
+                                                                f"Structural Rebar Takeoff",
+                                                                df_to_md(df),
+                                                                meta,
+                                                                logo_bytes_holder['bytes'],
+                                                            )
+                                                            ui.download(pdf_bytes, filename=f"Rebar_{el_key}_{ticket_input.value}.pdf")
+                                                            ui.notify('PDF downloaded', type='positive')
+                                                        except Exception as ex:
+                                                            ui.notify(f'PDF Error: {str(ex)}', type='negative')
+                                                    def download_rebar_excel(df=df):
+                                                        try:
+                                                            excel_buffer = io.BytesIO()
+                                                            with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
+                                                                df.to_excel(writer, sheet_name='Rebar', index=False)
+                                                            excel_buffer.seek(0)
+                                                            ui.download(excel_buffer.getvalue(), filename=f"Rebar_{el_key}_{ticket_input.value}.xlsx")
+                                                            ui.notify('Excel downloaded', type='positive')
+                                                        except Exception as ex:
+                                                            ui.notify(f'Excel Error: {str(ex)}', type='negative')
+                                                    ui.button('Download PDF', on_click=download_rebar_pdf).classes('primary-btn flex-1')
+                                                    ui.button('Export Excel', on_click=download_rebar_excel).classes('primary-btn flex-1')
 
-                            # Grand Total for Structural
+                                            ui.button('Extract Reinforcement Quantities', on_click=run_rebar_extraction).classes('primary-btn mt-2')
+
+                            # Grand Total for Structural - aggregates both mass and rebar
                             with ui.tab_panel(struct_tab_objects['Grand Total']):
                                 ui.label('Structural Grand Total').classes('text-xl font-bold text-white mb-2')
                                 struct_grand_output = ui.column().classes('w-full')
@@ -2345,7 +2650,7 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                                 def update_struct_grand_total():
                                     struct_grand_output.clear()
                                     struct_grand_export.clear()
-                                    all_dfs = [df for df in boq_results['structural'].values() if df is not None and not df.empty]
+                                    all_dfs = [df for key, df in boq_results['structural'].items() if df is not None and not df.empty]
                                     if not all_dfs:
                                         with struct_grand_output:
                                             ui.markdown('No structural quantities extracted yet.').classes('text-amber-400')
@@ -2384,7 +2689,7 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                                                 meta = current_meta('GRAND')
                                                 pdf_bytes = build_report_pdf(
                                                     "Structural Grand Total BOQ",
-                                                    "Summary of all structural quantities",
+                                                    "Summary of all structural quantities (mass + rebar)",
                                                     df_to_md(grand),
                                                     meta,
                                                     logo_bytes_holder['bytes'],
