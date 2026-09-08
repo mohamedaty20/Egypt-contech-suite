@@ -2117,12 +2117,12 @@ Ensure all tables are proper Markdown tables with header and separator rows.
 
         
                        # =========================================================================
-                        # =========================================================================
+                   # =========================================================================
             # TAB 5: PROFESSIONAL BOQ TAKEOFF (REDESIGNED)
             # =========================================================================
             with ui.tab_panel(t_boq):
                 ui.label('Professional AI BOQ Takeoff & Cost Estimation').classes('text-2xl font-bold text-white mb-2')
-                ui.markdown('Upload project drawings (PDF, JPG, PNG). The AI will extract raw data for the selected items.').classes('markdown-body mb-2')
+                ui.markdown('Upload project drawings (PDF, JPG, PNG). The AI will extract raw data for the selected branch.').classes('markdown-body mb-2')
                 ui.markdown('*For PDFs, up to 6 pages are processed for best results.*').classes('text-xs text-yellow-400 mb-4')
 
                 # Global BOQ parameters
@@ -2135,6 +2135,13 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                         concrete_grade_global = ui.input(label='Concrete Grade', value='C30/37').classes('w-1/2')
                         rebar_grade_global = ui.input(label='Rebar Grade', value='400/600').classes('w-1/2')
                     wastage_percent_global = ui.number(label='Wastage Allowance (%)', value=5, step=1, min=0, max=20).classes('w-1/2')
+
+                # Branch selection
+                branch = ui.select(
+                    label='Select Branch',
+                    options=['Structural', 'Architectural'],
+                    value='Structural'
+                ).classes('w-full mb-4')
 
                 # File upload
                 boq_file_data = {'bytes': None, 'type': None}
@@ -2151,146 +2158,75 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                         ui.notify(f'Error: {str(ex)}', type='negative')
                 ui.upload(label='Upload Drawing', auto_upload=True, on_upload=handle_boq_upload).props('flat dark').classes('w-full mb-4')
 
-                # Branch selection
-                branch = ui.select(
-                    label='Select Branch',
-                    options=['Structural', 'Architectural'],
-                    value='Structural'
-                ).classes('w-full mb-2')
-
-                # Item selection container
-                items_container = ui.column().classes('w-full mb-4')
-                selected_items = {'items': []}  # store selected item keys
-                item_buttons = {}  # store button objects for toggling
-
-                # Define item categories
-                structural_items = [
-                    {'key': 'columns', 'label': 'Columns', 'required_fields': ['label', 'count', 'width_mm', 'depth_mm', 'height_mm']},
-                    {'key': 'beams', 'label': 'Beams', 'required_fields': ['label', 'count', 'width_mm', 'depth_mm', 'length_mm']},
-                    {'key': 'slabs', 'label': 'Slabs', 'required_fields': ['label', 'thickness_mm', 'area_m2']},
-                    {'key': 'footings', 'label': 'Footings', 'required_fields': ['label', 'count', 'width_mm', 'depth_mm', 'length_mm']},
-                    {'key': 'shear_walls', 'label': 'Shear Walls', 'required_fields': ['label', 'count', 'length_m', 'height_m', 'thickness_mm']},
-                ]
-                architectural_items = [
-                    {'key': 'area', 'label': 'Area', 'required_fields': ['total_area_m2']},
-                    {'key': 'perimeter', 'label': 'Perimeter', 'required_fields': ['total_perimeter_m']},
-                    {'key': 'walls', 'label': 'Walls (finishing)', 'required_fields': ['total_wall_area_m2']},
-                    {'key': 'ceramic', 'label': 'Ceramic Flooring', 'required_fields': ['ceramic_area_m2']},
-                    {'key': 'paints', 'label': 'Paints', 'required_fields': ['paint_area_m2']},
-                    {'key': 'mortar', 'label': 'Mortar Amount', 'required_fields': ['mortar_volume_m3']},
-                    {'key': 'ceiling', 'label': 'Ceiling', 'required_fields': ['ceiling_area_m2']},
-                    {'key': 'doors', 'label': 'Doors', 'required_fields': ['door_count']},
-                    {'key': 'windows', 'label': 'Windows', 'required_fields': ['window_count']},
-                    {'key': 'wall_sealer', 'label': 'Wall Sealer', 'required_fields': ['sealer_area_m2']},
-                ]
-
-                def toggle_item(key):
-                    if key in selected_items['items']:
-                        selected_items['items'].remove(key)
-                        if key in item_buttons:
-                            item_buttons[key].style('background-color: #0d1a35; border-color: #2c3f6b;')
-                    else:
-                        selected_items['items'].append(key)
-                        if key in item_buttons:
-                            item_buttons[key].style('background-color: #FF8C00; border-color: #FF8C00;')
-
-                def update_items():
-                    items_container.clear()
-                    item_buttons.clear()
-                    current_branch = branch.value
-                    items = structural_items if current_branch == 'Structural' else architectural_items
-                    selected_items['items'] = []
-                    with items_container:
-                        ui.label(f'Select {current_branch} Items to Extract:').classes('text-white font-bold mb-2')
-                        with ui.row().classes('w-full gap-3 flex-wrap'):
-                            for item in items:
-                                btn = ui.button(
-                                    item['label'],
-                                    on_click=lambda k=item['key']: toggle_item(k)
-                                ).props('flat').classes(
-                                    'text-white bg-[#0d1a35] border border-[#2c3f6b] rounded-lg px-4 py-2 hover:bg-[#1a2a4a] transition-colors'
-                                )
-                                btn.style('min-width: 120px;')
-                                item_buttons[item['key']] = btn
-
-                # Initial render
-                update_items()
-                branch.on('change', update_items)
-
-                # Output area
+                # Output areas
                 boq_output = ui.column().classes('w-full')
                 boq_export = ui.row().classes('w-full gap-4 mt-4')
 
-                # Define a strict extraction function (same as before, but we'll include it here for completeness)
-                async def extract_boq_ai(branch_type, selected_keys, file_bytes, file_type, user_params, code_basis):
-                    """Build a strict prompt and extract data."""
-                    items_detail = []
-                    all_required_fields = set()
-                    for key in selected_keys:
-                        if branch_type == 'Structural':
-                            item_info = next((i for i in structural_items if i['key'] == key), None)
-                        else:
-                            item_info = next((i for i in architectural_items if i['key'] == key), None)
-                        if item_info:
-                            items_detail.append(f"- {item_info['label']}: extract {', '.join(item_info['required_fields'])}")
-                            all_required_fields.update(item_info['required_fields'])
-
-                    if not items_detail:
-                        raise ValueError("No items selected.")
-
+                # --------------------------------------------------------------------
+                # AI EXTRACTION FUNCTION (with strict prompt)
+                # --------------------------------------------------------------------
+                async def extract_boq_ai(branch_type, file_bytes, file_type, user_params, code_basis):
+                    """Call Gemini with the detailed prompt and parse the JSON response."""
+                    branch_note = "structural" if branch_type == "Structural" else "architectural"
                     prompt = f"""
-You are an expert Quantity Surveyor with strict instructions.
-You are given a drawing (PDF or image). Your task is to EXTRACT ONLY the raw data for the selected items.
+# ROLE & OBJECTIVE
+You are an expert Senior Civil Quantity Surveyor and AI Layout Parser. Your task is to analyze an uploaded {branch_note} drawing (PNG/PDF) and extract precise Bill of Quantities (BOQ) data. Your extraction must be 98% accurate. Do not guess blindly; if critical data is missing, flag it for user clarification instead of inventing numbers.
 
-SELECTED ITEMS:
-{chr(10).join(items_detail)}
+# EXECUTION WORKFLOW (Follow strictly in order)
 
-CRITICAL RULES:
-1. **FIRST, ANALYZE THE DRAWING**: Determine what the drawing shows. Identify if it is a structural plan, architectural plan, or something else.
-2. **CHECK DATA AVAILABILITY**: If less than 70% of the required data for the selected items is clearly visible (dimensions, counts, labels), respond with a JSON object: {{"status": "insufficient_data", "message": "Explain why the data is insufficient."}} and stop.
-3. **DO NOT REQUEST MISSING DATA**: Only extract what is visible. If a field is not visible, set it to null.
-4. **NEVER ASK FOR REBAR DETAILS** unless rebar details (diameters, spacing) are clearly marked in the drawing.
-5. **DO NOT PERFORM ANY CALCULATIONS** – just extract raw numbers.
-6. **OUTPUT FORMAT**: Return ONLY a JSON object with the following structure:
-   {{
-     "status": "success" or "insufficient_data",
-     "message": "optional explanation",
-     "data": {{
-       "items": [
-         {{
-           "type": "item_key",  // e.g., "columns", "area"
-           "groups": [ ... ]    // array of groups, each with the required fields
-         }}
-       ]
-     }}
-   }}
-   For example, for columns:
-   {{
-     "status": "success",
-     "data": {{
-       "items": [
-         {{
-           "type": "columns",
-           "groups": [
-             {{"label":"C1","count":6,"width_mm":300,"depth_mm":300,"height_mm":3000}},
-             {{"label":"C2","count":4,"width_mm":250,"depth_mm":250,"height_mm":3000}}
-           ]
-         }}
-       ]
-     }}
-   }}
-   For architectural area:
-   {{
-     "status": "success",
-     "data": {{
-       "items": [
-         {{
-           "type": "area",
-           "groups": [{{"total_area_m2": 450.5}}]
-         }}
-       ]
-     }}
-   }}
+## STEP 1: LAYOUT RECONNAISSANCE & INTENT INFERENCE
+Before extracting items, scan the entire visual layout to determine its primary purpose:
+1. Identify Drawing Type: (e.g., Column Layout Plan, Foundation Plan, Beam Layout, Architectural Floor Plan).
+2. Noise vs. Signal Filter: Assess the density of details. For example, if reinforcement/rebar details occupy only a minor portion (e.g., 20% or less) while the dominant elements are structural member positions, ignore the heavy rebar extraction for now and focus purely on member scheduling (Names, Counts, Cross-Sectional Dimensions).
+3. Scale & Unit Detection: Look for drawing scale notes (e.g., 1:50, 1:100) or explicit dimension units (mm, cm, m). Default to millimeters if dimensions look like 250x500, or meters if they look like 0.25x0.50.
+
+## STEP 2: ELEMENT EXTRACTION & MAPPING
+Extract all structural or architectural elements visible in the drawing schedule or plan:
+- Group elements by type (e.g., Columns: C1, C2, C3; Beams: B1, B2; Walls: W1).
+- Extract individual member properties: Identifier, Count/Frequency, and Cross-Sectional Dimensions (Width x Length/Thickness).
+- Calculate preliminary 2D metrics (Cross-sectional area per element type, total area).
+
+## STEP 3: GAP ANALYSIS & MISSING PARAMETERS
+2D plans inherently lack 3D depth. Check for missing variables required for volume/mass calculations (e.g., Column Height, Slab Thickness, Wall Height).
+- If a required volumetric parameter is missing from the layout:
+  - DO NOT guess or assume a default value.
+  - Formulate a precise, polite **Clarification Question** to ask the user.
+
+# OUTPUT FORMAT (Strict JSON Schema)
+Respond ONLY with a valid JSON object matching this exact structure:
+
+{{
+  "layout_metadata": {{
+    "drawing_type": "string (e.g., Column Layout Plan)",
+    "detected_units": "string (mm, cm, or m)",
+    "scale": "string or null",
+    "layout_confidence_score": "float (0.0 to 1.0)"
+  }},
+  "extracted_items": [
+    {{
+      "element_type": "column / beam / wall / slab / area / perimeter / etc.",
+      "mark_name": "string (e.g., C1)",
+      "count": "integer",
+      "dimensions": {{
+        "width": "float",
+        "length": "float",
+        "unit": "string"
+      }},
+      "calculated_metrics": {{
+        "unit_cross_sectional_area": "float",
+        "total_cross_sectional_area": "float"
+      }}
+    }}
+  ],
+  "missing_parameters": [
+    {{
+      "parameter_name": "string (e.g., clear_height)",
+      "target_elements": ["C1", "C2", "C3"],
+      "prompt_to_user": "string (e.g., The 2D layout provides column dimensions and counts, but the clear height is not specified. What is the standard clear height for these columns?)"
+    }}
+  ],
+  "python_execution_ready": "boolean (false if missing_parameters is not empty)"
+}}
 
 Now analyze the drawing and return ONLY the JSON object. No extra text.
 """
@@ -2326,9 +2262,11 @@ Now analyze the drawing and return ONLY the JSON object. No extra text.
                         contents.append(img_part)
 
                     response_text = await call_gemini_json(contents, temperature=0, timeout=300)
+                    # Clean and parse JSON
                     json_str = response_text.strip()
                     json_str = re.sub(r'^```json\s*', '', json_str)
                     json_str = re.sub(r'\s*```$', '', json_str)
+                    # Find first '{' and last '}'
                     start = json_str.find('{')
                     end = json_str.rfind('}')
                     if start != -1 and end != -1:
@@ -2336,15 +2274,75 @@ Now analyze the drawing and return ONLY the JSON object. No extra text.
                     data = json.loads(json_str)
                     return data
 
+                # --------------------------------------------------------------------
+                # COMPUTATION FUNCTIONS (for processing extracted items)
+                # --------------------------------------------------------------------
+                def compute_from_extracted_items(items, user_params, branch_type):
+                    """Convert AI-extracted items into a DataFrame and totals."""
+                    rows = []
+                    for item in items:
+                        elem_type = item.get('element_type', 'unknown')
+                        mark = item.get('mark_name', 'Unnamed')
+                        count = item.get('count', 1)
+                        dims = item.get('dimensions', {})
+                        width = dims.get('width', 0)
+                        length = dims.get('length', 0)
+                        unit = dims.get('unit', 'mm')
+                        # Convert to meters if needed
+                        if unit == 'mm':
+                            width_m = width / 1000
+                            length_m = length / 1000
+                        else:
+                            width_m = width
+                            length_m = length
+
+                        # Compute cross‑sectional area (m²)
+                        area = width_m * length_m
+
+                        # Determine volume if height is known
+                        if branch_type == 'Structural':
+                            # For columns/beams/walls, we need height/length
+                            # We'll use a default height from user_params if available, else mark as missing
+                            # But we already have missing_parameters from AI, so we'll use those
+                            # We'll compute volume later after user fills missing
+                            # For now we just store the area
+                            rows.append({
+                                'Item': f"{elem_type.capitalize()} - {mark}",
+                                'Count': count,
+                                'Unit': 'm²' if branch_type == 'Architectural' else 'm³',
+                                'Cross_Section_Area_m2': round(area, 4),
+                                'Quantity (net)': 0,  # placeholder, will be filled later
+                                'Wastage %': user_params.get('wastage', 5),
+                                'Quantity (with waste)': 0,
+                                'Unit Rate (EGP)': 0,
+                                'Total Cost (EGP)': 0
+                            })
+                        else:
+                            # Architectural items: area, perimeter, count, etc.
+                            # We'll use the calculated_metrics or dimensions
+                            qty = item.get('calculated_metrics', {}).get('total_cross_sectional_area', area * count)
+                            rows.append({
+                                'Item': f"{elem_type.capitalize()} - {mark}",
+                                'Count': count,
+                                'Unit': 'm²' if 'area' in elem_type else 'm' if 'perimeter' in elem_type else 'nos',
+                                'Cross_Section_Area_m2': round(area, 4) if area else 0,
+                                'Quantity (net)': round(qty, 2),
+                                'Wastage %': user_params.get('wastage', 5),
+                                'Quantity (with waste)': round(qty * (1 + user_params.get('wastage', 5)/100), 2),
+                                'Unit Rate (EGP)': UNIT_RATES.get(elem_type.capitalize(), 0),
+                                'Total Cost (EGP)': round(qty * (1 + user_params.get('wastage', 5)/100) * UNIT_RATES.get(elem_type.capitalize(), 0), 2)
+                            })
+                    return pd.DataFrame(rows)
+
+                # --------------------------------------------------------------------
+                # MAIN EXTRACTION BUTTON
+                # --------------------------------------------------------------------
                 async def run_boq_extraction():
                     if not client:
                         ui.notify('GEMINI_API_KEY missing!', type='negative')
                         return
                     if not boq_file_data['bytes']:
                         ui.notify('Please upload a drawing first.', type='warning')
-                        return
-                    if not selected_items['items']:
-                        ui.notify('Please select at least one item.', type='warning')
                         return
 
                     boq_output.clear()
@@ -2364,229 +2362,254 @@ Now analyze the drawing and return ONLY the JSON object. No extra text.
                         code_basis = code_basis_select.value
                         branch_type = branch.value
 
+                        # Call AI
                         ai_response = await extract_boq_ai(
                             branch_type,
-                            selected_items['items'],
                             boq_file_data['bytes'],
                             boq_file_data['type'],
                             user_params,
                             code_basis
                         )
 
-                        if ai_response.get('status') == 'insufficient_data':
+                        # Check for missing parameters
+                        missing_params = ai_response.get('missing_parameters', [])
+                        if missing_params:
+                            # Display missing parameters and ask user to fill them
                             boq_output.clear()
-                            with boq_output:
-                                ui.label('AI could not extract sufficient data.').classes('text-amber-400')
-                                ui.markdown(f"**Reason:** {ai_response.get('message', 'Unknown')}").classes('text-white')
+                            modal = ui.dialog()
+                            with modal, ui.card().classes('w-full max-w-2xl bg-[#0d1a35]'):
+                                ui.label('Missing Parameters').classes('text-xl font-bold text-[#FF8C00]')
+                                ui.markdown('The AI detected the following missing data. Please provide the values:').classes('text-white')
+                                inputs = {}
+                                for param in missing_params:
+                                    ui.label(param.get('prompt_to_user', param.get('parameter_name', 'Unknown'))).classes('text-white font-bold mt-2')
+                                    # We'll create an input for each parameter, but they may apply to multiple elements
+                                    # For simplicity, we'll ask for a single value per parameter
+                                    inputs[param['parameter_name']] = ui.number(label=param['parameter_name'], value=None).classes('w-full')
+                                async def confirm_missing():
+                                    # Store filled values in a dict
+                                    filled = {}
+                                    for key, inp in inputs.items():
+                                        if inp.value is not None:
+                                            filled[key] = inp.value
+                                    modal.close()
+                                    # Re-run computation with filled values
+                                    await finish_boq_calculation(ai_response, filled, user_params, branch_type)
+                                ui.button('Confirm & Calculate', on_click=confirm_missing).classes('primary-btn')
+                            modal.open()
                             return
 
-                        if ai_response.get('status') != 'success':
-                            boq_output.clear()
-                            with boq_output:
-                                ui.label('AI extraction failed.').classes('text-red-400')
-                                ui.markdown(f"**Response:**\n```json\n{json.dumps(ai_response, indent=2)}\n```").classes('text-white')
-                            return
-
-                        data_items = ai_response.get('data', {}).get('items', [])
-                        if not data_items:
-                            boq_output.clear()
-                            with boq_output:
-                                ui.label('No data extracted. Ensure the drawing contains clear dimensions and labels.').classes('text-amber-400')
-                            return
-
-                        all_results = []
-                        for item in data_items:
-                            item_type = item.get('type')
-                            groups = item.get('groups', [])
-                            if not groups:
-                                continue
-                            if item_type in ['columns', 'beams', 'slabs', 'footings', 'shear_walls']:
-                                if item_type == 'shear_walls':
-                                    compute_type = 'walls'
-                                else:
-                                    compute_type = item_type
-                                results, total, missing = compute_mass_from_ai_data_with_missing(compute_type, groups, user_params)
-                                if results:
-                                    df = generate_boq_table(results, 'structural', item_type, wastage_percent_global.value, 'mass')
-                                    all_results.append((item_type, df))
-                            elif item_type in ['area', 'perimeter', 'walls', 'ceramic', 'paints', 'mortar', 'ceiling', 'wall_sealer']:
-                                rows = []
-                                for g in groups:
-                                    for key, val in g.items():
-                                        if val is not None:
-                                            unit = 'm²' if 'area' in key or 'perimeter' in key or 'length' in key else 'nos' if 'count' in key else 'm³'
-                                            rows.append({
-                                                'Item': f"{item_type.capitalize()}",
-                                                'Count': 1,
-                                                'Unit': unit,
-                                                'Quantity (net)': round(val, 2),
-                                                'Wastage %': wastage_percent_global.value,
-                                                'Quantity (with waste)': round(val * (1 + wastage_percent_global.value/100), 2),
-                                                'Unit Rate (EGP)': round(UNIT_RATES.get(item_type.capitalize(), 0), 2),
-                                                'Total Cost (EGP)': round(val * (1 + wastage_percent_global.value/100) * UNIT_RATES.get(item_type.capitalize(), 0), 2)
-                                            })
-                                if rows:
-                                    total_row = {
-                                        'Item': 'TOTAL',
-                                        'Count': '',
-                                        'Unit': '',
-                                        'Quantity (net)': round(sum(r['Quantity (net)'] for r in rows), 2),
-                                        'Wastage %': '',
-                                        'Quantity (with waste)': round(sum(r['Quantity (with waste)'] for r in rows), 2),
-                                        'Unit Rate (EGP)': '',
-                                        'Total Cost (EGP)': round(sum(r['Total Cost (EGP)'] for r in rows), 2)
-                                    }
-                                    rows.append(total_row)
-                                    df = pd.DataFrame(rows)
-                                    all_results.append((item_type, df))
-                            elif item_type in ['doors', 'windows']:
-                                rows = []
-                                for g in groups:
-                                    count = g.get('door_count' if item_type == 'doors' else 'window_count', 0)
-                                    if count:
-                                        rows.append({
-                                            'Item': f"{item_type.capitalize()}",
-                                            'Count': count,
-                                            'Unit': 'nos',
-                                            'Quantity (net)': count,
-                                            'Wastage %': wastage_percent_global.value,
-                                            'Quantity (with waste)': count,
-                                            'Unit Rate (EGP)': round(UNIT_RATES.get(item_type.capitalize(), 0), 2),
-                                            'Total Cost (EGP)': round(count * UNIT_RATES.get(item_type.capitalize(), 0), 2)
-                                        })
-                                if rows:
-                                    total_row = {
-                                        'Item': 'TOTAL',
-                                        'Count': '',
-                                        'Unit': '',
-                                        'Quantity (net)': sum(r['Quantity (net)'] for r in rows),
-                                        'Wastage %': '',
-                                        'Quantity (with waste)': sum(r['Quantity (with waste)'] for r in rows),
-                                        'Unit Rate (EGP)': '',
-                                        'Total Cost (EGP)': round(sum(r['Total Cost (EGP)'] for r in rows), 2)
-                                    }
-                                    rows.append(total_row)
-                                    df = pd.DataFrame(rows)
-                                    all_results.append((item_type, df))
-
-                        if not all_results:
-                            boq_output.clear()
-                            with boq_output:
-                                ui.label('No valid quantities could be computed from the extracted data.').classes('text-amber-400')
-                            return
-
-                        boq_output.clear()
-                        with boq_output:
-                            with ui.column().classes('output-card w-full'):
-                                all_dfs = [df for _, df in all_results]
-                                if len(all_dfs) == 1:
-                                    final_df = all_dfs[0]
-                                else:
-                                    combined = pd.concat([df[df['Item'] != 'TOTAL'] for df in all_dfs], ignore_index=True)
-                                    grand = combined.groupby('Item').agg({
-                                        'Quantity (net)': 'sum',
-                                        'Quantity (with waste)': 'sum',
-                                        'Total Cost (EGP)': 'sum'
-                                    }).reset_index()
-                                    grand['Unit Rate (EGP)'] = grand['Total Cost (EGP)'] / grand['Quantity (with waste)']
-                                    grand = grand.round(2)
-                                    total_row = pd.DataFrame({
-                                        'Item': ['GRAND TOTAL'],
-                                        'Quantity (net)': [grand['Quantity (net)'].sum()],
-                                        'Quantity (with waste)': [grand['Quantity (with waste)'].sum()],
-                                        'Unit Rate (EGP)': [''],
-                                        'Total Cost (EGP)': [grand['Total Cost (EGP)'].sum()]
-                                    })
-                                    final_df = pd.concat([grand, total_row], ignore_index=True)
-
-                                ui.label('Bill of Quantities').classes('text-xl font-bold text-white mb-2')
-                                def df_to_md(df):
-                                    lines = []
-                                    headers = list(df.columns)
-                                    lines.append("| " + " | ".join(headers) + " |")
-                                    lines.append("|" + "|".join(["---"] * len(headers)) + "|")
-                                    for _, row in df.iterrows():
-                                        row_str = "| " + " | ".join(str(val) for val in row) + " |"
-                                        lines.append(row_str)
-                                    return "\n".join(lines)
-                                ui.markdown(df_to_md(final_df)).classes('markdown-body')
-
-                                if len(final_df[final_df['Item'] != 'GRAND TOTAL']) > 0:
-                                    df_chart = final_df[final_df['Item'] != 'GRAND TOTAL']
-                                    fig_bar = go.Figure()
-                                    fig_bar.add_trace(go.Bar(
-                                        x=df_chart['Item'],
-                                        y=df_chart['Quantity (net)'],
-                                        name='Quantity (net)',
-                                        marker_color='#FF8C00',
-                                        text=df_chart['Quantity (net)'],
-                                        textposition='auto',
-                                    ))
-                                    fig_bar.update_layout(
-                                        title='Quantities per Item',
-                                        template='plotly_dark',
-                                        paper_bgcolor='#0d1a35',
-                                        plot_bgcolor='#0d1a35',
-                                        font=dict(color='white'),
-                                        margin=dict(t=40, b=20, l=40, r=20),
-                                        height=400,
-                                        xaxis_tickangle=-45,
-                                    )
-                                    ui.plotly(fig_bar).classes('w-full mt-2')
-
-                                    fig_pie = go.Figure(data=[go.Pie(
-                                        labels=df_chart['Item'],
-                                        values=df_chart['Total Cost (EGP)'],
-                                        hole=0.4,
-                                        marker=dict(colors=px.colors.sequential.Oranges_r),
-                                        textinfo='label+percent',
-                                        textposition='auto',
-                                    )])
-                                    fig_pie.update_layout(
-                                        title='Cost Distribution',
-                                        template='plotly_dark',
-                                        paper_bgcolor='#0d1a35',
-                                        plot_bgcolor='#0d1a35',
-                                        font=dict(color='white'),
-                                        margin=dict(t=40, b=20, l=40, r=20),
-                                        height=400,
-                                    )
-                                    ui.plotly(fig_pie).classes('w-full mt-2')
-
-                        with boq_export:
-                            def download_boq_pdf():
-                                try:
-                                    meta = current_meta('BOQ')
-                                    pdf_bytes = build_report_pdf(
-                                        "BOQ Report",
-                                        f"Branch: {branch_type} | Items: {', '.join(selected_items['items'])}",
-                                        df_to_md(final_df),
-                                        meta,
-                                        logo_bytes_holder['bytes'],
-                                    )
-                                    ui.download(pdf_bytes, filename=f"BOQ_{ticket_input.value}.pdf")
-                                    ui.notify('PDF downloaded', type='positive')
-                                except Exception as ex:
-                                    ui.notify(f'PDF Error: {str(ex)}', type='negative')
-                            def download_boq_excel():
-                                try:
-                                    excel_buffer = io.BytesIO()
-                                    with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
-                                        final_df.to_excel(writer, sheet_name='BOQ', index=False)
-                                    excel_buffer.seek(0)
-                                    ui.download(excel_buffer.getvalue(), filename=f"BOQ_{ticket_input.value}.xlsx")
-                                    ui.notify('Excel downloaded', type='positive')
-                                except Exception as ex:
-                                    ui.notify(f'Excel Error: {str(ex)}', type='negative')
-                            ui.button('Download PDF', on_click=download_boq_pdf).classes('primary-btn flex-1')
-                            ui.button('Export Excel', on_click=download_boq_excel).classes('primary-btn flex-1')
+                        # If no missing params, proceed directly
+                        await finish_boq_calculation(ai_response, {}, user_params, branch_type)
 
                     except Exception as ex:
                         boq_output.clear()
                         with boq_output:
                             ui.notify(f'Extraction failed: {str(ex)}', type='negative')
                             ui.label('Error occurred. Please try again with a clearer drawing.').classes('text-red-400')
+                            if hasattr(ex, 'response_text'):
+                                ui.markdown(f"**AI Response:**\n```json\n{ex.response_text}\n```").classes('text-xs text-gray-400')
 
+                async def finish_boq_calculation(ai_response, filled_params, user_params, branch_type):
+                    """Compute quantities, generate table, and display charts."""
+                    # Extract items and metadata
+                    items = ai_response.get('extracted_items', [])
+                    metadata = ai_response.get('layout_metadata', {})
+                    if not items:
+                        boq_output.clear()
+                        with boq_output:
+                            ui.label('No items extracted. Ensure the drawing contains clear dimensions and labels.').classes('text-amber-400')
+                            ui.markdown(f"**AI Response:**\n```json\n{json.dumps(ai_response, indent=2)}\n```").classes('text-xs text-gray-400')
+                        return
+
+                    # Apply filled parameters to items (e.g., replace missing heights)
+                    # For structural items, we need to compute volume
+                    # We'll build a list of rows for the table
+                    rows = []
+                    for item in items:
+                        elem_type = item.get('element_type', 'unknown')
+                        mark = item.get('mark_name', 'Unnamed')
+                        count = item.get('count', 1)
+                        dims = item.get('dimensions', {})
+                        width = dims.get('width', 0)
+                        length = dims.get('length', 0)
+                        unit = dims.get('unit', 'mm')
+                        # Convert to meters
+                        if unit == 'mm':
+                            width_m = width / 1000
+                            length_m = length / 1000
+                        else:
+                            width_m = width
+                            length_m = length
+                        area = width_m * length_m
+
+                        # Determine volume or quantity
+                        if branch_type == 'Structural':
+                            # For columns, beams, walls, we need height/length
+                            # If a filled_param exists for this element, use it
+                            # Otherwise use user_params floor height if applicable
+                            height = None
+                            for param in ai_response.get('missing_parameters', []):
+                                if param['parameter_name'] in filled_params:
+                                    # If this parameter targets this element, use the filled value
+                                    if mark in param.get('target_elements', []):
+                                        height = filled_params[param['parameter_name']]
+                            if height is None and elem_type in ['column', 'wall'] and user_params.get('use_floor_height'):
+                                height = user_params.get('floor_height_mm', 3000) / 1000  # in meters
+                            if height is None:
+                                # Skip this item (should not happen if missing params handled)
+                                continue
+                            volume = area * height * count
+                            unit_rate = UNIT_RATES.get('Concrete (C30/37)', 2500)
+                            rows.append({
+                                'Item': f"{elem_type.capitalize()} - {mark}",
+                                'Count': count,
+                                'Unit': 'm³',
+                                'Cross_Section_Area_m2': round(area, 4),
+                                'Height_m': round(height, 2),
+                                'Quantity (net)': round(volume, 2),
+                                'Wastage %': user_params.get('wastage', 5),
+                                'Quantity (with waste)': round(volume * (1 + user_params.get('wastage', 5)/100), 2),
+                                'Unit Rate (EGP)': round(unit_rate, 2),
+                                'Total Cost (EGP)': round(volume * (1 + user_params.get('wastage', 5)/100) * unit_rate, 2)
+                            })
+                        else:
+                            # Architectural: use calculated_metrics or dimensions
+                            qty = item.get('calculated_metrics', {}).get('total_cross_sectional_area', area * count)
+                            if qty == 0 and 'area' in elem_type:
+                                qty = area * count
+                            unit = 'm²' if 'area' in elem_type else 'm' if 'perimeter' in elem_type else 'nos'
+                            unit_rate = UNIT_RATES.get(elem_type.capitalize(), 0)
+                            rows.append({
+                                'Item': f"{elem_type.capitalize()} - {mark}",
+                                'Count': count,
+                                'Unit': unit,
+                                'Cross_Section_Area_m2': round(area, 4) if area else 0,
+                                'Height_m': 0,
+                                'Quantity (net)': round(qty, 2),
+                                'Wastage %': user_params.get('wastage', 5),
+                                'Quantity (with waste)': round(qty * (1 + user_params.get('wastage', 5)/100), 2),
+                                'Unit Rate (EGP)': round(unit_rate, 2),
+                                'Total Cost (EGP)': round(qty * (1 + user_params.get('wastage', 5)/100) * unit_rate, 2)
+                            })
+
+                    if not rows:
+                        boq_output.clear()
+                        with boq_output:
+                            ui.label('Could not compute quantities from the extracted data.').classes('text-amber-400')
+                        return
+
+                    # Create DataFrame and add total row
+                    df = pd.DataFrame(rows)
+                    total_row = {
+                        'Item': 'GRAND TOTAL',
+                        'Count': '',
+                        'Unit': '',
+                        'Cross_Section_Area_m2': '',
+                        'Height_m': '',
+                        'Quantity (net)': round(df['Quantity (net)'].sum(), 2),
+                        'Wastage %': '',
+                        'Quantity (with waste)': round(df['Quantity (with waste)'].sum(), 2),
+                        'Unit Rate (EGP)': '',
+                        'Total Cost (EGP)': round(df['Total Cost (EGP)'].sum(), 2)
+                    }
+                    df = pd.concat([df, pd.DataFrame([total_row])], ignore_index=True)
+
+                    # Display output
+                    boq_output.clear()
+                    with boq_output:
+                        with ui.column().classes('output-card w-full'):
+                            ui.label('Bill of Quantities').classes('text-xl font-bold text-white mb-2')
+                            if metadata:
+                                ui.markdown(f"**Drawing Type:** {metadata.get('drawing_type', 'Unknown')} | **Units:** {metadata.get('detected_units', 'N/A')} | **Confidence:** {metadata.get('layout_confidence_score', 0.0)}").classes('text-sm text-gray-400')
+                            # Table
+                            def df_to_md(df):
+                                lines = []
+                                headers = list(df.columns)
+                                lines.append("| " + " | ".join(headers) + " |")
+                                lines.append("|" + "|".join(["---"] * len(headers)) + "|")
+                                for _, row in df.iterrows():
+                                    row_str = "| " + " | ".join(str(val) for val in row) + " |"
+                                    lines.append(row_str)
+                                return "\n".join(lines)
+                            ui.markdown(df_to_md(df)).classes('markdown-body')
+
+                            # Charts
+                            if len(df[df['Item'] != 'GRAND TOTAL']) > 0:
+                                df_chart = df[df['Item'] != 'GRAND TOTAL']
+                                # Bar chart: Quantity (net)
+                                fig_bar = go.Figure()
+                                fig_bar.add_trace(go.Bar(
+                                    x=df_chart['Item'],
+                                    y=df_chart['Quantity (net)'],
+                                    name='Quantity (net)',
+                                    marker_color='#FF8C00',
+                                    text=df_chart['Quantity (net)'],
+                                    textposition='auto',
+                                ))
+                                fig_bar.update_layout(
+                                    title='Quantities per Item',
+                                    template='plotly_dark',
+                                    paper_bgcolor='#0d1a35',
+                                    plot_bgcolor='#0d1a35',
+                                    font=dict(color='white'),
+                                    margin=dict(t=40, b=20, l=40, r=20),
+                                    height=400,
+                                    xaxis_tickangle=-45,
+                                )
+                                ui.plotly(fig_bar).classes('w-full mt-2')
+
+                                # Pie chart: Cost distribution
+                                fig_pie = go.Figure(data=[go.Pie(
+                                    labels=df_chart['Item'],
+                                    values=df_chart['Total Cost (EGP)'],
+                                    hole=0.4,
+                                    marker=dict(colors=px.colors.sequential.Oranges_r),
+                                    textinfo='label+percent',
+                                    textposition='auto',
+                                )])
+                                fig_pie.update_layout(
+                                    title='Cost Distribution',
+                                    template='plotly_dark',
+                                    paper_bgcolor='#0d1a35',
+                                    plot_bgcolor='#0d1a35',
+                                    font=dict(color='white'),
+                                    margin=dict(t=40, b=20, l=40, r=20),
+                                    height=400,
+                                )
+                                ui.plotly(fig_pie).classes('w-full mt-2')
+
+                    # Export buttons
+                    boq_export.clear()
+                    with boq_export:
+                        def download_boq_pdf():
+                            try:
+                                meta = current_meta('BOQ')
+                                pdf_bytes = build_report_pdf(
+                                    "BOQ Report",
+                                    f"Branch: {branch.value}",
+                                    df_to_md(df),
+                                    meta,
+                                    logo_bytes_holder['bytes'],
+                                )
+                                ui.download(pdf_bytes, filename=f"BOQ_{ticket_input.value}.pdf")
+                                ui.notify('PDF downloaded', type='positive')
+                            except Exception as ex:
+                                ui.notify(f'PDF Error: {str(ex)}', type='negative')
+                        def download_boq_excel():
+                            try:
+                                excel_buffer = io.BytesIO()
+                                with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
+                                    df.to_excel(writer, sheet_name='BOQ', index=False)
+                                excel_buffer.seek(0)
+                                ui.download(excel_buffer.getvalue(), filename=f"BOQ_{ticket_input.value}.xlsx")
+                                ui.notify('Excel downloaded', type='positive')
+                            except Exception as ex:
+                                ui.notify(f'Excel Error: {str(ex)}', type='negative')
+                        ui.button('Download PDF', on_click=download_boq_pdf).classes('primary-btn flex-1')
+                        ui.button('Export Excel', on_click=download_boq_excel).classes('primary-btn flex-1')
+
+                # Run button
                 ui.button('Run BOQ Extraction', on_click=run_boq_extraction).classes('primary-btn mt-4')
         # ---------------- FOOTER (unchanged) ----------------
         ui.html('''
