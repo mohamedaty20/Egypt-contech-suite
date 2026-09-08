@@ -2118,11 +2118,11 @@ Ensure all tables are proper Markdown tables with header and separator rows.
         
                        # =========================================================================
             # =========================================================================
-            # TAB 5: PROFESSIONAL BOQ TAKEOFF (BOUNDING BOX + ENSEMBLE - FIXED)
+            # TAB 5: PROFESSIONAL BOQ TAKEOFF (GRID-BASED COUNTING + ENSEMBLE FALLBACK)
             # =========================================================================
             with ui.tab_panel(t_boq):
                 ui.label('Professional AI BOQ Takeoff & Cost Estimation').classes('text-2xl font-bold text-white mb-2')
-                ui.markdown('Upload a structural plan (PDF, JPG, PNG). The AI will detect columns with bounding boxes and run multiple passes for consensus.').classes('markdown-body mb-2')
+                ui.markdown('Upload a structural plan (PDF, JPG, PNG). The AI will extract grid positions; Python counts accurately.').classes('markdown-body mb-2')
                 ui.markdown('*For PDFs, up to 6 pages are processed for best results.*').classes('text-xs text-yellow-400 mb-4')
 
                 # Global Parameters
@@ -2135,9 +2135,6 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                         concrete_grade_global = ui.input(label='Concrete Grade', value='C30/37').classes('w-1/2')
                         rebar_grade_global = ui.input(label='Rebar Grade', value='400/600').classes('w-1/2')
                     wastage_percent_global = ui.number(label='Wastage Allowance (%)', value=5, step=1, min=0, max=20).classes('w-1/2')
-
-                # Number of ensemble passes
-                num_passes = ui.number(label='Ensemble Passes (recommended 5-10)', value=5, step=1, min=3, max=15).classes('w-full mb-4')
 
                 # File upload
                 boq_file_data = {'bytes': None, 'type': None}
@@ -2159,8 +2156,131 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                 boq_export = ui.row().classes('w-full gap-4 mt-4')
 
                 # --------------------------------------------------------------------
-                # HELPER FUNCTIONS FOR BOUNDING BOX
+                # GRID-BASED EXTRACTION (PRIMARY METHOD)
                 # --------------------------------------------------------------------
+                async def extract_grid_columns(file_bytes, file_type, code_basis, user_params):
+                    prompt = """
+You are an expert Quantity Surveyor. Scan the structural column layout drawing.
+
+**STEP 1: Identify Grid Lines**
+- Identify the horizontal grid lines (letters: A, B, C, etc.) and vertical grid lines (numbers: 1, 2, 3, etc.).
+- Output them as arrays in the JSON.
+
+**STEP 2: Extract Column Data**
+For every column, provide:
+- label (e.g., C1)
+- width_mm (in mm)
+- depth_mm (in mm)
+- grid_intersections: a list of grid positions where this column appears, e.g., ["A-1", "A-3", "B-1"]
+
+**CRITICAL RULES:**
+- Do NOT guess counts. Count is derived from grid_intersections.
+- If a column's grid intersection is not clearly visible, do not include that intersection.
+
+**OUTPUT FORMAT:**
+{
+  "grids": {
+    "horizontal": ["A", "B", "C"],
+    "vertical": ["1", "2", "3"]
+  },
+  "columns": [
+    {
+      "label": "C1",
+      "width_mm": 250,
+      "depth_mm": 500,
+      "grid_intersections": ["A-1", "A-3", "B-1"]
+    },
+    {
+      "label": "C2",
+      "width_mm": 300,
+      "depth_mm": 600,
+      "grid_intersections": ["B-2"]
+    }
+  ],
+  "python_execution_ready": true
+}
+
+Return ONLY the JSON object.
+"""
+                    contents = [prompt]
+
+                    # Process file – send up to 6 pages as PNG
+                    if file_type == 'application/pdf':
+                        try:
+                            reader = pypdf.PdfReader(io.BytesIO(file_bytes))
+                            pages_text = []
+                            for i in range(min(3, len(reader.pages))):
+                                try:
+                                    txt = reader.pages[i].extract_text() or ""
+                                    pages_text.append(txt)
+                                except:
+                                    pass
+                            full_text = "".join(pages_text)
+                            if full_text.strip():
+                                contents.append(f"Extracted text from PDF:\n{full_text[:6000]}")
+                            doc = fitz.open(stream=file_bytes, filetype="pdf")
+                            for page_num in range(min(6, len(doc))):
+                                page = doc.load_page(page_num)
+                                mat = fitz.Matrix(2.0, 2.0)
+                                pix = page.get_pixmap(matrix=mat)
+                                img_bytes = pix.tobytes("png")
+                                img_part = types.Part.from_bytes(data=img_bytes, mime_type="image/png")
+                                contents.append(img_part)
+                            doc.close()
+                        except Exception:
+                            contents.append(types.Part.from_bytes(data=file_bytes, mime_type='application/pdf'))
+                    else:
+                        img_part = types.Part.from_bytes(data=file_bytes, mime_type=file_type)
+                        contents.append(img_part)
+
+                    response_text = await call_gemini_json(contents, temperature=0, timeout=300)
+                    json_str = response_text.strip()
+                    json_str = re.sub(r'^```json\s*', '', json_str)
+                    json_str = re.sub(r'\s*```$', '', json_str)
+                    start = json_str.find('{')
+                    end = json_str.rfind('}')
+                    if start != -1 and end != -1:
+                        json_str = json_str[start:end+1]
+                    data = json.loads(json_str)
+                    return data
+
+                # --------------------------------------------------------------------
+                # ENSEMBLE FALLBACK (BOUNDING BOX + MAJORITY VOTE)
+                # --------------------------------------------------------------------
+                async def extract_columns_ensemble(file_bytes, file_type, code_basis, user_params, num_passes=5):
+                    """Multi-pass bounding box extraction with majority vote."""
+                    all_runs = []
+                    for i in range(num_passes):
+                        try:
+                            detections = await extract_bbox_columns(file_bytes, file_type, code_basis, user_params, temperature=0.2)
+                            if detections:
+                                all_runs.append(detections)
+                        except:
+                            pass
+                        await asyncio.sleep(0.5)
+                    if not all_runs:
+                        return None
+                    # Deduplicate within each run
+                    deduped_runs = [deduplicate_boxes(run) for run in all_runs if run]
+                    # Match across runs
+                    matched = match_columns_across_runs(deduped_runs, match_threshold=50)
+                    return matched, len(all_runs)
+
+                def deduplicate_boxes(detections, iou_threshold=0.5):
+                    unique = []
+                    for det in detections:
+                        box = det.get('bounding_box')
+                        if not box:
+                            continue
+                        is_dup = False
+                        for u in unique:
+                            if compute_iou(box, u['bounding_box']) > iou_threshold and det.get('label') == u.get('label'):
+                                is_dup = True
+                                break
+                        if not is_dup:
+                            unique.append(det)
+                    return unique
+
                 def compute_iou(box1, box2):
                     y1, x1, y2, x2 = box1
                     y3, x3, y4, x4 = box2
@@ -2175,23 +2295,6 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                     box2_area = (y4 - y3) * (x4 - x3)
                     union_area = box1_area + box2_area - inter_area
                     return inter_area / union_area if union_area > 0 else 0.0
-
-                def deduplicate_boxes(detections, iou_threshold=0.5):
-                    if not detections:
-                        return []
-                    unique = []
-                    for det in detections:
-                        box = det.get('bounding_box')
-                        if not box:
-                            continue
-                        is_dup = False
-                        for u in unique:
-                            if compute_iou(box, u['bounding_box']) > iou_threshold and det.get('label') == u.get('label'):
-                                is_dup = True
-                                break
-                        if not is_dup:
-                            unique.append(det)
-                    return unique
 
                 def match_columns_across_runs(all_runs, match_threshold=50):
                     all_detections = []
@@ -2228,7 +2331,6 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                             if not assigned:
                                 clusters.append([det])
                         for cluster in clusters:
-                            # Get most common dimensions
                             dims_list = []
                             for d in cluster:
                                 dims = d.get('dimensions', {})
@@ -2247,47 +2349,24 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                                 'dimensions': most_common_dims,
                                 'detection_runs': len(run_ids),
                                 'total_runs': len(all_runs),
-                                'cluster': cluster
                             })
                     return matched_groups
 
-                # --------------------------------------------------------------------
-                # AI EXTRACTION FUNCTION (BOUNDING BOX PROMPT)
-                # --------------------------------------------------------------------
-                async def extract_columns_with_bbox(file_bytes, file_type, code_basis, user_params, temperature):
+                async def extract_bbox_columns(file_bytes, file_type, code_basis, user_params, temperature):
                     prompt = """
-You are an expert Quantity Surveyor. Scan the structural column layout drawing.
-
 For every column you see, output a JSON array of objects. Each object must have:
 - label: the column mark (e.g., C1)
 - width_mm: the width dimension in mm
 - depth_mm: the depth dimension in mm
-- bounding_box: [ymin, xmin, ymax, xmax] as integer pixel coordinates (the bounding box around the column label and its grid intersection)
+- bounding_box: [ymin, xmin, ymax, xmax] as integer pixel coordinates (the bounding box around the column label)
 
 Return ONLY a JSON array. If no columns are found, return an empty array [].
-
 Example:
-[
-  {"label": "C1", "width_mm": 250, "depth_mm": 500, "bounding_box": [120, 340, 180, 410]},
-  {"label": "C2", "width_mm": 300, "depth_mm": 600, "bounding_box": [450, 780, 520, 870]}
-]
+[{"label": "C1", "width_mm": 250, "depth_mm": 500, "bounding_box": [120, 340, 180, 410]}]
 """
                     contents = [prompt]
-
-                    # Process file – send up to 6 pages as PNG
                     if file_type == 'application/pdf':
                         try:
-                            reader = pypdf.PdfReader(io.BytesIO(file_bytes))
-                            pages_text = []
-                            for i in range(min(3, len(reader.pages))):
-                                try:
-                                    txt = reader.pages[i].extract_text() or ""
-                                    pages_text.append(txt)
-                                except:
-                                    pass
-                            full_text = "".join(pages_text)
-                            if full_text.strip():
-                                contents.append(f"Extracted text from PDF:\n{full_text[:6000]}")
                             doc = fitz.open(stream=file_bytes, filetype="pdf")
                             for page_num in range(min(6, len(doc))):
                                 page = doc.load_page(page_num)
@@ -2297,89 +2376,76 @@ Example:
                                 img_part = types.Part.from_bytes(data=img_bytes, mime_type="image/png")
                                 contents.append(img_part)
                             doc.close()
-                        except Exception:
+                        except:
                             contents.append(types.Part.from_bytes(data=file_bytes, mime_type='application/pdf'))
                     else:
-                        img_part = types.Part.from_bytes(data=file_bytes, mime_type=file_type)
-                        contents.append(img_part)
-
-                    try:
-                        response_text = await call_gemini_json(contents, temperature=temperature, timeout=300)
-                        # Clean and parse JSON
-                        json_str = response_text.strip()
-                        json_str = re.sub(r'^```json\s*', '', json_str)
-                        json_str = re.sub(r'\s*```$', '', json_str)
-                        start = json_str.find('[')
-                        end = json_str.rfind(']')
+                        contents.append(types.Part.from_bytes(data=file_bytes, mime_type=file_type))
+                    response_text = await call_gemini_json(contents, temperature=temperature, timeout=300)
+                    json_str = response_text.strip()
+                    json_str = re.sub(r'^```json\s*', '', json_str)
+                    json_str = re.sub(r'\s*```$', '', json_str)
+                    start = json_str.find('[')
+                    end = json_str.rfind(']')
+                    if start != -1 and end != -1:
+                        json_str = json_str[start:end+1]
+                    else:
+                        # try to parse as object with data field
+                        start = json_str.find('{')
+                        end = json_str.rfind('}')
                         if start != -1 and end != -1:
-                            json_str = json_str[start:end+1]
-                        else:
-                            # Maybe it's an object with a "data" field?
-                            start = json_str.find('{')
-                            end = json_str.rfind('}')
-                            if start != -1 and end != -1:
-                                obj_str = json_str[start:end+1]
-                                obj = json.loads(obj_str)
-                                if isinstance(obj, dict) and 'data' in obj and isinstance(obj['data'], list):
-                                    return obj['data']
-                                elif isinstance(obj, dict) and 'extracted_columns' in obj and isinstance(obj['extracted_columns'], list):
-                                    return obj['extracted_columns']
-                                else:
-                                    # Try to convert single object to array
-                                    if isinstance(obj, dict) and 'label' in obj:
-                                        return [obj]
-                            return []
-                        data = json.loads(json_str)
-                        if isinstance(data, list):
-                            return data
-                        elif isinstance(data, dict):
-                            # Maybe it's a single object
-                            if 'label' in data:
-                                return [data]
-                            elif 'data' in data and isinstance(data['data'], list):
-                                return data['data']
-                            elif 'extracted_columns' in data and isinstance(data['extracted_columns'], list):
-                                return data['extracted_columns']
+                            obj = json.loads(json_str[start:end+1])
+                            if 'data' in obj and isinstance(obj['data'], list):
+                                return obj['data']
+                            elif 'extracted_columns' in obj and isinstance(obj['extracted_columns'], list):
+                                return obj['extracted_columns']
+                            elif 'label' in obj:
+                                return [obj]
                         return []
-                    except Exception as e:
-                        # If parsing fails, return the raw response for debugging
-                        raise Exception(f"JSON parse error: {str(e)}\nRaw response: {response_text[:500]}...")
+                    data = json.loads(json_str)
+                    if isinstance(data, list):
+                        return data
+                    elif isinstance(data, dict) and 'label' in data:
+                        return [data]
+                    return []
 
                 # --------------------------------------------------------------------
                 # COMPUTATION FUNCTION
                 # --------------------------------------------------------------------
-                def compute_boq_from_columns(matched_groups, user_params):
+                def compute_boq_from_columns(columns, user_params, counting_method='grid'):
                     rows = []
                     floor_height = user_params.get('floor_height_mm', 3000) / 1000
                     wastage = user_params.get('wastage', 5)
                     concrete_rate = UNIT_RATES.get('Concrete (C30/37)', 2500)
 
-                    for group in matched_groups:
-                        label = group['label']
-                        dims = group.get('dimensions', {})
+                    for col in columns:
+                        label = col.get('label', 'Unknown')
+                        # Get count from grid intersections or direct count
+                        if counting_method == 'grid':
+                            grid_intersections = col.get('grid_intersections', [])
+                            count = len(set(grid_intersections))
+                        else:
+                            count = col.get('total_count', 1)
+                        dims = col.get('dimensions', {})
                         w = dims.get('width_mm') or dims.get('width') or 0
                         d = dims.get('depth_mm') or dims.get('depth') or 0
-                        # Height: either from user_params or from AI
                         h = None
                         if user_params.get('use_floor_height'):
                             h = user_params.get('floor_height_mm', 3000)
                         if h is None:
-                            # If we have a 'height_mm' in dims, use it
                             h = dims.get('height_mm') or dims.get('height')
                         if h is None:
-                            continue  # skip this column, will be caught later
+                            continue
                         h_m = h / 1000
                         w_m = w / 1000
                         d_m = d / 1000
-                        # Each group represents one physical column
-                        volume = w_m * d_m * h_m
+                        volume = w_m * d_m * h_m * count
                         rows.append({
                             'Item': f"Column - {label}",
-                            'Count': 1,
+                            'Count': count,
                             'Width (mm)': w,
                             'Depth (mm)': d,
                             'Height (mm)': h,
-                            'Detection Confidence': f"{group['detection_runs']}/{group['total_runs']}",
+                            'Grid Positions': ', '.join(col.get('grid_intersections', [])) if counting_method == 'grid' else 'N/A',
                             'Volume (m³)': round(volume, 2),
                             'Wastage %': wastage,
                             'Quantity (with waste)': round(volume * (1 + wastage/100), 2),
@@ -2391,13 +2457,12 @@ Example:
                         return None
 
                     df = pd.DataFrame(rows)
-                    # Aggregate by label to get total count and volume
                     df_agg = df.groupby('Item').agg({
                         'Count': 'sum',
                         'Width (mm)': 'first',
                         'Depth (mm)': 'first',
                         'Height (mm)': 'first',
-                        'Detection Confidence': lambda x: x.iloc[0],
+                        'Grid Positions': lambda x: x.iloc[0] if len(x) else '',
                         'Volume (m³)': 'sum',
                         'Wastage %': 'first',
                         'Quantity (with waste)': 'sum',
@@ -2414,7 +2479,7 @@ Example:
                         'Unit Rate (EGP)': '',
                         'Total Cost (EGP)': round(df_agg['Total Cost (EGP)'].sum(), 2)
                     }
-                    for col in ['Width (mm)', 'Depth (mm)', 'Height (mm)', 'Detection Confidence']:
+                    for col in ['Width (mm)', 'Depth (mm)', 'Height (mm)', 'Grid Positions']:
                         if col in total_row:
                             total_row[col] = ''
                     df_final = pd.concat([df_agg, pd.DataFrame([total_row])], ignore_index=True)
@@ -2435,7 +2500,7 @@ Example:
                     boq_export.clear()
                     with boq_output:
                         ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
-                        ui.label(f'Running ensemble extraction ({num_passes.value} passes)...').classes('self-center text-sm')
+                        ui.label('Extracting grid and columns...').classes('self-center text-sm')
 
                     try:
                         user_params = {
@@ -2446,64 +2511,44 @@ Example:
                             'rebar_grade': rebar_grade_global.value,
                         }
 
-                        all_run_detections = []
-                        raw_responses = []
-                        for i in range(num_passes.value):
-                            try:
-                                detections = await extract_columns_with_bbox(
-                                    boq_file_data['bytes'],
-                                    boq_file_data['type'],
-                                    code_basis_select.value,
-                                    user_params,
-                                    temperature=0.2
-                                )
-                                if detections and isinstance(detections, list):
-                                    # Normalize field names
-                                    normalized = []
-                                    for d in detections:
-                                        if not isinstance(d, dict):
-                                            continue
-                                        # Extract label
-                                        label = d.get('label') or d.get('mark_name') or d.get('name')
-                                        if not label:
-                                            continue
-                                        # Extract dimensions
-                                        dims = d.get('dimensions', {})
-                                        width = dims.get('width_mm') or dims.get('width') or 0
-                                        depth = dims.get('depth_mm') or dims.get('depth') or 0
-                                        # If dimensions are at top level
-                                        if not width:
-                                            width = d.get('width_mm') or d.get('width') or 0
-                                        if not depth:
-                                            depth = d.get('depth_mm') or d.get('depth') or 0
-                                        # Bounding box
-                                        bbox = d.get('bounding_box')
-                                        if not bbox or len(bbox) != 4:
-                                            continue
-                                        normalized.append({
-                                            'label': label,
-                                            'dimensions': {'width_mm': width, 'depth_mm': depth},
-                                            'bounding_box': bbox
-                                        })
-                                    if normalized:
-                                        # Deduplicate within run
-                                        deduped = deduplicate_boxes(normalized, iou_threshold=0.5)
-                                        all_run_detections.append(deduped)
-                            except Exception as e:
-                                print(f"Pass {i+1} failed: {e}")
-                                raw_responses.append(str(e))
-                            await asyncio.sleep(0.5)
+                        # FIRST ATTEMPT: Grid-based extraction (temperature=0)
+                        grid_data = await extract_grid_columns(
+                            boq_file_data['bytes'],
+                            boq_file_data['type'],
+                            code_basis_select.value,
+                            user_params
+                        )
 
-                        if not all_run_detections:
-                            boq_output.clear()
-                            with boq_output:
-                                ui.label('All extraction passes failed. Please try again with a clearer drawing.').classes('text-red-400')
-                                if raw_responses:
-                                    ui.markdown(f"**Last error:** {raw_responses[-1][:500]}").classes('text-xs text-gray-400')
-                            return
+                        columns = grid_data.get('columns', [])
+                        if columns and all('grid_intersections' in c for c in columns):
+                            # We have grid intersections – use Python counting
+                            # Validate each column has at least one intersection
+                            valid_columns = [c for c in columns if c.get('grid_intersections')]
+                            if valid_columns:
+                                # Compute counts from grid_intersections
+                                for col in valid_columns:
+                                    col['grid_intersections'] = list(set(col['grid_intersections']))
+                                df = compute_boq_from_columns(valid_columns, user_params, counting_method='grid')
+                                if df is not None:
+                                    await display_boq(df, 'Grid-Based Counting')
+                                    return
+                                else:
+                                    # Fall through to ensemble if computation fails (e.g., missing height)
+                                    pass
 
-                        # Match columns across runs
-                        matched_groups = match_columns_across_runs(all_run_detections, match_threshold=50)
+                        # FALLBACK: Ensemble bounding box method
+                        ui.notify('Grid extraction incomplete, falling back to ensemble...', type='info')
+                        with boq_output:
+                            ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
+                            ui.label('Running ensemble extraction (5 passes)...').classes('self-center text-sm')
+
+                        matched_groups, total_runs = await extract_columns_ensemble(
+                            boq_file_data['bytes'],
+                            boq_file_data['type'],
+                            code_basis_select.value,
+                            user_params,
+                            num_passes=5
+                        )
 
                         if not matched_groups:
                             boq_output.clear()
@@ -2512,39 +2557,52 @@ Example:
                             return
 
                         # Filter by confidence
-                        total_runs = len(all_run_detections)
-                        low_confidence = []
-                        high_confidence = []
-                        for group in matched_groups:
-                            if group['detection_runs'] / total_runs < 0.6:
-                                low_confidence.append(group)
-                            else:
-                                high_confidence.append(group)
+                        high_confidence = [g for g in matched_groups if g['detection_runs'] / total_runs >= 0.6]
+                        low_confidence = [g for g in matched_groups if g['detection_runs'] / total_runs < 0.6]
 
                         if low_confidence:
-                            # Show modal to ask user to verify
+                            # Ask user to verify low confidence items
                             boq_output.clear()
                             modal = ui.dialog()
                             with modal, ui.card().classes('w-full max-w-2xl bg-[#0d1a35]'):
                                 ui.label('Low Confidence Detections').classes('text-xl font-bold text-[#FF8C00]')
                                 ui.markdown('The following columns were detected in less than 60% of passes. Please verify or remove them:').classes('text-white')
                                 inputs = {}
-                                for group in low_confidence:
-                                    ui.label(f"{group['label']} (detected in {group['detection_runs']}/{total_runs} runs)").classes('text-white mt-2')
-                                    inputs[group['label']] = ui.checkbox(f"Keep this column?", value=True).classes('text-white')
+                                for g in low_confidence:
+                                    ui.label(f"{g['label']} (detected in {g['detection_runs']}/{total_runs} runs)").classes('text-white mt-2')
+                                    inputs[g['label']] = ui.checkbox(f"Keep this column?", value=True).classes('text-white')
                                 async def confirm_low_confidence():
                                     final_groups = high_confidence.copy()
-                                    for group in low_confidence:
-                                        if inputs[group['label']].value:
-                                            final_groups.append(group)
+                                    for g in low_confidence:
+                                        if inputs[g['label']].value:
+                                            final_groups.append(g)
                                     modal.close()
-                                    await finish_boq_calculation(final_groups, user_params)
+                                    # Convert to columns format for compute
+                                    columns = []
+                                    for g in final_groups:
+                                        columns.append({
+                                            'label': g['label'],
+                                            'dimensions': g['dimensions'],
+                                            'total_count': 1  # each group is one physical column, count will be aggregated later
+                                        })
+                                    df = compute_boq_from_columns(columns, user_params, counting_method='ensemble')
+                                    if df is not None:
+                                        await display_boq(df, 'Ensemble (with manual verification)')
                                 ui.button('Confirm & Calculate', on_click=confirm_low_confidence).classes('primary-btn')
                             modal.open()
                             return
 
-                        # If all high confidence, proceed
-                        await finish_boq_calculation(matched_groups, user_params)
+                        # All high confidence
+                        columns = []
+                        for g in high_confidence:
+                            columns.append({
+                                'label': g['label'],
+                                'dimensions': g['dimensions'],
+                                'total_count': 1
+                            })
+                        df = compute_boq_from_columns(columns, user_params, counting_method='ensemble')
+                        if df is not None:
+                            await display_boq(df, 'Ensemble (High Confidence)')
 
                     except Exception as ex:
                         boq_output.clear()
@@ -2554,20 +2612,11 @@ Example:
                             if hasattr(ex, 'response_text'):
                                 ui.markdown(f"**AI Response:**\n```json\n{ex.response_text[:1000]}\n```").classes('text-xs text-gray-400')
 
-                async def finish_boq_calculation(matched_groups, user_params):
-                    # Compute BOQ
-                    df = compute_boq_from_columns(matched_groups, user_params)
-                    if df is None:
-                        boq_output.clear()
-                        with boq_output:
-                            ui.label('Could not compute quantities. Missing critical dimensions (height).').classes('text-amber-400')
-                            ui.markdown('Please ensure the "Use floor height" checkbox is checked or provide the height in the drawing.').classes('text-white')
-                        return
-
+                async def display_boq(df, method):
                     boq_output.clear()
                     with boq_output:
                         with ui.column().classes('output-card w-full'):
-                            ui.label('Columns Bill of Quantities (Bounding Box + Ensemble)').classes('text-xl font-bold text-white mb-2')
+                            ui.label(f'Columns Bill of Quantities ({method})').classes('text-xl font-bold text-white mb-2')
                             def df_to_md(df):
                                 lines = []
                                 headers = list(df.columns)
@@ -2627,13 +2676,13 @@ Example:
                             try:
                                 meta = current_meta('BOQ')
                                 pdf_bytes = build_report_pdf(
-                                    "BOQ Report - Columns (BBox Ensemble)",
-                                    f"Consensus from {num_passes.value} passes",
+                                    "BOQ Report - Columns",
+                                    method,
                                     df_to_md(df),
                                     meta,
                                     logo_bytes_holder['bytes'],
                                 )
-                                ui.download(pdf_bytes, filename=f"BOQ_Columns_BBox_{ticket_input.value}.pdf")
+                                ui.download(pdf_bytes, filename=f"BOQ_Columns_{ticket_input.value}.pdf")
                                 ui.notify('PDF downloaded', type='positive')
                             except Exception as ex:
                                 ui.notify(f'PDF Error: {str(ex)}', type='negative')
@@ -2643,14 +2692,14 @@ Example:
                                 with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
                                     df.to_excel(writer, sheet_name='BOQ', index=False)
                                 excel_buffer.seek(0)
-                                ui.download(excel_buffer.getvalue(), filename=f"BOQ_Columns_BBox_{ticket_input.value}.xlsx")
+                                ui.download(excel_buffer.getvalue(), filename=f"BOQ_Columns_{ticket_input.value}.xlsx")
                                 ui.notify('Excel downloaded', type='positive')
                             except Exception as ex:
                                 ui.notify(f'Excel Error: {str(ex)}', type='negative')
                         ui.button('Download PDF', on_click=download_boq_pdf).classes('primary-btn flex-1')
                         ui.button('Export Excel', on_click=download_boq_excel).classes('primary-btn flex-1')
 
-                ui.button('Run BOQ Extraction (BBox Ensemble)', on_click=run_boq_extraction).classes('primary-btn mt-4')
+                ui.button('Run BOQ Extraction', on_click=run_boq_extraction).classes('primary-btn mt-4')
         # ---------------- FOOTER (unchanged) ----------------
         ui.html('''
         <div class="app-footer">
