@@ -2118,11 +2118,11 @@ Ensure all tables are proper Markdown tables with header and separator rows.
         
                        # =========================================================================
             # =========================================================================
-            # TAB 5: PROFESSIONAL BOQ TAKEOFF (GRID-ANCHORED, DETERMINISTIC)
+            # TAB 5: PROFESSIONAL BOQ TAKEOFF (SELF-CONSISTENCY ENSEMBLE)
             # =========================================================================
             with ui.tab_panel(t_boq):
                 ui.label('Professional AI BOQ Takeoff & Cost Estimation').classes('text-2xl font-bold text-white mb-2')
-                ui.markdown('Upload a structural plan (PDF, JPG, PNG). The AI will use grid lines to count columns accurately.').classes('markdown-body mb-2')
+                ui.markdown('Upload a structural plan (PDF, JPG, PNG). The AI will run multiple passes to ensure accurate column counts.').classes('markdown-body mb-2')
                 ui.markdown('*For PDFs, up to 6 pages are processed for best results.*').classes('text-xs text-yellow-400 mb-4')
 
                 # Global Parameters
@@ -2136,12 +2136,8 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                         rebar_grade_global = ui.input(label='Rebar Grade', value='400/600').classes('w-1/2')
                     wastage_percent_global = ui.number(label='Wastage Allowance (%)', value=5, step=1, min=0, max=20).classes('w-1/2')
 
-                # Element type selection (only Columns for now, but can be extended)
-                element_type = ui.select(
-                    label='Select Element Type',
-                    options=['Columns'],
-                    value='Columns'
-                ).classes('w-full mb-4')
+                # Number of ensemble passes
+                num_passes = ui.number(label='Ensemble Passes (recommended 5-10)', value=5, step=1, min=3, max=15).classes('w-full mb-4')
 
                 # File upload
                 boq_file_data = {'bytes': None, 'type': None}
@@ -2165,8 +2161,8 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                 # --------------------------------------------------------------------
                 # AI EXTRACTION FUNCTION (GRID-ANCHORED)
                 # --------------------------------------------------------------------
-                async def extract_boq_with_grid(file_bytes, file_type, code_basis, user_params):
-                    """Call Gemini with the grid-anchored prompt and return parsed JSON."""
+                async def extract_boq_with_grid(file_bytes, file_type, code_basis, user_params, temperature):
+                    """Call Gemini with the grid-anchored prompt at given temperature."""
                     prompt = """
 # ROLE & OBJECTIVE
 You are an elite Senior Structural Engineer and AI Quantity Surveyor. Your job is to extract exact Bill of Quantities (BOQ) data from structural drawings with 98%+ precision. You must be entirely systematic, deterministic, and strict.
@@ -2269,8 +2265,8 @@ Respond ONLY with a valid JSON object matching this exact structure:
                         img_part = types.Part.from_bytes(data=file_bytes, mime_type=file_type)
                         contents.append(img_part)
 
-                    # Force temperature=0 and JSON mode
-                    response_text = await call_gemini_json(contents, temperature=0, timeout=300)
+                    # Call with the given temperature
+                    response_text = await call_gemini_json(contents, temperature=temperature, timeout=300)
                     # Clean and parse JSON
                     json_str = response_text.strip()
                     json_str = re.sub(r'^```json\s*', '', json_str)
@@ -2283,10 +2279,74 @@ Respond ONLY with a valid JSON object matching this exact structure:
                     return data
 
                 # --------------------------------------------------------------------
+                # SELF-CONSISTENCY ENSEMBLE
+                # --------------------------------------------------------------------
+                def run_consensus_ensemble(all_runs):
+                    """Aggregate counts from multiple runs and return consensus columns."""
+                    # Collect counts and dimensions per mark
+                    mark_counts = {}
+                    mark_dimensions = {}
+                    mark_grids = {}
+
+                    for run in all_runs:
+                        for col in run.get("extracted_columns", []):
+                            name = col.get("mark_name", "").upper().strip()
+                            if not name:
+                                continue
+                            count = col.get("total_count", 0)
+                            dims = col.get("dimensions", {})
+                            grids = col.get("grid_locations", [])
+
+                            if name not in mark_counts:
+                                mark_counts[name] = []
+                                mark_dimensions[name] = []
+                                mark_grids[name] = []
+                            mark_counts[name].append(count)
+                            mark_dimensions[name].append(dims)
+                            mark_grids[name].append(grids)
+
+                    final_columns = []
+                    total_runs = len(all_runs)
+
+                    for name in mark_counts:
+                        counts = mark_counts[name]
+                        # Most frequent count
+                        from collections import Counter
+                        counter = Counter(counts)
+                        most_common_count, freq = counter.most_common(1)[0]
+                        agreement_rate = freq / total_runs
+
+                        # Use the first occurrence of dimensions and grids (or average dimensions if needed)
+                        # We'll take the most frequent dimensions (by width+length combination)
+                        dims_counter = Counter([json.dumps(d, sort_keys=True) for d in mark_dimensions[name]])
+                        most_common_dims_str, _ = dims_counter.most_common(1)[0]
+                        most_common_dims = json.loads(most_common_dims_str)
+
+                        # Grid locations: take the union or the most frequent
+                        # We'll take the most frequent grid set
+                        grid_counter = Counter([json.dumps(sorted(g)) for g in mark_grids[name]])
+                        if grid_counter:
+                            most_common_grids_str, _ = grid_counter.most_common(1)[0]
+                            most_common_grids = json.loads(most_common_grids_str)
+                        else:
+                            most_common_grids = []
+
+                        final_columns.append({
+                            "mark_name": name,
+                            "total_count": most_common_count,
+                            "dimensions": most_common_dims,
+                            "grid_locations": most_common_grids,
+                            "agreement_rate": agreement_rate,
+                            "consensus_confidence": "HIGH" if agreement_rate >= 0.6 else "LOW"
+                        })
+
+                    return final_columns, total_runs
+
+                # --------------------------------------------------------------------
                 # COMPUTATION FUNCTION
                 # --------------------------------------------------------------------
                 def compute_boq_from_columns(columns, user_params):
-                    """Compute volumes and costs from extracted columns."""
+                    """Compute volumes and costs from consensus columns."""
                     rows = []
                     floor_height = user_params.get('floor_height_mm', 3000) / 1000
                     wastage = user_params.get('wastage', 5)
@@ -2323,6 +2383,7 @@ Respond ONLY with a valid JSON object matching this exact structure:
                             'Length (mm)': l,
                             'Height (mm)': h,
                             'Grid Locations': ', '.join(col.get('grid_locations', [])),
+                            'Agreement': f"{int(col.get('agreement_rate', 0) * 100)}%",
                             'Volume (m³)': round(volume, 2),
                             'Wastage %': wastage,
                             'Quantity (with waste)': round(volume * (1 + wastage/100), 2),
@@ -2342,6 +2403,10 @@ Respond ONLY with a valid JSON object matching this exact structure:
                         'Unit Rate (EGP)': '',
                         'Total Cost (EGP)': round(df['Total Cost (EGP)'].sum(), 2)
                     }
+                    # Remove columns that don't exist in total row
+                    for col in ['Width (mm)', 'Length (mm)', 'Height (mm)', 'Grid Locations', 'Agreement']:
+                        if col in total_row:
+                            total_row[col] = ''
                     df = pd.concat([df, pd.DataFrame([total_row])], ignore_index=True)
                     return df
 
@@ -2360,7 +2425,7 @@ Respond ONLY with a valid JSON object matching this exact structure:
                     boq_export.clear()
                     with boq_output:
                         ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
-                        ui.label('Extracting columns using grid-anchored AI...').classes('self-center text-sm')
+                        ui.label(f'Running ensemble extraction ({num_passes.value} passes)...').classes('self-center text-sm')
 
                     try:
                         user_params = {
@@ -2370,49 +2435,62 @@ Respond ONLY with a valid JSON object matching this exact structure:
                             'concrete_grade': concrete_grade_global.value,
                             'rebar_grade': rebar_grade_global.value,
                         }
-                        # Call AI with grid-anchored prompt
-                        ai_response = await extract_boq_with_grid(
-                            boq_file_data['bytes'],
-                            boq_file_data['type'],
-                            code_basis_select.value,
-                            user_params
-                        )
 
-                        # Check status
-                        missing_params = ai_response.get('missing_parameters', [])
-                        if missing_params and not ai_response.get('python_execution_ready', True):
-                            # Show modal to ask for missing height
+                        all_runs = []
+                        successful_runs = 0
+                        for i in range(num_passes.value):
+                            try:
+                                # Call AI with temperature=0.2 for ensemble variation
+                                result = await extract_boq_with_grid(
+                                    boq_file_data['bytes'],
+                                    boq_file_data['type'],
+                                    code_basis_select.value,
+                                    user_params,
+                                    temperature=0.2
+                                )
+                                if result and result.get('extracted_columns'):
+                                    all_runs.append(result)
+                                    successful_runs += 1
+                            except Exception as e:
+                                # Log but continue
+                                print(f"Pass {i+1} failed: {e}")
+                            # Brief pause to avoid rate limits
+                            await asyncio.sleep(0.5)
+
+                        if not all_runs:
+                            boq_output.clear()
+                            with boq_output:
+                                ui.label('All extraction passes failed. Please try again with a clearer drawing.').classes('text-red-400')
+                            return
+
+                        # Run consensus
+                        consensus_columns, total_runs = run_consensus_ensemble(all_runs)
+
+                        # Check for low confidence items
+                        low_confidence = [col for col in consensus_columns if col.get('consensus_confidence') == 'LOW']
+                        if low_confidence:
+                            # Show warning and ask user to verify or enter manually
                             boq_output.clear()
                             modal = ui.dialog()
                             with modal, ui.card().classes('w-full max-w-2xl bg-[#0d1a35]'):
-                                ui.label('Missing Required Data').classes('text-xl font-bold text-[#FF8C00]')
-                                ui.markdown('The AI mapped the columns but needs the clear height. Please provide it:').classes('text-white')
-                                height_input = ui.number(label='Clear Height (mm)', value=floor_height_global.value, step=100).classes('w-full')
-                                async def confirm_height():
-                                    h_val = height_input.value
-                                    if h_val:
-                                        # Add height to all columns
-                                        columns = ai_response.get('extracted_columns', [])
-                                        for col in columns:
-                                            col['height_mm'] = h_val
-                                        modal.close()
-                                        await finish_boq_calculation(columns, user_params)
-                                    else:
-                                        ui.notify('Please enter a height.', type='warning')
-                                ui.button('Confirm & Calculate', on_click=confirm_height).classes('primary-btn')
+                                ui.label('Low Confidence in Some Columns').classes('text-xl font-bold text-[#FF8C00]')
+                                ui.markdown('The following columns had low agreement across passes. Please verify or enter the correct count:').classes('text-white')
+                                inputs = {}
+                                for col in low_confidence:
+                                    ui.label(f"{col['mark_name']}: Consensus={col['total_count']}, Agreement={int(col['agreement_rate']*100)}%").classes('text-white mt-2')
+                                    inputs[col['mark_name']] = ui.number(label=f"Correct count for {col['mark_name']}", value=col['total_count'], step=1).classes('w-full')
+                                async def confirm_low_confidence():
+                                    for col in low_confidence:
+                                        if col['mark_name'] in inputs and inputs[col['mark_name']].value is not None:
+                                            col['total_count'] = int(inputs[col['mark_name']].value)
+                                    modal.close()
+                                    await finish_boq_calculation(consensus_columns, user_params)
+                                ui.button('Confirm & Calculate', on_click=confirm_low_confidence).classes('primary-btn')
                             modal.open()
                             return
 
-                        # If no missing parameters, proceed
-                        columns = ai_response.get('extracted_columns', [])
-                        if not columns:
-                            boq_output.clear()
-                            with boq_output:
-                                ui.label('No columns extracted. Ensure the drawing contains clear grid lines and column labels.').classes('text-amber-400')
-                                ui.markdown(f"**AI Response:**\n```json\n{json.dumps(ai_response, indent=2)}\n```").classes('text-xs text-gray-400')
-                            return
-
-                        await finish_boq_calculation(columns, user_params)
+                        # If all columns have high confidence, proceed
+                        await finish_boq_calculation(consensus_columns, user_params)
 
                     except Exception as ex:
                         boq_output.clear()
@@ -2421,6 +2499,7 @@ Respond ONLY with a valid JSON object matching this exact structure:
                             ui.label('Error occurred. Please try again with a clearer drawing.').classes('text-red-400')
 
                 async def finish_boq_calculation(columns, user_params):
+                    # Compute BOQ
                     df = compute_boq_from_columns(columns, user_params)
                     if df is None:
                         boq_output.clear()
@@ -2431,7 +2510,7 @@ Respond ONLY with a valid JSON object matching this exact structure:
                     boq_output.clear()
                     with boq_output:
                         with ui.column().classes('output-card w-full'):
-                            ui.label('Columns Bill of Quantities').classes('text-xl font-bold text-white mb-2')
+                            ui.label('Columns Bill of Quantities (Ensemble Consensus)').classes('text-xl font-bold text-white mb-2')
                             def df_to_md(df):
                                 lines = []
                                 headers = list(df.columns)
@@ -2491,13 +2570,13 @@ Respond ONLY with a valid JSON object matching this exact structure:
                             try:
                                 meta = current_meta('BOQ')
                                 pdf_bytes = build_report_pdf(
-                                    "BOQ Report - Columns",
-                                    f"Grid-anchored extraction",
+                                    "BOQ Report - Columns (Ensemble)",
+                                    f"Consensus from {num_passes.value} passes",
                                     df_to_md(df),
                                     meta,
                                     logo_bytes_holder['bytes'],
                                 )
-                                ui.download(pdf_bytes, filename=f"BOQ_Columns_{ticket_input.value}.pdf")
+                                ui.download(pdf_bytes, filename=f"BOQ_Columns_Ensemble_{ticket_input.value}.pdf")
                                 ui.notify('PDF downloaded', type='positive')
                             except Exception as ex:
                                 ui.notify(f'PDF Error: {str(ex)}', type='negative')
@@ -2507,14 +2586,14 @@ Respond ONLY with a valid JSON object matching this exact structure:
                                 with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
                                     df.to_excel(writer, sheet_name='BOQ', index=False)
                                 excel_buffer.seek(0)
-                                ui.download(excel_buffer.getvalue(), filename=f"BOQ_Columns_{ticket_input.value}.xlsx")
+                                ui.download(excel_buffer.getvalue(), filename=f"BOQ_Columns_Ensemble_{ticket_input.value}.xlsx")
                                 ui.notify('Excel downloaded', type='positive')
                             except Exception as ex:
                                 ui.notify(f'Excel Error: {str(ex)}', type='negative')
                         ui.button('Download PDF', on_click=download_boq_pdf).classes('primary-btn flex-1')
                         ui.button('Export Excel', on_click=download_boq_excel).classes('primary-btn flex-1')
 
-                ui.button('Run BOQ Extraction', on_click=run_boq_extraction).classes('primary-btn mt-4')
+                ui.button('Run BOQ Extraction (Ensemble)', on_click=run_boq_extraction).classes('primary-btn mt-4')
         # ---------------- FOOTER (unchanged) ----------------
         ui.html('''
         <div class="app-footer">
