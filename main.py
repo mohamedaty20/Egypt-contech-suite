@@ -5,7 +5,6 @@ import uuid
 import re
 import asyncio
 import json
-import mimetypes
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -885,25 +884,77 @@ FIELD_LABELS = {
 MASS_SCHEMAS = {
     'columns': {
         'required': ['label', 'width_mm', 'depth_mm', 'height_mm'],
-        'optional': ['count'],  # count defaults to 1
+        'optional': ['count'],
+        'field_aliases': {
+            'width': 'width_mm',
+            'depth': 'depth_mm',
+            'height': 'height_mm',
+            'width_mm': 'width_mm',
+            'depth_mm': 'depth_mm',
+            'height_mm': 'height_mm',
+            'count': 'count',
+        }
     },
     'beams': {
         'required': ['label', 'width_mm', 'depth_mm', 'length_mm'],
         'optional': ['count'],
+        'field_aliases': {
+            'width': 'width_mm',
+            'depth': 'depth_mm',
+            'length': 'length_mm',
+            'width_mm': 'width_mm',
+            'depth_mm': 'depth_mm',
+            'length_mm': 'length_mm',
+            'count': 'count',
+        }
     },
     'slabs': {
         'required': ['label', 'thickness_mm', 'area_m2'],
         'optional': [],
+        'field_aliases': {
+            'thickness': 'thickness_mm',
+            'area': 'area_m2',
+            'thickness_mm': 'thickness_mm',
+            'area_m2': 'area_m2',
+        }
     },
     'footings': {
         'required': ['label', 'width_mm', 'depth_mm', 'length_mm'],
         'optional': ['count'],
+        'field_aliases': {
+            'width': 'width_mm',
+            'depth': 'depth_mm',
+            'length': 'length_mm',
+            'width_mm': 'width_mm',
+            'depth_mm': 'depth_mm',
+            'length_mm': 'length_mm',
+            'count': 'count',
+        }
     },
     'walls': {
         'required': ['label', 'length_m', 'height_m', 'thickness_mm'],
         'optional': ['count'],
+        'field_aliases': {
+            'length': 'length_m',
+            'height': 'height_m',
+            'thickness': 'thickness_mm',
+            'length_m': 'length_m',
+            'height_m': 'height_m',
+            'thickness_mm': 'thickness_mm',
+            'count': 'count',
+        }
     }
 }
+
+def normalize_keys(obj, aliases):
+    """Convert dictionary keys using alias mapping."""
+    new_obj = {}
+    for k, v in obj.items():
+        if k in aliases:
+            new_obj[aliases[k]] = v
+        else:
+            new_obj[k] = v
+    return new_obj
 
 async def extract_mass_with_ai(element_type, file_bytes, file_type, user_params, code_basis, retry=True):
     """Extract mass quantities using AI with a simple JSON array, processing up to 6 pages."""
@@ -932,7 +983,7 @@ Return ONLY the JSON array, no extra text, no explanations, no markdown.
 Example for columns:
 [{{"label":"C1","width_mm":300,"depth_mm":300,"height_mm":3000,"count":6}}]
 
-Now extract from the drawing. Look at all pages if it's a PDF.
+Now extract from the drawing. Look at all pages if it's a PDF. Pay attention to the units: dimensions are in mm unless specified otherwise (e.g., area in m², length/height in m for walls).
 """
     contents.append(prompt)
 
@@ -971,10 +1022,32 @@ Now extract from the drawing. Look at all pages if it's a PDF.
 
     try:
         response_text = await call_gemini_json(contents, temperature=0, timeout=240)
+        # The response should be pure JSON; but let's be robust: try to parse
         data = json.loads(response_text)
-        return data
+        # If the data is a dictionary with a "groups" key, use that
+        if isinstance(data, dict) and 'groups' in data:
+            data = data['groups']
+        # If data is not a list, try to convert it
+        if not isinstance(data, list):
+            # Maybe it's a single object? Wrap in list
+            if isinstance(data, dict):
+                data = [data]
+            else:
+                data = []
+        # Normalize field names using aliases
+        aliases = schema_info.get('field_aliases', {})
+        normalized_data = []
+        for item in data:
+            if isinstance(item, dict):
+                norm_item = normalize_keys(item, aliases)
+                # Ensure label exists, default to 'Unknown'
+                if 'label' not in norm_item:
+                    norm_item['label'] = 'Unknown'
+                normalized_data.append(norm_item)
+        return normalized_data
     except Exception as e:
         if retry:
+            # Fallback to a simpler prompt
             prompt2 = f"""
 Return a JSON array of objects with fields: {', '.join(schema_info['required'])}.
 If count is not visible, omit it.
@@ -992,7 +1065,22 @@ If the drawing is unclear, return an empty array [].
             try:
                 response_text2 = await call_gemini_json(contents2, temperature=0, timeout=240)
                 data2 = json.loads(response_text2)
-                return data2
+                if isinstance(data2, dict) and 'groups' in data2:
+                    data2 = data2['groups']
+                if not isinstance(data2, list):
+                    if isinstance(data2, dict):
+                        data2 = [data2]
+                    else:
+                        data2 = []
+                aliases = schema_info.get('field_aliases', {})
+                normalized_data2 = []
+                for item in data2:
+                    if isinstance(item, dict):
+                        norm_item = normalize_keys(item, aliases)
+                        if 'label' not in norm_item:
+                            norm_item['label'] = 'Unknown'
+                        normalized_data2.append(norm_item)
+                return normalized_data2
             except:
                 return []
         else:
@@ -2304,8 +2392,11 @@ Return ONLY valid JSON.
                                                     # If no missing groups, directly display results
                                                     if not results:
                                                         output.clear()
+                                                        # Show the raw AI response for debugging
+                                                        raw_response = json.dumps(data, indent=2) if data else "Empty data received."
                                                         with output:
                                                             ui.label('No valid groups extracted. Ensure the drawing contains clear dimensions and labels.').classes('text-amber-400')
+                                                            ui.markdown(f"**AI Response:**\n```json\n{raw_response[:1000]}\n```").classes('text-xs text-gray-400')
                                                         return
                                                     df = generate_boq_table(results, 'structural', key, wastage_percent_global.value, 'mass')
                                                     df_holder[0] = df
