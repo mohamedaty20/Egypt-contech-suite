@@ -2117,12 +2117,12 @@ Ensure all tables are proper Markdown tables with header and separator rows.
 
         
                        # =========================================================================
-            # =========================================================================
-            # TAB 5: PROFESSIONAL BOQ TAKEOFF (SELF-CONSISTENCY ENSEMBLE)
+                # =========================================================================
+            # TAB 5: PROFESSIONAL BOQ TAKEOFF (BOUNDING BOX + ENSEMBLE)
             # =========================================================================
             with ui.tab_panel(t_boq):
                 ui.label('Professional AI BOQ Takeoff & Cost Estimation').classes('text-2xl font-bold text-white mb-2')
-                ui.markdown('Upload a structural plan (PDF, JPG, PNG). The AI will run multiple passes to ensure accurate column counts.').classes('markdown-body mb-2')
+                ui.markdown('Upload a structural plan (PDF, JPG, PNG). The AI will detect columns with bounding boxes and run multiple passes for consensus.').classes('markdown-body mb-2')
                 ui.markdown('*For PDFs, up to 6 pages are processed for best results.*').classes('text-xs text-yellow-400 mb-4')
 
                 # Global Parameters
@@ -2159,80 +2159,136 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                 boq_export = ui.row().classes('w-full gap-4 mt-4')
 
                 # --------------------------------------------------------------------
-                # AI EXTRACTION FUNCTION (GRID-ANCHORED)
+                # HELPER FUNCTIONS FOR BOUNDING BOX
                 # --------------------------------------------------------------------
-                async def extract_boq_with_grid(file_bytes, file_type, code_basis, user_params, temperature):
-                    """Call Gemini with the grid-anchored prompt at given temperature."""
+                def compute_iou(box1, box2):
+                    """Compute Intersection over Union of two bounding boxes [ymin, xmin, ymax, xmax]."""
+                    y1, x1, y2, x2 = box1
+                    y3, x3, y4, x4 = box2
+                    # Intersection
+                    inter_y1 = max(y1, y3)
+                    inter_x1 = max(x1, x3)
+                    inter_y2 = min(y2, y4)
+                    inter_x2 = min(x2, x4)
+                    if inter_y2 < inter_y1 or inter_x2 < inter_x1:
+                        return 0.0
+                    inter_area = (inter_y2 - inter_y1) * (inter_x2 - inter_x1)
+                    box1_area = (y2 - y1) * (x2 - x1)
+                    box2_area = (y4 - y3) * (x4 - x3)
+                    union_area = box1_area + box2_area - inter_area
+                    return inter_area / union_area if union_area > 0 else 0.0
+
+                def deduplicate_boxes(detections, iou_threshold=0.5):
+                    """Remove duplicate detections within a single run using IoU."""
+                    if not detections:
+                        return []
+                    # Sort by confidence or box size (larger first)
+                    unique = []
+                    for det in detections:
+                        box = det['bounding_box']
+                        is_dup = False
+                        for u in unique:
+                            if compute_iou(box, u['bounding_box']) > iou_threshold and det['label'] == u['label']:
+                                is_dup = True
+                                break
+                        if not is_dup:
+                            unique.append(det)
+                    return unique
+
+                def match_columns_across_runs(all_runs, match_threshold=50):
+                    """
+                    Match columns across multiple runs using label and bounding box center.
+                    Returns a list of matched groups, each with a label, dimensions, count, and list of runs.
+                    """
+                    # Flatten all detections from all runs with run_id
+                    all_detections = []
+                    for run_id, dets in enumerate(all_runs):
+                        for det in dets:
+                            det['run_id'] = run_id
+                            all_detections.append(det)
+
+                    # Group by label
+                    groups = {}
+                    for det in all_detections:
+                        label = det['label']
+                        if label not in groups:
+                            groups[label] = []
+                        groups[label].append(det)
+
+                    # For each label, match by bounding box center proximity
+                    matched_groups = []
+                    for label, dets in groups.items():
+                        # Sort by y center, x center
+                        dets_sorted = sorted(dets, key=lambda d: (d['bounding_box'][0] + d['bounding_box'][2]) / 2)
+                        # We'll cluster by center proximity
+                        clusters = []
+                        for det in dets_sorted:
+                            center_y = (det['bounding_box'][0] + det['bounding_box'][2]) / 2
+                            center_x = (det['bounding_box'][1] + det['bounding_box'][3]) / 2
+                            assigned = False
+                            for cluster in clusters:
+                                # Check if center is within threshold of any existing in cluster
+                                for existing in cluster:
+                                    ex_center_y = (existing['bounding_box'][0] + existing['bounding_box'][2]) / 2
+                                    ex_center_x = (existing['bounding_box'][1] + existing['bounding_box'][3]) / 2
+                                    if abs(center_y - ex_center_y) < match_threshold and abs(center_x - ex_center_x) < match_threshold:
+                                        cluster.append(det)
+                                        assigned = True
+                                        break
+                                if assigned:
+                                    break
+                            if not assigned:
+                                clusters.append([det])
+                        # For each cluster, we have a physical column
+                        for cluster in clusters:
+                            # Extract dimensions (use the most frequent)
+                            dims_list = [json.dumps(d['dimensions'], sort_keys=True) for d in cluster]
+                            from collections import Counter
+                            dims_counter = Counter(dims_list)
+                            most_common_dims_str = dims_counter.most_common(1)[0][0]
+                            most_common_dims = json.loads(most_common_dims_str)
+                            # Count occurrences (number of runs that detected this column)
+                            run_ids = set(d['run_id'] for d in cluster)
+                            matched_groups.append({
+                                'label': label,
+                                'dimensions': most_common_dims,
+                                'detection_runs': len(run_ids),
+                                'total_runs': len(all_runs),
+                                'cluster': cluster  # store for bounding box reference
+                            })
+                    return matched_groups
+
+                # --------------------------------------------------------------------
+                # AI EXTRACTION FUNCTION (BOUNDING BOX PROMPT)
+                # --------------------------------------------------------------------
+                async def extract_columns_with_bbox(file_bytes, file_type, code_basis, user_params, temperature):
+                    """Call Gemini with bounding box prompt."""
                     prompt = """
-# ROLE & OBJECTIVE
-You are an elite Senior Structural Engineer and AI Quantity Surveyor. Your job is to extract exact Bill of Quantities (BOQ) data from structural drawings with 98%+ precision. You must be entirely systematic, deterministic, and strict.
+You are an expert Quantity Surveyor. Scan the structural column layout drawing.
 
-# CRITICAL RULES TO PREVENT HALLUCINATIONS
-1. NEVER guess or estimate a count. If you cannot clearly read a column marker or its dimensions, flag it in "unresolved_items" rather than making up numbers.
-2. USE GRID ANCHORS: Structural layouts rely on grid lines (e.g., A, B, C... and 1, 2, 3...). You must reference columns by their grid locations to ensure absolute accuracy and prevent double-counting.
+For every column you see, output a JSON object with:
+- label: the column mark (e.g., C1)
+- width_mm: the width dimension in mm
+- depth_mm: the depth dimension in mm
+- bounding_box: [ymin, xmin, ymax, xmax] as integer pixel coordinates (the bounding box around the column label and its grid intersection)
 
-# EXECUTION WORKFLOW
+Return a JSON array of such objects.
 
-## STEP 1: GRID & SCALE RECONNAISSANCE
-- Identify the structural grid lines visible on the plan (e.g., Horizontal grids: A, B, C; Vertical grids: 1, 2, 3).
-- Identify the drawing scale (e.g., 1:50) and primary unit (mm or m).
-
-## STEP 2: MAPPED ELEMENT EXTRACTION
-Scan the plan zone by zone (e.g., from Grid A-1 to C-3). For every unique column mark (C1, C2, etc.):
-- Record its exact label, its cross-sectional dimensions (Width x Length), and list every single grid intersection where it appears.
-- Count the total occurrences based strictly on the grid intersections, not by visual guessing.
-
-## STEP 3: SELF-VERIFICATION MATH CHECK
-Before outputting, verify your own math:
-- Sum up the individual counts of all columns.
-- Ensure the total count matches the physical markers identified on the grid map.
-
-# OUTPUT FORMAT (Strict JSON Schema)
-Respond ONLY with a valid JSON object matching this exact structure:
-
-{
-  "layout_metadata": {
-    "drawing_type": "Column Layout Plan",
-    "detected_units": "mm",
-    "identified_grids": {
-      "horizontal": ["A", "B", "C"],
-      "vertical": ["1", "2", "3"]
-    }
+Example:
+[
+  {
+    "label": "C1",
+    "width_mm": 250,
+    "depth_mm": 500,
+    "bounding_box": [120, 340, 180, 410]
   },
-  "extracted_columns": [
-    {
-      "mark_name": "C1",
-      "dimensions": {
-        "width": 250,
-        "length": 500,
-        "unit": "mm"
-      },
-      "grid_locations": ["A-1", "A-3", "B-1", "B-3"],
-      "total_count": 4
-    },
-    {
-      "mark_name": "C2",
-      "dimensions": {
-        "width": 300,
-        "length": 600,
-        "unit": "mm"
-      },
-      "grid_locations": ["B-2"],
-      "total_count": 1
-    }
-  ],
-  "verification_check": {
-    "sum_of_all_columns": 5,
-    "confidence_status": "HIGH"
-  },
-  "missing_parameters": [
-    {
-      "parameter_name": "clear_height",
-      "prompt_to_user": "The column layout and dimensions have been successfully mapped across the grid lines, but the clear height is missing from the 2D plan. What is the clear height for these columns?"
-    }
-  ],
-  "python_execution_ready": false
-}
+  {
+    "label": "C2",
+    "width_mm": 300,
+    "depth_mm": 600,
+    "bounding_box": [450, 780, 520, 870]
+  }
+]
 """
                     contents = [prompt]
 
@@ -2265,125 +2321,60 @@ Respond ONLY with a valid JSON object matching this exact structure:
                         img_part = types.Part.from_bytes(data=file_bytes, mime_type=file_type)
                         contents.append(img_part)
 
-                    # Call with the given temperature
                     response_text = await call_gemini_json(contents, temperature=temperature, timeout=300)
                     # Clean and parse JSON
                     json_str = response_text.strip()
                     json_str = re.sub(r'^```json\s*', '', json_str)
                     json_str = re.sub(r'\s*```$', '', json_str)
-                    start = json_str.find('{')
-                    end = json_str.rfind('}')
+                    start = json_str.find('[')
+                    end = json_str.rfind(']')
                     if start != -1 and end != -1:
                         json_str = json_str[start:end+1]
                     data = json.loads(json_str)
-                    return data
-
-                # --------------------------------------------------------------------
-                # SELF-CONSISTENCY ENSEMBLE
-                # --------------------------------------------------------------------
-                def run_consensus_ensemble(all_runs):
-                    """Aggregate counts from multiple runs and return consensus columns."""
-                    # Collect counts and dimensions per mark
-                    mark_counts = {}
-                    mark_dimensions = {}
-                    mark_grids = {}
-
-                    for run in all_runs:
-                        for col in run.get("extracted_columns", []):
-                            name = col.get("mark_name", "").upper().strip()
-                            if not name:
-                                continue
-                            count = col.get("total_count", 0)
-                            dims = col.get("dimensions", {})
-                            grids = col.get("grid_locations", [])
-
-                            if name not in mark_counts:
-                                mark_counts[name] = []
-                                mark_dimensions[name] = []
-                                mark_grids[name] = []
-                            mark_counts[name].append(count)
-                            mark_dimensions[name].append(dims)
-                            mark_grids[name].append(grids)
-
-                    final_columns = []
-                    total_runs = len(all_runs)
-
-                    for name in mark_counts:
-                        counts = mark_counts[name]
-                        # Most frequent count
-                        from collections import Counter
-                        counter = Counter(counts)
-                        most_common_count, freq = counter.most_common(1)[0]
-                        agreement_rate = freq / total_runs
-
-                        # Use the first occurrence of dimensions and grids (or average dimensions if needed)
-                        # We'll take the most frequent dimensions (by width+length combination)
-                        dims_counter = Counter([json.dumps(d, sort_keys=True) for d in mark_dimensions[name]])
-                        most_common_dims_str, _ = dims_counter.most_common(1)[0]
-                        most_common_dims = json.loads(most_common_dims_str)
-
-                        # Grid locations: take the union or the most frequent
-                        # We'll take the most frequent grid set
-                        grid_counter = Counter([json.dumps(sorted(g)) for g in mark_grids[name]])
-                        if grid_counter:
-                            most_common_grids_str, _ = grid_counter.most_common(1)[0]
-                            most_common_grids = json.loads(most_common_grids_str)
-                        else:
-                            most_common_grids = []
-
-                        final_columns.append({
-                            "mark_name": name,
-                            "total_count": most_common_count,
-                            "dimensions": most_common_dims,
-                            "grid_locations": most_common_grids,
-                            "agreement_rate": agreement_rate,
-                            "consensus_confidence": "HIGH" if agreement_rate >= 0.6 else "LOW"
-                        })
-
-                    return final_columns, total_runs
+                    return data  # list of detections
 
                 # --------------------------------------------------------------------
                 # COMPUTATION FUNCTION
                 # --------------------------------------------------------------------
-                def compute_boq_from_columns(columns, user_params):
-                    """Compute volumes and costs from consensus columns."""
+                def compute_boq_from_columns(matched_groups, user_params):
+                    """Compute volumes and costs from matched columns."""
                     rows = []
                     floor_height = user_params.get('floor_height_mm', 3000) / 1000
                     wastage = user_params.get('wastage', 5)
                     concrete_rate = UNIT_RATES.get('Concrete (C30/37)', 2500)
 
-                    for col in columns:
-                        mark = col.get('mark_name', 'Unknown')
-                        count = col.get('total_count', 0)
-                        dims = col.get('dimensions', {})
+                    for group in matched_groups:
+                        label = group['label']
+                        count = group['detection_runs']  # number of runs that detected this column
+                        # Actually, we need the actual count of columns, not detection runs.
+                        # We can infer the count from the number of columns in the cluster? No, each run has one detection per physical column.
+                        # So the detection_runs = number of runs that saw this column. That's our confidence, not the count.
+                        # The count is 1 per physical column, but we need to count how many physical columns of this label exist.
+                        # Since we have one cluster per physical column, the count is the number of clusters with this label.
+                        # We'll compute that later. For now, we have one group per physical column, so count = 1.
+                        # We'll aggregate later.
+
+                        # For now, we'll store each physical column as a row with count=1, then sum later.
+                        dims = group['dimensions']
                         w = dims.get('width', 0)
-                        l = dims.get('length', 0)
-                        unit = dims.get('unit', 'mm')
-                        if unit == 'mm':
-                            w_m = w / 1000
-                            l_m = l / 1000
-                        else:
-                            w_m = w
-                            l_m = l
+                        d = dims.get('depth', 0)
+                        unit = 'mm'  # assume
+                        w_m = w / 1000
+                        d_m = d / 1000
 
                         # Height: either from user_params or from AI (if present)
-                        h = col.get('height_mm', None)
-                        if h is None and user_params.get('use_floor_height'):
-                            h = user_params.get('floor_height_mm', 3000)
+                        h = user_params.get('floor_height_mm', 3000) if user_params.get('use_floor_height') else None
                         if h is None:
-                            # Skip this column – it will be handled in missing_parameters
                             continue
                         h_m = h / 1000
-                        volume = w_m * l_m * h_m * count
-
+                        volume = w_m * d_m * h_m  # per column
                         rows.append({
-                            'Item': f"Column - {mark}",
-                            'Count': count,
+                            'Item': f"Column - {label}",
+                            'Count': 1,
                             'Width (mm)': w,
-                            'Length (mm)': l,
+                            'Depth (mm)': d,
                             'Height (mm)': h,
-                            'Grid Locations': ', '.join(col.get('grid_locations', [])),
-                            'Agreement': f"{int(col.get('agreement_rate', 0) * 100)}%",
+                            'Detection Confidence': f"{count}/{len(all_runs)}",
                             'Volume (m³)': round(volume, 2),
                             'Wastage %': wastage,
                             'Quantity (with waste)': round(volume * (1 + wastage/100), 2),
@@ -2394,21 +2385,35 @@ Respond ONLY with a valid JSON object matching this exact structure:
                     if not rows:
                         return None
                     df = pd.DataFrame(rows)
+                    # Aggregate by label to get total count and volume
+                    df_agg = df.groupby('Item').agg({
+                        'Count': 'sum',
+                        'Width (mm)': 'first',
+                        'Depth (mm)': 'first',
+                        'Height (mm)': 'first',
+                        'Detection Confidence': lambda x: x.iloc[0],
+                        'Volume (m³)': 'sum',
+                        'Wastage %': 'first',
+                        'Quantity (with waste)': 'sum',
+                        'Unit Rate (EGP)': 'first',
+                        'Total Cost (EGP)': 'sum'
+                    }).reset_index()
+                    # Add grand total row
                     total_row = {
                         'Item': 'GRAND TOTAL',
-                        'Count': '',
-                        'Volume (m³)': round(df['Volume (m³)'].sum(), 2),
+                        'Count': df_agg['Count'].sum(),
+                        'Volume (m³)': round(df_agg['Volume (m³)'].sum(), 2),
                         'Wastage %': '',
-                        'Quantity (with waste)': round(df['Quantity (with waste)'].sum(), 2),
+                        'Quantity (with waste)': round(df_agg['Quantity (with waste)'].sum(), 2),
                         'Unit Rate (EGP)': '',
-                        'Total Cost (EGP)': round(df['Total Cost (EGP)'].sum(), 2)
+                        'Total Cost (EGP)': round(df_agg['Total Cost (EGP)'].sum(), 2)
                     }
-                    # Remove columns that don't exist in total row
-                    for col in ['Width (mm)', 'Length (mm)', 'Height (mm)', 'Grid Locations', 'Agreement']:
+                    # Keep other columns empty
+                    for col in ['Width (mm)', 'Depth (mm)', 'Height (mm)', 'Detection Confidence']:
                         if col in total_row:
                             total_row[col] = ''
-                    df = pd.concat([df, pd.DataFrame([total_row])], ignore_index=True)
-                    return df
+                    df_final = pd.concat([df_agg, pd.DataFrame([total_row])], ignore_index=True)
+                    return df_final
 
                 # --------------------------------------------------------------------
                 # MAIN EXTRACTION BUTTON
@@ -2436,61 +2441,67 @@ Respond ONLY with a valid JSON object matching this exact structure:
                             'rebar_grade': rebar_grade_global.value,
                         }
 
-                        all_runs = []
-                        successful_runs = 0
+                        all_run_detections = []
                         for i in range(num_passes.value):
                             try:
-                                # Call AI with temperature=0.2 for ensemble variation
-                                result = await extract_boq_with_grid(
+                                detections = await extract_columns_with_bbox(
                                     boq_file_data['bytes'],
                                     boq_file_data['type'],
                                     code_basis_select.value,
                                     user_params,
                                     temperature=0.2
                                 )
-                                if result and result.get('extracted_columns'):
-                                    all_runs.append(result)
-                                    successful_runs += 1
+                                if detections:
+                                    # Deduplicate within run using IoU
+                                    deduped = deduplicate_boxes(detections, iou_threshold=0.5)
+                                    all_run_detections.append(deduped)
                             except Exception as e:
-                                # Log but continue
                                 print(f"Pass {i+1} failed: {e}")
-                            # Brief pause to avoid rate limits
                             await asyncio.sleep(0.5)
 
-                        if not all_runs:
+                        if not all_run_detections:
                             boq_output.clear()
                             with boq_output:
                                 ui.label('All extraction passes failed. Please try again with a clearer drawing.').classes('text-red-400')
                             return
 
-                        # Run consensus
-                        consensus_columns, total_runs = run_consensus_ensemble(all_runs)
+                        # Match columns across runs
+                        matched_groups = match_columns_across_runs(all_run_detections, match_threshold=50)
 
-                        # Check for low confidence items
-                        low_confidence = [col for col in consensus_columns if col.get('consensus_confidence') == 'LOW']
+                        # Filter groups with low detection confidence (appeared in <60% of runs)
+                        total_runs = len(all_run_detections)
+                        low_confidence = []
+                        high_confidence = []
+                        for group in matched_groups:
+                            if group['detection_runs'] / total_runs < 0.6:
+                                low_confidence.append(group)
+                            else:
+                                high_confidence.append(group)
+
                         if low_confidence:
-                            # Show warning and ask user to verify or enter manually
+                            # Show modal to ask user to verify
                             boq_output.clear()
                             modal = ui.dialog()
                             with modal, ui.card().classes('w-full max-w-2xl bg-[#0d1a35]'):
-                                ui.label('Low Confidence in Some Columns').classes('text-xl font-bold text-[#FF8C00]')
-                                ui.markdown('The following columns had low agreement across passes. Please verify or enter the correct count:').classes('text-white')
+                                ui.label('Low Confidence Detections').classes('text-xl font-bold text-[#FF8C00]')
+                                ui.markdown('The following columns were detected in less than 60% of passes. Please verify or remove them:').classes('text-white')
                                 inputs = {}
-                                for col in low_confidence:
-                                    ui.label(f"{col['mark_name']}: Consensus={col['total_count']}, Agreement={int(col['agreement_rate']*100)}%").classes('text-white mt-2')
-                                    inputs[col['mark_name']] = ui.number(label=f"Correct count for {col['mark_name']}", value=col['total_count'], step=1).classes('w-full')
+                                for group in low_confidence:
+                                    ui.label(f"{group['label']} (detected in {group['detection_runs']}/{total_runs} runs)").classes('text-white mt-2')
+                                    inputs[group['label']] = ui.checkbox(f"Keep this column?", value=True).classes('text-white')
                                 async def confirm_low_confidence():
-                                    for col in low_confidence:
-                                        if col['mark_name'] in inputs and inputs[col['mark_name']].value is not None:
-                                            col['total_count'] = int(inputs[col['mark_name']].value)
+                                    final_groups = high_confidence.copy()
+                                    for group in low_confidence:
+                                        if inputs[group['label']].value:
+                                            final_groups.append(group)
                                     modal.close()
-                                    await finish_boq_calculation(consensus_columns, user_params)
+                                    await finish_boq_calculation(final_groups, user_params)
                                 ui.button('Confirm & Calculate', on_click=confirm_low_confidence).classes('primary-btn')
                             modal.open()
                             return
 
-                        # If all columns have high confidence, proceed
-                        await finish_boq_calculation(consensus_columns, user_params)
+                        # If all high confidence, proceed
+                        await finish_boq_calculation(matched_groups, user_params)
 
                     except Exception as ex:
                         boq_output.clear()
@@ -2498,9 +2509,9 @@ Respond ONLY with a valid JSON object matching this exact structure:
                             ui.notify(f'Extraction failed: {str(ex)}', type='negative')
                             ui.label('Error occurred. Please try again with a clearer drawing.').classes('text-red-400')
 
-                async def finish_boq_calculation(columns, user_params):
+                async def finish_boq_calculation(matched_groups, user_params):
                     # Compute BOQ
-                    df = compute_boq_from_columns(columns, user_params)
+                    df = compute_boq_from_columns(matched_groups, user_params)
                     if df is None:
                         boq_output.clear()
                         with boq_output:
@@ -2510,7 +2521,7 @@ Respond ONLY with a valid JSON object matching this exact structure:
                     boq_output.clear()
                     with boq_output:
                         with ui.column().classes('output-card w-full'):
-                            ui.label('Columns Bill of Quantities (Ensemble Consensus)').classes('text-xl font-bold text-white mb-2')
+                            ui.label('Columns Bill of Quantities (Bounding Box + Ensemble)').classes('text-xl font-bold text-white mb-2')
                             def df_to_md(df):
                                 lines = []
                                 headers = list(df.columns)
@@ -2570,13 +2581,13 @@ Respond ONLY with a valid JSON object matching this exact structure:
                             try:
                                 meta = current_meta('BOQ')
                                 pdf_bytes = build_report_pdf(
-                                    "BOQ Report - Columns (Ensemble)",
+                                    "BOQ Report - Columns (BBox Ensemble)",
                                     f"Consensus from {num_passes.value} passes",
                                     df_to_md(df),
                                     meta,
                                     logo_bytes_holder['bytes'],
                                 )
-                                ui.download(pdf_bytes, filename=f"BOQ_Columns_Ensemble_{ticket_input.value}.pdf")
+                                ui.download(pdf_bytes, filename=f"BOQ_Columns_BBox_{ticket_input.value}.pdf")
                                 ui.notify('PDF downloaded', type='positive')
                             except Exception as ex:
                                 ui.notify(f'PDF Error: {str(ex)}', type='negative')
@@ -2586,14 +2597,14 @@ Respond ONLY with a valid JSON object matching this exact structure:
                                 with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
                                     df.to_excel(writer, sheet_name='BOQ', index=False)
                                 excel_buffer.seek(0)
-                                ui.download(excel_buffer.getvalue(), filename=f"BOQ_Columns_Ensemble_{ticket_input.value}.xlsx")
+                                ui.download(excel_buffer.getvalue(), filename=f"BOQ_Columns_BBox_{ticket_input.value}.xlsx")
                                 ui.notify('Excel downloaded', type='positive')
                             except Exception as ex:
                                 ui.notify(f'Excel Error: {str(ex)}', type='negative')
                         ui.button('Download PDF', on_click=download_boq_pdf).classes('primary-btn flex-1')
                         ui.button('Export Excel', on_click=download_boq_excel).classes('primary-btn flex-1')
 
-                ui.button('Run BOQ Extraction (Ensemble)', on_click=run_boq_extraction).classes('primary-btn mt-4')
+                ui.button('Run BOQ Extraction (BBox Ensemble)', on_click=run_boq_extraction).classes('primary-btn mt-4')
         # ---------------- FOOTER (unchanged) ----------------
         ui.html('''
         <div class="app-footer">
