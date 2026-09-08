@@ -2118,11 +2118,11 @@ Ensure all tables are proper Markdown tables with header and separator rows.
         
                        # =========================================================================
             # =========================================================================
-            # TAB 5: PROFESSIONAL BOQ TAKEOFF (HALLUCINATION-FREE)
+            # TAB 5: PROFESSIONAL BOQ TAKEOFF (GRID-ANCHORED, DETERMINISTIC)
             # =========================================================================
             with ui.tab_panel(t_boq):
                 ui.label('Professional AI BOQ Takeoff & Cost Estimation').classes('text-2xl font-bold text-white mb-2')
-                ui.markdown('Upload a structural plan (PDF, JPG, PNG). The AI will extract member labels and dimensions, then Python counts accurately.').classes('markdown-body mb-2')
+                ui.markdown('Upload a structural plan (PDF, JPG, PNG). The AI will use grid lines to count columns accurately.').classes('markdown-body mb-2')
                 ui.markdown('*For PDFs, up to 6 pages are processed for best results.*').classes('text-xs text-yellow-400 mb-4')
 
                 # Global Parameters
@@ -2136,10 +2136,10 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                         rebar_grade_global = ui.input(label='Rebar Grade', value='400/600').classes('w-1/2')
                     wastage_percent_global = ui.number(label='Wastage Allowance (%)', value=5, step=1, min=0, max=20).classes('w-1/2')
 
-                # Element type selection
+                # Element type selection (only Columns for now, but can be extended)
                 element_type = ui.select(
                     label='Select Element Type',
-                    options=['Columns', 'Beams', 'Slabs', 'Footings', 'Walls'],
+                    options=['Columns'],
                     value='Columns'
                 ).classes('w-full mb-4')
 
@@ -2163,45 +2163,84 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                 boq_export = ui.row().classes('w-full gap-4 mt-4')
 
                 # --------------------------------------------------------------------
-                # AI EXTRACTION FUNCTIONS
+                # AI EXTRACTION FUNCTION (GRID-ANCHORED)
                 # --------------------------------------------------------------------
-                async def extract_labels_and_dimensions(element_type, file_bytes, file_type, user_params, code_basis):
-                    """First pass: extract labels and dimensions (no counting)."""
-                    if element_type == 'Columns':
-                        fields = "label, width_mm, depth_mm, height_mm"
-                        example = '[{"label":"C1","width_mm":300,"depth_mm":300,"height_mm":3000}]'
-                    elif element_type == 'Beams':
-                        fields = "label, width_mm, depth_mm, length_mm"
-                        example = '[{"label":"B1","width_mm":250,"depth_mm":500,"length_mm":6000}]'
-                    elif element_type == 'Slabs':
-                        fields = "label, thickness_mm, area_m2"
-                        example = '[{"label":"S1","thickness_mm":150,"area_m2":45.5}]'
-                    elif element_type == 'Footings':
-                        fields = "label, width_mm, depth_mm, length_mm"
-                        example = '[{"label":"F1","width_mm":1200,"depth_mm":600,"length_mm":1200}]'
-                    elif element_type == 'Walls':
-                        fields = "label, length_m, height_m, thickness_mm"
-                        example = '[{"label":"W1","length_m":5.0,"height_m":3.0,"thickness_mm":200}]'
-                    else:
-                        fields = "label"
-                        example = '[]'
+                async def extract_boq_with_grid(file_bytes, file_type, code_basis, user_params):
+                    """Call Gemini with the grid-anchored prompt and return parsed JSON."""
+                    prompt = """
+# ROLE & OBJECTIVE
+You are an elite Senior Structural Engineer and AI Quantity Surveyor. Your job is to extract exact Bill of Quantities (BOQ) data from structural drawings with 98%+ precision. You must be entirely systematic, deterministic, and strict.
 
-                    prompt = f"""
-You are an expert Quantity Surveyor. Your task is to EXTRACT the {element_type} schedule from the drawing.
+# CRITICAL RULES TO PREVENT HALLUCINATIONS
+1. NEVER guess or estimate a count. If you cannot clearly read a column marker or its dimensions, flag it in "unresolved_items" rather than making up numbers.
+2. USE GRID ANCHORS: Structural layouts rely on grid lines (e.g., A, B, C... and 1, 2, 3...). You must reference columns by their grid locations to ensure absolute accuracy and prevent double-counting.
 
-**RULES (STRICT):**
-1. Extract the label and dimensions for each unique group (e.g., C1, C2).
-2. DO NOT count occurrences. Just list each unique label once.
-3. If a dimension is not clearly visible, set it to null.
-4. Return ONLY a JSON array of objects with fields: {fields}.
+# EXECUTION WORKFLOW
 
-Example:
-{example}
+## STEP 1: GRID & SCALE RECONNAISSANCE
+- Identify the structural grid lines visible on the plan (e.g., Horizontal grids: A, B, C; Vertical grids: 1, 2, 3).
+- Identify the drawing scale (e.g., 1:50) and primary unit (mm or m).
 
-Now extract from the drawing.
+## STEP 2: MAPPED ELEMENT EXTRACTION
+Scan the plan zone by zone (e.g., from Grid A-1 to C-3). For every unique column mark (C1, C2, etc.):
+- Record its exact label, its cross-sectional dimensions (Width x Length), and list every single grid intersection where it appears.
+- Count the total occurrences based strictly on the grid intersections, not by visual guessing.
+
+## STEP 3: SELF-VERIFICATION MATH CHECK
+Before outputting, verify your own math:
+- Sum up the individual counts of all columns.
+- Ensure the total count matches the physical markers identified on the grid map.
+
+# OUTPUT FORMAT (Strict JSON Schema)
+Respond ONLY with a valid JSON object matching this exact structure:
+
+{
+  "layout_metadata": {
+    "drawing_type": "Column Layout Plan",
+    "detected_units": "mm",
+    "identified_grids": {
+      "horizontal": ["A", "B", "C"],
+      "vertical": ["1", "2", "3"]
+    }
+  },
+  "extracted_columns": [
+    {
+      "mark_name": "C1",
+      "dimensions": {
+        "width": 250,
+        "length": 500,
+        "unit": "mm"
+      },
+      "grid_locations": ["A-1", "A-3", "B-1", "B-3"],
+      "total_count": 4
+    },
+    {
+      "mark_name": "C2",
+      "dimensions": {
+        "width": 300,
+        "length": 600,
+        "unit": "mm"
+      },
+      "grid_locations": ["B-2"],
+      "total_count": 1
+    }
+  ],
+  "verification_check": {
+    "sum_of_all_columns": 5,
+    "confidence_status": "HIGH"
+  },
+  "missing_parameters": [
+    {
+      "parameter_name": "clear_height",
+      "prompt_to_user": "The column layout and dimensions have been successfully mapped across the grid lines, but the clear height is missing from the 2D plan. What is the clear height for these columns?"
+    }
+  ],
+  "python_execution_ready": false
+}
 """
                     contents = [prompt]
-                    # Process file
+
+                    # Process file – send up to 6 pages as PNG
                     if file_type == 'application/pdf':
                         try:
                             reader = pypdf.PdfReader(io.BytesIO(file_bytes))
@@ -2230,48 +2269,9 @@ Now extract from the drawing.
                         img_part = types.Part.from_bytes(data=file_bytes, mime_type=file_type)
                         contents.append(img_part)
 
+                    # Force temperature=0 and JSON mode
                     response_text = await call_gemini_json(contents, temperature=0, timeout=300)
-                    json_str = response_text.strip()
-                    json_str = re.sub(r'^```json\s*', '', json_str)
-                    json_str = re.sub(r'\s*```$', '', json_str)
-                    start = json_str.find('[')
-                    end = json_str.rfind(']')
-                    if start != -1 and end != -1:
-                        json_str = json_str[start:end+1]
-                    data = json.loads(json_str)
-                    return data  # list of groups without count
-
-                async def count_labels(labels, element_type, file_bytes, file_type):
-                    """Second pass: count occurrences of each label."""
-                    if not labels:
-                        return {}
-                    prompt = f"""
-You are an expert Quantity Surveyor. Given the drawing, count how many times each of the following {element_type} labels appears.
-Labels: {', '.join(labels)}
-
-Return ONLY a JSON object mapping each label to its count, e.g., {{"C1": 6, "C2": 4}}.
-If a label does not appear, set its count to 0.
-"""
-                    contents = [prompt]
-                    # Process file
-                    if file_type == 'application/pdf':
-                        try:
-                            doc = fitz.open(stream=file_bytes, filetype="pdf")
-                            for page_num in range(min(6, len(doc))):
-                                page = doc.load_page(page_num)
-                                mat = fitz.Matrix(2.0, 2.0)
-                                pix = page.get_pixmap(matrix=mat)
-                                img_bytes = pix.tobytes("png")
-                                img_part = types.Part.from_bytes(data=img_bytes, mime_type="image/png")
-                                contents.append(img_part)
-                            doc.close()
-                        except Exception:
-                            pass
-                    else:
-                        img_part = types.Part.from_bytes(data=file_bytes, mime_type=file_type)
-                        contents.append(img_part)
-
-                    response_text = await call_gemini_json(contents, temperature=0, timeout=300)
+                    # Clean and parse JSON
                     json_str = response_text.strip()
                     json_str = re.sub(r'^```json\s*', '', json_str)
                     json_str = re.sub(r'\s*```$', '', json_str)
@@ -2280,113 +2280,55 @@ If a label does not appear, set its count to 0.
                     if start != -1 and end != -1:
                         json_str = json_str[start:end+1]
                     data = json.loads(json_str)
-                    return data  # dict {label: count}
+                    return data
 
                 # --------------------------------------------------------------------
                 # COMPUTATION FUNCTION
                 # --------------------------------------------------------------------
-                def compute_boq(groups, element_type, user_params):
-                    """Compute volumes and costs from groups with counts."""
+                def compute_boq_from_columns(columns, user_params):
+                    """Compute volumes and costs from extracted columns."""
                     rows = []
                     floor_height = user_params.get('floor_height_mm', 3000) / 1000
                     wastage = user_params.get('wastage', 5)
                     concrete_rate = UNIT_RATES.get('Concrete (C30/37)', 2500)
 
-                    for g in groups:
-                        label = g.get('label', 'Unknown')
-                        count = g.get('count', 1)
-                        try:
-                            count = int(count)
-                        except:
-                            count = 1
+                    for col in columns:
+                        mark = col.get('mark_name', 'Unknown')
+                        count = col.get('total_count', 0)
+                        dims = col.get('dimensions', {})
+                        w = dims.get('width', 0)
+                        l = dims.get('length', 0)
+                        unit = dims.get('unit', 'mm')
+                        if unit == 'mm':
+                            w_m = w / 1000
+                            l_m = l / 1000
+                        else:
+                            w_m = w
+                            l_m = l
 
-                        if element_type == 'Columns':
-                            w = g.get('width_mm', 0)
-                            d = g.get('depth_mm', 0)
-                            h = g.get('height_mm', None)
-                            if h is None and user_params.get('use_floor_height', False):
-                                h = user_params.get('floor_height_mm', 3000)
-                            if h is None:
-                                continue
-                            volume = (w/1000) * (d/1000) * (h/1000) * count
-                            rows.append({
-                                'Item': f"{element_type[:-1]} - {label}",
-                                'Count': count,
-                                'Width (mm)': w,
-                                'Depth (mm)': d,
-                                'Height (mm)': h,
-                                'Volume (m³)': round(volume, 2),
-                                'Wastage %': wastage,
-                                'Quantity (with waste)': round(volume * (1 + wastage/100), 2),
-                                'Unit Rate (EGP)': concrete_rate,
-                                'Total Cost (EGP)': round(volume * (1 + wastage/100) * concrete_rate, 2)
-                            })
-                        elif element_type == 'Beams':
-                            w = g.get('width_mm', 0)
-                            d = g.get('depth_mm', 0)
-                            l = g.get('length_mm', 0)
-                            volume = (w/1000) * (d/1000) * (l/1000) * count
-                            rows.append({
-                                'Item': f"{element_type[:-1]} - {label}",
-                                'Count': count,
-                                'Width (mm)': w,
-                                'Depth (mm)': d,
-                                'Length (mm)': l,
-                                'Volume (m³)': round(volume, 2),
-                                'Wastage %': wastage,
-                                'Quantity (with waste)': round(volume * (1 + wastage/100), 2),
-                                'Unit Rate (EGP)': concrete_rate,
-                                'Total Cost (EGP)': round(volume * (1 + wastage/100) * concrete_rate, 2)
-                            })
-                        elif element_type == 'Slabs':
-                            thickness = g.get('thickness_mm', 0)
-                            area = g.get('area_m2', 0)
-                            volume = area * (thickness/1000)
-                            rows.append({
-                                'Item': f"{element_type[:-1]} - {label}",
-                                'Count': 1,
-                                'Thickness (mm)': thickness,
-                                'Area (m²)': area,
-                                'Volume (m³)': round(volume, 2),
-                                'Wastage %': wastage,
-                                'Quantity (with waste)': round(volume * (1 + wastage/100), 2),
-                                'Unit Rate (EGP)': concrete_rate,
-                                'Total Cost (EGP)': round(volume * (1 + wastage/100) * concrete_rate, 2)
-                            })
-                        elif element_type == 'Footings':
-                            w = g.get('width_mm', 0)
-                            d = g.get('depth_mm', 0)
-                            l = g.get('length_mm', 0)
-                            volume = (w/1000) * (d/1000) * (l/1000) * count
-                            rows.append({
-                                'Item': f"{element_type[:-1]} - {label}",
-                                'Count': count,
-                                'Width (mm)': w,
-                                'Depth (mm)': d,
-                                'Length (mm)': l,
-                                'Volume (m³)': round(volume, 2),
-                                'Wastage %': wastage,
-                                'Quantity (with waste)': round(volume * (1 + wastage/100), 2),
-                                'Unit Rate (EGP)': concrete_rate,
-                                'Total Cost (EGP)': round(volume * (1 + wastage/100) * concrete_rate, 2)
-                            })
-                        elif element_type == 'Walls':
-                            length = g.get('length_m', 0)
-                            height = g.get('height_m', 0)
-                            thickness = g.get('thickness_mm', 0)
-                            volume = length * height * (thickness/1000) * count
-                            rows.append({
-                                'Item': f"{element_type[:-1]} - {label}",
-                                'Count': count,
-                                'Length (m)': length,
-                                'Height (m)': height,
-                                'Thickness (mm)': thickness,
-                                'Volume (m³)': round(volume, 2),
-                                'Wastage %': wastage,
-                                'Quantity (with waste)': round(volume * (1 + wastage/100), 2),
-                                'Unit Rate (EGP)': concrete_rate,
-                                'Total Cost (EGP)': round(volume * (1 + wastage/100) * concrete_rate, 2)
-                            })
+                        # Height: either from user_params or from AI (if present)
+                        h = col.get('height_mm', None)
+                        if h is None and user_params.get('use_floor_height'):
+                            h = user_params.get('floor_height_mm', 3000)
+                        if h is None:
+                            # Skip this column – it will be handled in missing_parameters
+                            continue
+                        h_m = h / 1000
+                        volume = w_m * l_m * h_m * count
+
+                        rows.append({
+                            'Item': f"Column - {mark}",
+                            'Count': count,
+                            'Width (mm)': w,
+                            'Length (mm)': l,
+                            'Height (mm)': h,
+                            'Grid Locations': ', '.join(col.get('grid_locations', [])),
+                            'Volume (m³)': round(volume, 2),
+                            'Wastage %': wastage,
+                            'Quantity (with waste)': round(volume * (1 + wastage/100), 2),
+                            'Unit Rate (EGP)': concrete_rate,
+                            'Total Cost (EGP)': round(volume * (1 + wastage/100) * concrete_rate, 2)
+                        })
 
                     if not rows:
                         return None
@@ -2418,7 +2360,7 @@ If a label does not appear, set its count to 0.
                     boq_export.clear()
                     with boq_output:
                         ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
-                        ui.label('Extracting labels and dimensions...').classes('self-center text-sm')
+                        ui.label('Extracting columns using grid-anchored AI...').classes('self-center text-sm')
 
                     try:
                         user_params = {
@@ -2428,73 +2370,49 @@ If a label does not appear, set its count to 0.
                             'concrete_grade': concrete_grade_global.value,
                             'rebar_grade': rebar_grade_global.value,
                         }
-                        elem = element_type.value
-
-                        # Step 1: Extract labels and dimensions (no counts)
-                        groups = await extract_labels_and_dimensions(
-                            elem,
+                        # Call AI with grid-anchored prompt
+                        ai_response = await extract_boq_with_grid(
                             boq_file_data['bytes'],
                             boq_file_data['type'],
-                            user_params,
-                            code_basis_select.value
+                            code_basis_select.value,
+                            user_params
                         )
 
-                        if not groups:
-                            boq_output.clear()
-                            with boq_output:
-                                ui.label('No labels extracted. Ensure the drawing contains clear labels.').classes('text-amber-400')
-                            return
-
-                        # Step 2: Count occurrences of each label
-                        labels = [g.get('label') for g in groups if g.get('label')]
-                        if labels:
-                            ui.notify(f'Counting {len(labels)} labels...', type='info')
-                            counts = await count_labels(labels, elem, boq_file_data['bytes'], boq_file_data['type'])
-                            # Add counts to groups
-                            for g in groups:
-                                label = g.get('label')
-                                if label in counts:
-                                    g['count'] = counts[label]
-                                else:
-                                    g['count'] = 1  # fallback
-
-                        # Step 3: Check for missing critical dimensions
-                        missing = []
-                        for g in groups:
-                            if elem == 'Columns' and g.get('height_mm') is None:
-                                if not user_params.get('use_floor_height'):
-                                    missing.append(g.get('label'))
-                            elif elem == 'Walls' and g.get('height_m') is None:
-                                missing.append(g.get('label'))
-                            # Add other checks as needed
-
-                        if missing and not user_params.get('use_floor_height'):
-                            # Ask user for missing height
+                        # Check status
+                        missing_params = ai_response.get('missing_parameters', [])
+                        if missing_params and not ai_response.get('python_execution_ready', True):
+                            # Show modal to ask for missing height
                             boq_output.clear()
                             modal = ui.dialog()
                             with modal, ui.card().classes('w-full max-w-2xl bg-[#0d1a35]'):
                                 ui.label('Missing Required Data').classes('text-xl font-bold text-[#FF8C00]')
-                                ui.markdown(f'The following {elem} are missing height/vertical dimensions: {", ".join(missing)}').classes('text-white')
-                                ui.markdown('Please provide the height in mm:').classes('text-white')
-                                height_input = ui.number(label='Height (mm)', value=floor_height_global.value, step=100).classes('w-full')
+                                ui.markdown('The AI mapped the columns but needs the clear height. Please provide it:').classes('text-white')
+                                height_input = ui.number(label='Clear Height (mm)', value=floor_height_global.value, step=100).classes('w-full')
                                 async def confirm_height():
                                     h_val = height_input.value
                                     if h_val:
-                                        for g in groups:
-                                            if g.get('label') in missing:
-                                                if elem == 'Columns':
-                                                    g['height_mm'] = h_val
-                                                elif elem == 'Walls':
-                                                    g['height_m'] = h_val / 1000
-                                    modal.close()
-                                    # Recompute
-                                    await finish_boq_calculation(groups, elem, user_params)
+                                        # Add height to all columns
+                                        columns = ai_response.get('extracted_columns', [])
+                                        for col in columns:
+                                            col['height_mm'] = h_val
+                                        modal.close()
+                                        await finish_boq_calculation(columns, user_params)
+                                    else:
+                                        ui.notify('Please enter a height.', type='warning')
                                 ui.button('Confirm & Calculate', on_click=confirm_height).classes('primary-btn')
                             modal.open()
                             return
 
-                        # Step 4: Compute and display
-                        await finish_boq_calculation(groups, elem, user_params)
+                        # If no missing parameters, proceed
+                        columns = ai_response.get('extracted_columns', [])
+                        if not columns:
+                            boq_output.clear()
+                            with boq_output:
+                                ui.label('No columns extracted. Ensure the drawing contains clear grid lines and column labels.').classes('text-amber-400')
+                                ui.markdown(f"**AI Response:**\n```json\n{json.dumps(ai_response, indent=2)}\n```").classes('text-xs text-gray-400')
+                            return
+
+                        await finish_boq_calculation(columns, user_params)
 
                     except Exception as ex:
                         boq_output.clear()
@@ -2502,8 +2420,8 @@ If a label does not appear, set its count to 0.
                             ui.notify(f'Extraction failed: {str(ex)}', type='negative')
                             ui.label('Error occurred. Please try again with a clearer drawing.').classes('text-red-400')
 
-                async def finish_boq_calculation(groups, elem, user_params):
-                    df = compute_boq(groups, elem, user_params)
+                async def finish_boq_calculation(columns, user_params):
+                    df = compute_boq_from_columns(columns, user_params)
                     if df is None:
                         boq_output.clear()
                         with boq_output:
@@ -2513,7 +2431,7 @@ If a label does not appear, set its count to 0.
                     boq_output.clear()
                     with boq_output:
                         with ui.column().classes('output-card w-full'):
-                            ui.label(f'{elem} Bill of Quantities').classes('text-xl font-bold text-white mb-2')
+                            ui.label('Columns Bill of Quantities').classes('text-xl font-bold text-white mb-2')
                             def df_to_md(df):
                                 lines = []
                                 headers = list(df.columns)
@@ -2537,7 +2455,7 @@ If a label does not appear, set its count to 0.
                                     textposition='auto',
                                 ))
                                 fig_bar.update_layout(
-                                    title=f'{elem} - Volume per Group',
+                                    title='Column Volume per Group',
                                     template='plotly_dark',
                                     paper_bgcolor='#0d1a35',
                                     plot_bgcolor='#0d1a35',
@@ -2573,13 +2491,13 @@ If a label does not appear, set its count to 0.
                             try:
                                 meta = current_meta('BOQ')
                                 pdf_bytes = build_report_pdf(
-                                    "BOQ Report",
-                                    f"Element: {elem}",
+                                    "BOQ Report - Columns",
+                                    f"Grid-anchored extraction",
                                     df_to_md(df),
                                     meta,
                                     logo_bytes_holder['bytes'],
                                 )
-                                ui.download(pdf_bytes, filename=f"BOQ_{elem}_{ticket_input.value}.pdf")
+                                ui.download(pdf_bytes, filename=f"BOQ_Columns_{ticket_input.value}.pdf")
                                 ui.notify('PDF downloaded', type='positive')
                             except Exception as ex:
                                 ui.notify(f'PDF Error: {str(ex)}', type='negative')
@@ -2589,7 +2507,7 @@ If a label does not appear, set its count to 0.
                                 with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
                                     df.to_excel(writer, sheet_name='BOQ', index=False)
                                 excel_buffer.seek(0)
-                                ui.download(excel_buffer.getvalue(), filename=f"BOQ_{elem}_{ticket_input.value}.xlsx")
+                                ui.download(excel_buffer.getvalue(), filename=f"BOQ_Columns_{ticket_input.value}.xlsx")
                                 ui.notify('Excel downloaded', type='positive')
                             except Exception as ex:
                                 ui.notify(f'Excel Error: {str(ex)}', type='negative')
