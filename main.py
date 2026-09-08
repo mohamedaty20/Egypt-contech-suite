@@ -2117,7 +2117,7 @@ Ensure all tables are proper Markdown tables with header and separator rows.
 
         
                        # =========================================================================
-                      # =========================================================================
+                        # =========================================================================
             # TAB 5: PROFESSIONAL BOQ TAKEOFF (REDESIGNED)
             # =========================================================================
             with ui.tab_panel(t_boq):
@@ -2158,9 +2158,10 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                     value='Structural'
                 ).classes('w-full mb-2')
 
-                # Item selection container (will be dynamically updated)
+                # Item selection container
                 items_container = ui.column().classes('w-full mb-4')
                 selected_items = {'items': []}  # store selected item keys
+                item_buttons = {}  # store button objects for toggling
 
                 # Define item categories
                 structural_items = [
@@ -2183,8 +2184,19 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                     {'key': 'wall_sealer', 'label': 'Wall Sealer', 'required_fields': ['sealer_area_m2']},
                 ]
 
+                def toggle_item(key):
+                    if key in selected_items['items']:
+                        selected_items['items'].remove(key)
+                        if key in item_buttons:
+                            item_buttons[key].style('background-color: #0d1a35; border-color: #2c3f6b;')
+                    else:
+                        selected_items['items'].append(key)
+                        if key in item_buttons:
+                            item_buttons[key].style('background-color: #FF8C00; border-color: #FF8C00;')
+
                 def update_items():
                     items_container.clear()
+                    item_buttons.clear()
                     current_branch = branch.value
                     items = structural_items if current_branch == 'Structural' else architectural_items
                     selected_items['items'] = []
@@ -2192,24 +2204,14 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                         ui.label(f'Select {current_branch} Items to Extract:').classes('text-white font-bold mb-2')
                         with ui.row().classes('w-full gap-3 flex-wrap'):
                             for item in items:
-                                toggle = ui.toggle(
-                                    label=item['label'],
-                                    value=False,
-                                    on_change=lambda e, key=item['key']: update_selection(key, e.value)
-                                ).props('flat outline').classes('text-white bg-[#0d1a35] border border-[#2c3f6b] rounded-lg px-4 py-2')
-                                # We need to store the toggle state
-                                # We'll use a dict to keep track
-                                if not hasattr(update_items, 'toggles'):
-                                    update_items.toggles = {}
-                                update_items.toggles[item['key']] = toggle
-
-                def update_selection(key, value):
-                    if value:
-                        if key not in selected_items['items']:
-                            selected_items['items'].append(key)
-                    else:
-                        if key in selected_items['items']:
-                            selected_items['items'].remove(key)
+                                btn = ui.button(
+                                    item['label'],
+                                    on_click=lambda k=item['key']: toggle_item(k)
+                                ).props('flat').classes(
+                                    'text-white bg-[#0d1a35] border border-[#2c3f6b] rounded-lg px-4 py-2 hover:bg-[#1a2a4a] transition-colors'
+                                )
+                                btn.style('min-width: 120px;')
+                                item_buttons[item['key']] = btn
 
                 # Initial render
                 update_items()
@@ -2219,10 +2221,9 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                 boq_output = ui.column().classes('w-full')
                 boq_export = ui.row().classes('w-full gap-4 mt-4')
 
-                # Define a strict extraction function
+                # Define a strict extraction function (same as before, but we'll include it here for completeness)
                 async def extract_boq_ai(branch_type, selected_keys, file_bytes, file_type, user_params, code_basis):
                     """Build a strict prompt and extract data."""
-                    # Build the prompt based on selected items
                     items_detail = []
                     all_required_fields = set()
                     for key in selected_keys:
@@ -2325,11 +2326,9 @@ Now analyze the drawing and return ONLY the JSON object. No extra text.
                         contents.append(img_part)
 
                     response_text = await call_gemini_json(contents, temperature=0, timeout=300)
-                    # Clean and parse JSON
                     json_str = response_text.strip()
                     json_str = re.sub(r'^```json\s*', '', json_str)
                     json_str = re.sub(r'\s*```$', '', json_str)
-                    # Find first '{' and last '}'
                     start = json_str.find('{')
                     end = json_str.rfind('}')
                     if start != -1 and end != -1:
@@ -2365,7 +2364,6 @@ Now analyze the drawing and return ONLY the JSON object. No extra text.
                         code_basis = code_basis_select.value
                         branch_type = branch.value
 
-                        # Call AI
                         ai_response = await extract_boq_ai(
                             branch_type,
                             selected_items['items'],
@@ -2375,7 +2373,6 @@ Now analyze the drawing and return ONLY the JSON object. No extra text.
                             code_basis
                         )
 
-                        # Check status
                         if ai_response.get('status') == 'insufficient_data':
                             boq_output.clear()
                             with boq_output:
@@ -2390,7 +2387,6 @@ Now analyze the drawing and return ONLY the JSON object. No extra text.
                                 ui.markdown(f"**Response:**\n```json\n{json.dumps(ai_response, indent=2)}\n```").classes('text-white')
                             return
 
-                        # Parse data
                         data_items = ai_response.get('data', {}).get('items', [])
                         if not data_items:
                             boq_output.clear()
@@ -2398,39 +2394,31 @@ Now analyze the drawing and return ONLY the JSON object. No extra text.
                                 ui.label('No data extracted. Ensure the drawing contains clear dimensions and labels.').classes('text-amber-400')
                             return
 
-                        # Process each item type
                         all_results = []
                         for item in data_items:
                             item_type = item.get('type')
                             groups = item.get('groups', [])
                             if not groups:
                                 continue
-                            # Compute quantities based on type
                             if item_type in ['columns', 'beams', 'slabs', 'footings', 'shear_walls']:
-                                # Use existing compute functions
-                                # We need to map shear_walls to walls for computation
                                 if item_type == 'shear_walls':
                                     compute_type = 'walls'
                                 else:
                                     compute_type = item_type
-                                # We'll call compute_mass_from_ai_data (but it expects a list of groups)
-                                # We need to handle missing fields
                                 results, total, missing = compute_mass_from_ai_data_with_missing(compute_type, groups, user_params)
                                 if results:
-                                    # Generate table for this item
                                     df = generate_boq_table(results, 'structural', item_type, wastage_percent_global.value, 'mass')
                                     all_results.append((item_type, df))
                             elif item_type in ['area', 'perimeter', 'walls', 'ceramic', 'paints', 'mortar', 'ceiling', 'wall_sealer']:
-                                # Architectural items – we'll create a simple table
                                 rows = []
                                 for g in groups:
-                                    # Each group should have the required field
                                     for key, val in g.items():
                                         if val is not None:
+                                            unit = 'm²' if 'area' in key or 'perimeter' in key or 'length' in key else 'nos' if 'count' in key else 'm³'
                                             rows.append({
                                                 'Item': f"{item_type.capitalize()}",
                                                 'Count': 1,
-                                                'Unit': 'm²' if 'area' in key or 'perimeter' in key or 'length' in key else 'nos' if 'count' in key else 'm³',
+                                                'Unit': unit,
                                                 'Quantity (net)': round(val, 2),
                                                 'Wastage %': wastage_percent_global.value,
                                                 'Quantity (with waste)': round(val * (1 + wastage_percent_global.value/100), 2),
@@ -2452,7 +2440,6 @@ Now analyze the drawing and return ONLY the JSON object. No extra text.
                                     df = pd.DataFrame(rows)
                                     all_results.append((item_type, df))
                             elif item_type in ['doors', 'windows']:
-                                # Similar but count
                                 rows = []
                                 for g in groups:
                                     count = g.get('door_count' if item_type == 'doors' else 'window_count', 0)
@@ -2488,19 +2475,14 @@ Now analyze the drawing and return ONLY the JSON object. No extra text.
                                 ui.label('No valid quantities could be computed from the extracted data.').classes('text-amber-400')
                             return
 
-                        # Display results
                         boq_output.clear()
                         with boq_output:
                             with ui.column().classes('output-card w-full'):
-                                # Combine all dataframes into one grand table
                                 all_dfs = [df for _, df in all_results]
                                 if len(all_dfs) == 1:
                                     final_df = all_dfs[0]
                                 else:
-                                    # Concatenate, but we need to handle totals separately
-                                    # We'll combine everything and then add a grand total
                                     combined = pd.concat([df[df['Item'] != 'TOTAL'] for df in all_dfs], ignore_index=True)
-                                    # Aggregate
                                     grand = combined.groupby('Item').agg({
                                         'Quantity (net)': 'sum',
                                         'Quantity (with waste)': 'sum',
@@ -2517,7 +2499,6 @@ Now analyze the drawing and return ONLY the JSON object. No extra text.
                                     })
                                     final_df = pd.concat([grand, total_row], ignore_index=True)
 
-                                # Display table
                                 ui.label('Bill of Quantities').classes('text-xl font-bold text-white mb-2')
                                 def df_to_md(df):
                                     lines = []
@@ -2530,10 +2511,8 @@ Now analyze the drawing and return ONLY the JSON object. No extra text.
                                     return "\n".join(lines)
                                 ui.markdown(df_to_md(final_df)).classes('markdown-body')
 
-                                # Charts
                                 if len(final_df[final_df['Item'] != 'GRAND TOTAL']) > 0:
                                     df_chart = final_df[final_df['Item'] != 'GRAND TOTAL']
-                                    # Bar chart
                                     fig_bar = go.Figure()
                                     fig_bar.add_trace(go.Bar(
                                         x=df_chart['Item'],
@@ -2555,7 +2534,6 @@ Now analyze the drawing and return ONLY the JSON object. No extra text.
                                     )
                                     ui.plotly(fig_bar).classes('w-full mt-2')
 
-                                    # Pie chart for cost distribution
                                     fig_pie = go.Figure(data=[go.Pie(
                                         labels=df_chart['Item'],
                                         values=df_chart['Total Cost (EGP)'],
@@ -2575,7 +2553,6 @@ Now analyze the drawing and return ONLY the JSON object. No extra text.
                                     )
                                     ui.plotly(fig_pie).classes('w-full mt-2')
 
-                        # Export buttons
                         with boq_export:
                             def download_boq_pdf():
                                 try:
