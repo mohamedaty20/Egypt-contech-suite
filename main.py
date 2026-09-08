@@ -39,7 +39,7 @@ load_dotenv()
 api_key = os.getenv("GEMINI_API_KEY")
 client = genai.Client(api_key=api_key) if api_key else None
 
-GEMINI_MODEL = "gemini-3.5-flash-lite"  # Use the model that works for you
+GEMINI_MODEL = "gemini-3.5-flash-lite"
 
 PAGE_WIDTH, PAGE_HEIGHT = A4
 MARGIN = 32
@@ -867,7 +867,7 @@ FIELD_LABELS = {
     'area_m2': 'Area (m²)',
     'length_m': 'Length (m)',
     'height_m': 'Height (m)',
-    'count': 'Count (default=1)',
+    'count': 'Count (number of columns/beams)',
     'main_diameter_mm': 'Main Bar Diameter (mm)',
     'stirrup_diameter_mm': 'Stirrup Diameter (mm)',
     'spacing_mm': 'Spacing (mm)',
@@ -875,7 +875,7 @@ FIELD_LABELS = {
     'bottom_diameter_mm': 'Bottom Bar Diameter (mm)',
 }
 
-# ---- Element-specific schemas for mass extraction (simplified) ----
+# ---- Element-specific schemas for mass extraction ----
 MASS_SCHEMAS = {
     'columns': {
         'required': ['label', 'count', 'width_mm', 'depth_mm', 'height_mm'],
@@ -947,7 +947,7 @@ def normalize_keys(obj, aliases):
     return new_obj
 
 async def extract_mass_with_ai(element_type, file_bytes, file_type, user_params, code_basis, retry=True):
-    """Extract mass quantities using AI with a direct prompt (single image)."""
+    """Extract mass quantities using AI with all pages and explicit count."""
     contents = []
     schema_info = MASS_SCHEMAS.get(element_type)
     if not schema_info:
@@ -956,22 +956,40 @@ async def extract_mass_with_ai(element_type, file_bytes, file_type, user_params,
     required_fields = ', '.join(schema_info['required'])
 
     prompt = f"""
-You are a Quantity Surveyor. Extract the column schedule from the drawing.
-Return a JSON array of objects with fields: {required_fields}.
+You are a Quantity Surveyor. Extract the {element_type} schedule from the drawing.
+For each group, provide these fields: {required_fields}.
+- label: the group name (e.g., C1, B2)
+- count: the number of occurrences of that group in the drawing (count them)
+- width_mm, depth_mm, height_mm / length_mm / etc. as per the drawing.
 If a dimension is not clearly visible, set it to null.
-Return ONLY the JSON array, no explanations.
-Example:
+Return ONLY a JSON array of objects, no extra text.
+
+Example for columns:
 [{{"label":"C1","count":6,"width_mm":300,"depth_mm":300,"height_mm":3000}}]
+
+Now extract from the drawing. Look at all pages to count correctly.
 """
     contents.append(prompt)
 
-    # Process file – send only the first image (for PDF, convert first page)
+    # Process file – send all pages up to 6 as images
     if file_type == 'application/pdf':
         try:
-            # Convert first page to PNG
+            # Extract text from all pages
+            reader = pypdf.PdfReader(io.BytesIO(file_bytes))
+            pages_text = []
+            for i in range(min(6, len(reader.pages))):
+                try:
+                    txt = reader.pages[i].extract_text() or ""
+                    pages_text.append(txt)
+                except:
+                    pass
+            full_text = "".join(pages_text)
+            if full_text.strip():
+                contents.append(f"Extracted text from PDF:\n{full_text[:6000]}")
+            # Send up to 6 pages as PNG images
             doc = fitz.open(stream=file_bytes, filetype="pdf")
-            if len(doc) > 0:
-                page = doc.load_page(0)
+            for page_num in range(min(6, len(doc))):
+                page = doc.load_page(page_num)
                 mat = fitz.Matrix(2.0, 2.0)  # high resolution
                 pix = page.get_pixmap(matrix=mat)
                 img_bytes = pix.tobytes("png")
@@ -990,24 +1008,19 @@ Example:
     try:
         response_text = await call_gemini_json(contents, temperature=0, timeout=300)
         raw_response = response_text
-        # Try to extract JSON array
         json_str = response_text.strip()
-        # Remove markdown fences if present
         json_str = re.sub(r'^```json\s*', '', json_str)
         json_str = re.sub(r'\s*```$', '', json_str)
-        # Find the first '[' and last ']'
         start = json_str.find('[')
         end = json_str.rfind(']')
         if start != -1 and end != -1:
             json_str = json_str[start:end+1]
         data = json.loads(json_str)
-        # If data is not a list, try to convert
         if not isinstance(data, list):
             if isinstance(data, dict):
                 data = [data]
             else:
                 data = []
-        # Normalize field names
         aliases = schema_info.get('field_aliases', {})
         normalized_data = []
         for item in data:
@@ -1019,7 +1032,7 @@ Example:
         return normalized_data, raw_response
     except Exception as e:
         if retry:
-            # Try a simpler prompt without images
+            # Fallback to a simpler prompt without images (if all else fails)
             prompt2 = f"""
 Return a JSON array of objects with fields: {required_fields}.
 If the drawing is unclear, return an empty array [].
@@ -1056,7 +1069,7 @@ If the drawing is unclear, return an empty array [].
             return [], raw_response
 
 def compute_mass_from_ai_data(element_type, data, user_params):
-    """Compute quantities from AI-extracted data, defaulting missing count to 1.
+    """Compute quantities from AI-extracted data. Count is required.
        Returns: (results, total_concrete, missing_groups)
     """
     schema_info = MASS_SCHEMAS.get(element_type)
@@ -1067,10 +1080,6 @@ def compute_mass_from_ai_data(element_type, data, user_params):
     missing_groups = []
 
     for idx, group in enumerate(data):
-        # Ensure count is present, default to 1 if missing
-        if 'count' not in group or group['count'] is None:
-            group['count'] = 1
-
         # Check which required fields are missing
         missing_fields = []
         for req in required:
@@ -1086,7 +1095,7 @@ def compute_mass_from_ai_data(element_type, data, user_params):
             })
             continue
 
-        # Compute volume based on element type
+        # All required fields present – compute volume
         if element_type == 'columns':
             if group.get('height_mm') is None and user_params.get('use_floor_height', False):
                 group['height_mm'] = user_params.get('floor_height_mm', 3000)
@@ -1839,7 +1848,7 @@ Ensure all tables are proper Markdown tables with header and separator rows.
             with ui.tab_panel(t_boq):
                 ui.label('Professional AI BOQ Takeoff & Cost Estimation').classes('text-2xl font-bold text-white mb-2')
                 ui.markdown('Upload project drawings (PDF, JPG, PNG). AI will extract mass quantities automatically.').classes('markdown-body mb-2')
-                ui.markdown('*For PDFs, only the first page is processed for best quality.*').classes('text-xs text-yellow-400 mb-4')
+                ui.markdown('*For PDFs, up to 6 pages are processed for best results.*').classes('text-xs text-yellow-400 mb-4')
 
                 # Global BOQ parameters (shared across all sub-tabs)
                 with ui.column().classes('input-card w-full mb-4'):
@@ -2270,10 +2279,9 @@ Return ONLY valid JSON.
                                                     code_basis = code_basis_select.value
                                                     # Call AI extraction
                                                     data, raw_response = await extract_mass_with_ai(key, file_data['bytes'], file_data['type'], user_params, code_basis)
-                                                    # Compute quantities – now returns results, total_concrete, missing_groups
+                                                    # Compute quantities
                                                     results, total_concrete, missing_groups = compute_mass_from_ai_data(key, data, user_params)
 
-                                                    # If there are missing groups, show modal to fill them
                                                     if missing_groups:
                                                         modal = ui.dialog()
                                                         with modal, ui.card().classes('w-full max-w-2xl bg-[#0d1a35]'):
