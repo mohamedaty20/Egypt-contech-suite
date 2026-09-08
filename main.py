@@ -2386,7 +2386,7 @@ Return ONLY valid JSON.
                                 ui.button('Refresh Grand Total', on_click=update_arch_grand_total).classes('primary-btn')
                                 update_arch_grand_total()
 
-                    # ========== STRUCTURAL BRANCH (FIXED VARIABLE CAPTURE) ==========
+                    # ========== STRUCTURAL BRANCH (FIXED WITH DEDICATED FILE DICT) ==========
                     with ui.tab_panel(struct_tab):
                         with ui.tabs().classes('w-full text-white bg-[#0d1a35] rounded-lg') as struct_sub_tabs:
                             struct_elements = ['Columns', 'Beams', 'Slabs', 'Footings', 'Walls', 'Grand Total']
@@ -2395,7 +2395,10 @@ Return ONLY valid JSON.
                                 struct_tab_objects[el] = ui.tab(el).classes('text-white font-bold')
 
                         with ui.tab_panels(struct_sub_tabs, value=struct_tab_objects['Columns']).classes('w-full bg-transparent mt-4'):
-                            # For each structural element, define the mass and rebar tabs
+                            # We'll store file data in dictionaries keyed by element key
+                            mass_file_data_dict = {}
+                            rebar_file_data_dict = {}
+
                             for el_display, el_key in [('Columns', 'columns'), ('Beams', 'beams'), ('Slabs', 'slabs'), ('Footings', 'footings'), ('Walls', 'walls')]:
                                 with ui.tab_panel(struct_tab_objects[el_display]):
                                     ui.label(f'{el_display} - Mass & Rebar Takeoff').classes('text-xl font-bold text-white mb-2')
@@ -2408,14 +2411,14 @@ Return ONLY valid JSON.
                                         # ---- Mass Quantities ----
                                         with ui.tab_panel(mass_tab):
                                             ui.label(f'{el_display} - Mass Quantities (Concrete volume, area, count)').classes('text-lg font-bold text-white mb-2')
-                                            # Store file data in a dict with a unique key for this tab
+                                            # Use a dedicated dict for this element
                                             mass_file_data = {'bytes': None, 'type': None}
+                                            mass_file_data_dict[el_key] = mass_file_data
                                             mass_status = ui.label('Status: No file uploaded').classes('text-xs text-amber-400 font-semibold mb-2')
                                             async def handle_mass_upload(e, key=el_key):
                                                 try:
-                                                    # We store in a dict that is unique per tab
-                                                    mass_file_data['bytes'] = await e.file.read()
-                                                    mass_file_data['type'] = 'application/pdf' if e.file.name.lower().endswith('.pdf') else 'image/jpeg'
+                                                    mass_file_data_dict[key]['bytes'] = await e.file.read()
+                                                    mass_file_data_dict[key]['type'] = 'application/pdf' if e.file.name.lower().endswith('.pdf') else 'image/jpeg'
                                                     mass_status.set_text(f'File Ready: {e.file.name}')
                                                     mass_status.classes(replace='text-xs text-emerald-400 font-semibold mb-2')
                                                     ui.notify(f'Mass file uploaded: {e.file.name}', type='positive')
@@ -2426,12 +2429,13 @@ Return ONLY valid JSON.
                                             mass_export = ui.row().classes('w-full gap-4 mt-4')
                                             mass_df_holder = [None]
 
-                                            # Define the extraction function capturing the current el_key and mass_file_data
-                                            async def run_mass_extraction(key=el_key, file_data=mass_file_data, output=mass_output, export=mass_export, df_holder=mass_df_holder):
+                                            # Define the extraction function capturing the current key and using the file dict
+                                            async def run_mass_extraction(key=el_key, output=mass_output, export=mass_export, df_holder=mass_df_holder):
                                                 if not client:
                                                     ui.notify('GEMINI_API_KEY missing!', type='negative')
                                                     return
-                                                if not file_data['bytes']:
+                                                file_data = mass_file_data_dict.get(key)
+                                                if not file_data or not file_data['bytes']:
                                                     ui.notify('Please upload a drawing for mass quantities.', type='warning')
                                                     return
                                                 output.clear()
@@ -2467,7 +2471,6 @@ Return ONLY valid JSON.
                                                                     for field in group['missing']:
                                                                         key_input = f"{group['idx']}_{field}"
                                                                         if key_input in inputs and inputs[key_input].value is not None:
-                                                                            # For groups, we set inside 'groups' list
                                                                             if 'groups' in data:
                                                                                 data['groups'][group['idx']][field] = inputs[key_input].value
                                                                 modal.close()
@@ -2541,11 +2544,12 @@ Return ONLY valid JSON.
                                         with ui.tab_panel(rebar_tab):
                                             ui.label(f'{el_display} - Reinforcement Takeoff').classes('text-lg font-bold text-white mb-2')
                                             rebar_file_data = {'bytes': None, 'type': None}
+                                            rebar_file_data_dict[el_key] = rebar_file_data
                                             rebar_status = ui.label('Status: No file uploaded').classes('text-xs text-amber-400 font-semibold mb-2')
                                             async def handle_rebar_upload(e, key=el_key):
                                                 try:
-                                                    rebar_file_data['bytes'] = await e.file.read()
-                                                    rebar_file_data['type'] = 'application/pdf' if e.file.name.lower().endswith('.pdf') else 'image/jpeg'
+                                                    rebar_file_data_dict[key]['bytes'] = await e.file.read()
+                                                    rebar_file_data_dict[key]['type'] = 'application/pdf' if e.file.name.lower().endswith('.pdf') else 'image/jpeg'
                                                     rebar_status.set_text(f'File Ready: {e.file.name}')
                                                     rebar_status.classes(replace='text-xs text-emerald-400 font-semibold mb-2')
                                                     ui.notify(f'Rebar file uploaded: {e.file.name}', type='positive')
@@ -2556,11 +2560,12 @@ Return ONLY valid JSON.
                                             rebar_export = ui.row().classes('w-full gap-4 mt-4')
                                             rebar_df_holder = [None]
 
-                                            async def run_rebar_extraction(key=el_key, file_data=rebar_file_data, output=rebar_output, export=rebar_export, df_holder=rebar_df_holder):
+                                            async def run_rebar_extraction(key=el_key, output=rebar_output, export=rebar_export, df_holder=rebar_df_holder):
                                                 if not client:
                                                     ui.notify('GEMINI_API_KEY missing!', type='negative')
                                                     return
-                                                if not file_data['bytes']:
+                                                file_data = rebar_file_data_dict.get(key)
+                                                if not file_data or not file_data['bytes']:
                                                     ui.notify('Please upload a drawing for reinforcement.', type='warning')
                                                     return
                                                 output.clear()
@@ -2596,7 +2601,6 @@ Return ONLY valid JSON.
                                                                     for field in group['missing']:
                                                                         key_input = f"{group['idx']}_{field}"
                                                                         if key_input in inputs and inputs[key_input].value is not None:
-                                                                            # For nested rebar fields, set inside rebar object
                                                                             if '.' in field:
                                                                                 parent, child = field.split('.')
                                                                                 if parent not in data['groups'][group['idx']]:
