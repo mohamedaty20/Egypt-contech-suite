@@ -39,11 +39,13 @@ load_dotenv()
 api_key = os.getenv("GEMINI_API_KEY")
 client = genai.Client(api_key=api_key) if api_key else None
 
-# Allow overriding via .env (GEMINI_MODEL=...). Default to a stronger, more
-# accurate multimodal model since engineering-drawing extraction needs careful
-# visual reasoning; "flash-lite" tier models are tuned for speed/cost over
-# accuracy and were under-performing on structural/architectural takeoffs.
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
+# Allow overriding via .env (GEMINI_MODEL=...). Reverted to the exact model
+# string that was already present/working in the original app — do not
+# change this without testing, since an invalid model id causes every
+# extraction call to fail, and (before the fix below) that failure was being
+# silently swallowed into "no elements found", which is indistinguishable
+# from an image-quality problem in the UI.
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 
 
 def detect_mime_type(filename, file_bytes=None):
@@ -95,6 +97,50 @@ def detect_mime_type(filename, file_bytes=None):
 
     # Safe default (better than silently mislabeling as JPEG)
     return "image/png"
+
+
+def pdf_to_content_parts(file_bytes, max_pages=6, zoom=2.2, text_char_limit=10000):
+    """Turn a PDF into (extracted_text, [image_parts]) for sending to Gemini.
+
+    FIX: several tabs (AI Audit, Defect Diagnosis) previously extracted ONLY
+    the text layer of an uploaded PDF and never sent any rendered image of
+    the pages. Construction/engineering drawing PDFs are mostly vector
+    graphics with little or no extractable text, so the AI was effectively
+    being asked to audit a document it couldn't see. This helper renders
+    each page to a high-resolution PNG as well, so visual content is always
+    included.
+    """
+    text = ""
+    image_parts = []
+    try:
+        reader = pypdf.PdfReader(io.BytesIO(file_bytes))
+        page_texts = []
+        for i in range(min(max_pages, len(reader.pages))):
+            try:
+                page_texts.append(reader.pages[i].extract_text() or "")
+            except Exception:
+                pass
+        text = "".join(page_texts)
+        if len(text) > text_char_limit:
+            text = text[:text_char_limit] + "\n... (truncated)"
+    except Exception:
+        text = ""
+
+    try:
+        doc = fitz.open(stream=file_bytes, filetype="pdf")
+        page_count = min(max_pages, len(doc))
+        for page_num in range(page_count):
+            page = doc.load_page(page_num)
+            mat = fitz.Matrix(zoom, zoom)
+            pix = page.get_pixmap(matrix=mat)
+            img_bytes = pix.tobytes("png")
+            image_parts.append(types.Part.from_bytes(data=img_bytes, mime_type="image/png"))
+        doc.close()
+    except Exception:
+        # Last resort: send the raw PDF bytes directly
+        image_parts = [types.Part.from_bytes(data=file_bytes, mime_type="application/pdf")]
+
+    return text, image_parts
 
 PAGE_WIDTH, PAGE_HEIGHT = A4
 MARGIN = 32
@@ -1019,8 +1065,9 @@ Now extract from the drawing.
         if start != -1 and end != -1:
             json_str = json_str[start:end+1]
         data = json.loads(json_str)
-        return data
+        return data, response_text, None
     except Exception as e:
+        first_error = e
         if retry:
             # Simplified retry: prompt without images, only text
             prompt2 = f"""
@@ -1047,12 +1094,18 @@ If the drawing is unclear, return an empty array [].
                 if start != -1 and end != -1:
                     json_str2 = json_str2[start:end+1]
                 data2 = json.loads(json_str2)
-                return data2
-            except:
-                # If still fails, return empty array to trigger manual fallback
-                return []
+                # FIX: the retry succeeding doesn't mean the first call's error
+                # was benign — surface it as a warning so the user knows the
+                # image-based attempt failed and only the text-only fallback worked.
+                return data2, response_text2, f"Image-based extraction failed ({first_error}); used text-only fallback."
+            except Exception as e2:
+                # FIX: previously this silently returned [] no matter what went
+                # wrong, which the UI showed as "AI could not identify any
+                # elements" — indistinguishable from a genuinely empty/unclear
+                # drawing. Now we raise so the real error reaches the user.
+                raise Exception(f"AI call failed on both attempts. First error: {first_error}. Retry error: {e2}") from e2
         else:
-            return []
+            raise Exception(f"AI call failed: {first_error}") from first_error
 
 def _compute_mass_volume(element_type, group):
     """Compute the concrete volume for a single (fully-populated) group."""
@@ -1605,11 +1658,13 @@ report with clear ## section headings and real Markdown tables for any comparati
 """
                         contents = [prompt]
                         if uploaded_file_data['type'] == 'application/pdf':
-                            reader = pypdf.PdfReader(io.BytesIO(uploaded_file_data['bytes']))
-                            text = "".join([p.extract_text() or "" for p in reader.pages[:10]])
-                            if len(text) > 10000:
-                                text = text[:10000] + "\n... (truncated)"
-                            contents.append(f"Extracted PDF Text:\n{text}")
+                            pdf_text, pdf_images = pdf_to_content_parts(uploaded_file_data['bytes'])
+                            if pdf_text.strip():
+                                contents.append(f"Extracted PDF Text:\n{pdf_text}")
+                            # FIX: previously only text was sent for PDFs, so drawing-only
+                            # PDFs (little/no extractable text) were effectively invisible
+                            # to the model. Now the rendered page images are included too.
+                            contents.extend(pdf_images)
                         else:
                             img_part = types.Part.from_bytes(data=uploaded_file_data['bytes'], mime_type=uploaded_file_data['type'])
                             contents.append(img_part)
@@ -1724,11 +1779,12 @@ Ensure all tables are proper Markdown tables with header and separator rows.
 """
                         contents.append(prompt)
                         if defect_file_data['type'] == 'application/pdf':
-                            reader = pypdf.PdfReader(io.BytesIO(defect_file_data['bytes']))
-                            text = "".join([p.extract_text() or "" for p in reader.pages[:10]])
-                            if len(text) > 10000:
-                                text = text[:10000] + "\n... (truncated)"
-                            contents.append(f"Extracted PDF Text (if any):\n{text}")
+                            pdf_text, pdf_images = pdf_to_content_parts(defect_file_data['bytes'])
+                            if pdf_text.strip():
+                                contents.append(f"Extracted PDF Text (if any):\n{pdf_text}")
+                            # FIX: send rendered page images too, not just text — see
+                            # pdf_to_content_parts() docstring.
+                            contents.extend(pdf_images)
                         else:
                             img_part = types.Part.from_bytes(data=defect_file_data['bytes'], mime_type=defect_file_data['type'])
                             contents.append(img_part)
@@ -2384,15 +2440,24 @@ Return ONLY valid JSON.
                                                     }
                                                     code_basis = code_basis_select.value
                                                     # Call AI extraction
-                                                    data = await extract_mass_with_ai(key, file_data['bytes'], file_data['type'], user_params, code_basis)
+                                                    data, raw_response, warning = await extract_mass_with_ai(key, file_data['bytes'], file_data['type'], user_params, code_basis)
+                                                    if warning:
+                                                        ui.notify(warning, type='warning')
                                                     # Compute quantities
                                                     results, total_concrete, incomplete_groups = compute_mass_from_ai_data(key, data, user_params)
 
                                                     if not results and not incomplete_groups:
                                                         output.clear()
                                                         with output:
-                                                            ui.label('The AI could not identify any elements in this drawing. Try a clearer, higher-resolution scan, or a page that shows this element type directly.').classes('text-amber-400')
-                                                        ui.notify('No elements recognized in the drawing.', type='warning')
+                                                            ui.label('The AI responded but did not find any elements in this drawing. Try a clearer, higher-resolution scan, or a page that shows this element type directly.').classes('text-amber-400')
+                                                            # FIX: show exactly what the model returned, instead of hiding
+                                                            # it. If this is empty/near-empty, the issue is genuinely
+                                                            # that the model didn't see the elements. If it's a wall of
+                                                            # prose or a refusal, that tells us something different went
+                                                            # wrong (prompt, model, or file format).
+                                                            with ui.expansion('Show AI raw response (debug)', icon='bug_report').classes('w-full text-amber-300 mt-2'):
+                                                                ui.markdown(f"```\n{raw_response[:4000]}\n```")
+                                                        ui.notify('No elements recognized in the drawing — see the debug panel below the message.', type='warning')
                                                         return
 
                                                     if incomplete_groups:
@@ -2486,7 +2551,7 @@ INSTRUCTIONS:
                                                 end = json_str.rfind(']')
                                                 if start != -1 and end != -1:
                                                     json_str = json_str[start:end+1]
-                                                return json.loads(json_str)
+                                                return json.loads(json_str), response
 
                                             def finish_rebar_extraction(results, key=el_key, output=rebar_output, export=rebar_export, df_holder=rebar_df_holder):
                                                 if not results:
@@ -2605,15 +2670,17 @@ INSTRUCTIONS:
                                                         'wastage': wastage_percent_global.value,
                                                     }
                                                     code_basis = code_basis_select.value
-                                                    data = await extract_rebar_with_ai(el_key, file_data['bytes'], file_data['type'], user_params, code_basis)
+                                                    data, raw_response = await extract_rebar_with_ai(el_key, file_data['bytes'], file_data['type'], user_params, code_basis)
                                                     # Compute rebar quantities
                                                     results, total_concrete, total_rebar, incomplete_groups = compute_rebar_quantities(el_key, data, user_params)
 
                                                     if not results and not incomplete_groups:
                                                         output.clear()
                                                         with output:
-                                                            ui.label('The AI could not identify any reinforced elements in this drawing. Try a clearer scan, or a page that shows the bar-bending schedule.').classes('text-amber-400')
-                                                        ui.notify('No reinforcement details recognized.', type='warning')
+                                                            ui.label('The AI responded but did not find any reinforced elements in this drawing. Try a clearer scan, or a page that shows the bar-bending schedule.').classes('text-amber-400')
+                                                            with ui.expansion('Show AI raw response (debug)', icon='bug_report').classes('w-full text-amber-300 mt-2'):
+                                                                ui.markdown(f"```\n{raw_response[:4000]}\n```")
+                                                        ui.notify('No reinforcement details recognized — see the debug panel below the message.', type='warning')
                                                         return
 
                                                     if incomplete_groups:
