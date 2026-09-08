@@ -2216,7 +2216,7 @@ Return ONLY valid JSON.
                                                     ui.markdown('Please enter the missing values for each group:').classes('text-white')
                                                     inputs = {}
                                                     for group in missing_groups:
-                                                        ui.label(f"**{group['label']}**").classes('text-white font-bold mt-2')
+                                                        ui.label(group['label']).classes('text-white font-bold mt-2')
                                                         for field in group['missing']:
                                                             label = FIELD_LABELS.get(field, field)
                                                             inputs[f"{group['idx']}_{field}"] = ui.number(label=label, value=None).classes('w-full')
@@ -2395,14 +2395,12 @@ Return ONLY valid JSON.
                                 struct_tab_objects[el] = ui.tab(el).classes('text-white font-bold')
 
                         with ui.tab_panels(struct_sub_tabs, value=struct_tab_objects['Columns']).classes('w-full bg-transparent mt-4'):
-                            # We'll store file data in dictionaries keyed by element key
                             mass_file_data_dict = {}
                             rebar_file_data_dict = {}
 
                             for el_display, el_key in [('Columns', 'columns'), ('Beams', 'beams'), ('Slabs', 'slabs'), ('Footings', 'footings'), ('Walls', 'walls')]:
                                 with ui.tab_panel(struct_tab_objects[el_display]):
                                     ui.label(f'{el_display} - Mass & Rebar Takeoff').classes('text-xl font-bold text-white mb-2')
-                                    # Create two sub-tabs within this panel
                                     with ui.tabs().classes('w-full text-white bg-[#0d1a35] rounded-lg') as mode_tabs:
                                         mass_tab = ui.tab('Mass Quantities').classes('text-white font-bold')
                                         rebar_tab = ui.tab('Reinforcement').classes('text-white font-bold')
@@ -2411,7 +2409,6 @@ Return ONLY valid JSON.
                                         # ---- Mass Quantities ----
                                         with ui.tab_panel(mass_tab):
                                             ui.label(f'{el_display} - Mass Quantities (Concrete volume, area, count)').classes('text-lg font-bold text-white mb-2')
-                                            # Use a dedicated dict for this element
                                             mass_file_data = {'bytes': None, 'type': None}
                                             mass_file_data_dict[el_key] = mass_file_data
                                             mass_status = ui.label('Status: No file uploaded').classes('text-xs text-amber-400 font-semibold mb-2')
@@ -2429,7 +2426,6 @@ Return ONLY valid JSON.
                                             mass_export = ui.row().classes('w-full gap-4 mt-4')
                                             mass_df_holder = [None]
 
-                                            # Define the extraction function capturing the current key and using the file dict
                                             async def run_mass_extraction(key=el_key, output=mass_output, export=mass_export, df_holder=mass_df_holder):
                                                 if not client:
                                                     ui.notify('GEMINI_API_KEY missing!', type='negative')
@@ -2459,11 +2455,12 @@ Return ONLY valid JSON.
                                                             ui.markdown('Please enter the missing values for each group:').classes('text-white')
                                                             inputs = {}
                                                             for group in missing_groups:
-                                                                ui.label(f"**{group['label']}**").classes('text-white font-bold mt-2')
+                                                                ui.label(group['label']).classes('text-white font-bold mt-2')
                                                                 for field in group['missing']:
                                                                     label = FIELD_LABELS.get(field, field)
+                                                                    # Pre-fill with floor height if height and checkbox is checked, but allow editing
                                                                     if field == 'height_mm' and use_floor_height_check.value:
-                                                                        inputs[f"{group['idx']}_{field}"] = ui.number(label=label, value=floor_height_global.value).props('disable')
+                                                                        inputs[f"{group['idx']}_{field}"] = ui.number(label=label, value=floor_height_global.value).classes('w-full')
                                                                     else:
                                                                         inputs[f"{group['idx']}_{field}"] = ui.number(label=label, value=None).classes('w-full')
                                                             async def confirm_missing():
@@ -2485,7 +2482,6 @@ Return ONLY valid JSON.
                                                     with output:
                                                         ui.notify(f'Extraction failed: {str(ex)}', type='negative')
 
-                                            # Define the finish function
                                             async def finish_mass_extraction(data):
                                                 user_params = {
                                                     'floor_height_mm': floor_height_global.value,
@@ -2589,11 +2585,11 @@ Return ONLY valid JSON.
                                                             ui.markdown('Please enter the missing values for each group:').classes('text-white')
                                                             inputs = {}
                                                             for group in missing_groups:
-                                                                ui.label(f"**{group['label']}**").classes('text-white font-bold mt-2')
+                                                                ui.label(group['label']).classes('text-white font-bold mt-2')
                                                                 for field in group['missing']:
                                                                     label = FIELD_LABELS.get(field, field)
                                                                     if field == 'height_mm' and use_floor_height_check.value:
-                                                                        inputs[f"{group['idx']}_{field}"] = ui.number(label=label, value=floor_height_global.value).props('disable')
+                                                                        inputs[f"{group['idx']}_{field}"] = ui.number(label=label, value=floor_height_global.value).classes('w-full')
                                                                     else:
                                                                         inputs[f"{group['idx']}_{field}"] = ui.number(label=label, value=None).classes('w-full')
                                                             async def confirm_missing():
