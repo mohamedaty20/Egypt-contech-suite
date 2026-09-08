@@ -2118,12 +2118,12 @@ Ensure all tables are proper Markdown tables with header and separator rows.
         
                        # =========================================================================
             # =========================================================================
-            # TAB 5: PROFESSIONAL BOQ TAKEOFF (VISUAL SCRATCHPAD)
+            # TAB 5: PROFESSIONAL BOQ TAKEOFF (NATURAL LANGUAGE EXTRACTION)
             # =========================================================================
             with ui.tab_panel(t_boq):
                 ui.label('Professional AI BOQ Takeoff & Cost Estimation').classes('text-2xl font-bold text-white mb-2')
-                ui.markdown('Upload a structural plan (PDF, JPG, PNG). The AI will mark columns with a visual scratchpad.').classes('markdown-body mb-2')
-                ui.markdown('*For PDFs, up to 6 pages are processed.*').classes('text-xs text-yellow-400 mb-4')
+                ui.markdown('Upload a structural plan (PDF, JPG, PNG). The AI will describe columns in natural language, then Python extracts the data.').classes('markdown-body mb-2')
+                ui.markdown('*For PDFs, only the first page is processed for best results.*').classes('text-xs text-yellow-400 mb-4')
 
                 # Global Parameters
                 with ui.column().classes('input-card w-full mb-4'):
@@ -2156,47 +2156,30 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                 boq_export = ui.row().classes('w-full gap-4 mt-4')
 
                 # --------------------------------------------------------------------
-                # VISUAL SCRATCHPAD EXTRACTION
+                # AI EXTRACTION (Natural Language)
                 # --------------------------------------------------------------------
-                import io
-                from PIL import Image, ImageDraw
-
-                def draw_marks_on_image(image_bytes, marks, output_format='PNG'):
-                    """Draw red circles on the image at the given mark centers."""
-                    img = Image.open(io.BytesIO(image_bytes))
-                    draw = ImageDraw.Draw(img)
-                    for mark in marks:
-                        y, x = mark  # y, x are pixel coordinates from bounding box center
-                        draw.ellipse((x-10, y-10, x+10, y+10), outline='red', width=3)
-                    buf = io.BytesIO()
-                    img.save(buf, format=output_format)
-                    return buf.getvalue()
-
-                def extract_bbox_center(bbox):
-                    """Return (center_y, center_x) from [ymin, xmin, ymax, xmax]."""
-                    ymin, xmin, ymax, xmax = bbox
-                    return ((ymin + ymax) // 2, (xmin + xmax) // 2)
-
-                async def extract_columns_with_bbox(file_bytes, file_type, temperature=0):
-                    """Extract columns with bounding boxes."""
+                async def extract_columns_natural(file_bytes, file_type):
+                    """Ask Gemini to describe the column schedule in natural language."""
                     prompt = """
-You are a Quantity Surveyor. Scan the column layout drawing.
-For each column you see, output a JSON array of objects with:
-- label: the column mark (e.g., C1)
-- width_mm: width in mm
-- depth_mm: depth in mm
-- bounding_box: [ymin, xmin, ymax, xmax] as integer pixel coordinates
+You are a Quantity Surveyor. Look at this structural column layout drawing.
 
-If a column is already marked with a red circle, ignore it.
-Return ONLY a JSON array. If no unmarked columns are found, return an empty array [].
-Example: [{"label":"C1","width_mm":300,"depth_mm":300,"bounding_box":[120,340,180,410]}]
+Please describe the column schedule as you see it. Include:
+- Each column mark (like C1, C2, etc.)
+- Its dimensions (width x depth) in mm
+- The total count of each mark you can see
+
+Write your answer in a clear, structured way. For example:
+"There are 6 columns marked C1, each 300x300 mm. There are 4 columns marked C2, each 250x500 mm."
+
+Do not include any extra information. Just describe the columns you can see.
 """
                     contents = [prompt]
+                    # Process file – send first page as PNG
                     if file_type == 'application/pdf':
                         try:
                             doc = fitz.open(stream=file_bytes, filetype="pdf")
-                            for page_num in range(min(6, len(doc))):
-                                page = doc.load_page(page_num)
+                            if len(doc) > 0:
+                                page = doc.load_page(0)
                                 mat = fitz.Matrix(2.0, 2.0)
                                 pix = page.get_pixmap(matrix=mat)
                                 img_bytes = pix.tobytes("png")
@@ -2207,145 +2190,89 @@ Example: [{"label":"C1","width_mm":300,"depth_mm":300,"bounding_box":[120,340,18
                             contents.append(types.Part.from_bytes(data=file_bytes, mime_type='application/pdf'))
                     else:
                         contents.append(types.Part.from_bytes(data=file_bytes, mime_type=file_type))
-                    response_text = await call_gemini_json(contents, temperature=temperature, timeout=300)
-                    json_str = response_text.strip()
-                    json_str = re.sub(r'^```json\s*', '', json_str)
-                    json_str = re.sub(r'\s*```$', '', json_str)
-                    start = json_str.find('[')
-                    end = json_str.rfind(']')
-                    if start != -1 and end != -1:
-                        json_str = json_str[start:end+1]
-                    else:
-                        # try to parse as object with data field
-                        start = json_str.find('{')
-                        end = json_str.rfind('}')
-                        if start != -1 and end != -1:
-                            obj = json.loads(json_str[start:end+1])
-                            if 'data' in obj and isinstance(obj['data'], list):
-                                return obj['data']
-                            elif 'extracted_columns' in obj and isinstance(obj['extracted_columns'], list):
-                                return obj['extracted_columns']
-                            elif 'label' in obj:
-                                return [obj]
-                        return []
-                    data = json.loads(json_str)
-                    if isinstance(data, list):
-                        return data
-                    elif isinstance(data, dict) and 'label' in data:
-                        return [data]
-                    return []
+                    response = await call_gemini(contents, temperature=0, timeout=300)  # Use markdown sanitizer
+                    return response  # natural language text
 
-                def iou(box1, box2):
-                    y1, x1, y2, x2 = box1
-                    y3, x3, y4, x4 = box2
-                    inter_y1 = max(y1, y3)
-                    inter_x1 = max(x1, x3)
-                    inter_y2 = min(y2, y4)
-                    inter_x2 = min(x2, x4)
-                    if inter_y2 < inter_y1 or inter_x2 < inter_x1:
-                        return 0.0
-                    inter_area = (inter_y2 - inter_y1) * (inter_x2 - inter_x1)
-                    box1_area = (y2 - y1) * (x2 - x1)
-                    box2_area = (y4 - y3) * (x4 - x3)
-                    union_area = box1_area + box2_area - inter_area
-                    return inter_area / union_area if union_area > 0 else 0.0
+                # --------------------------------------------------------------------
+                # PARSER
+                # --------------------------------------------------------------------
+                def parse_natural_description(text):
+                    """
+                    Parse natural language description to extract column data.
+                    Expected format: "There are 6 columns marked C1, each 300x300 mm. ..."
+                    Returns list of dicts: [{"mark": "C1", "count": 6, "width": 300, "depth": 300}, ...]
+                    """
+                    import re
+                    # Patterns:
+                    # Pattern 1: "There are X columns marked Y, each W x D mm"
+                    pattern1 = r"there are\s+(\d+)\s+columns?\s+marked\s+([A-Za-z0-9]+)\s*,\s*each\s+(\d+)\s*[xX×]\s*(\d+)\s*mm"
+                    matches1 = re.findall(pattern1, text, re.IGNORECASE)
+                    # Pattern 2: "C1: 6 columns, 300x300 mm"
+                    pattern2 = r"([A-Za-z0-9]+)\s*:\s*(\d+)\s*columns?\s*,\s*(\d+)\s*[xX×]\s*(\d+)\s*mm"
+                    matches2 = re.findall(pattern2, text, re.IGNORECASE)
+                    # Pattern 3: "6 columns of C1 (300x300)"
+                    pattern3 = r"(\d+)\s*columns?\s+of\s+([A-Za-z0-9]+)\s*[\(（]\s*(\d+)\s*[xX×]\s*(\d+)\s*[\)）]"
+                    matches3 = re.findall(pattern3, text, re.IGNORECASE)
+                    # Pattern 4: "C1: 300x300, count 6"
+                    pattern4 = r"([A-Za-z0-9]+)\s*:\s*(\d+)\s*[xX×]\s*(\d+)\s*,\s*count\s+(\d+)"
+                    matches4 = re.findall(pattern4, text, re.IGNORECASE)
 
-                def deduplicate_boxes(detections, iou_threshold=0.5):
-                    unique = []
-                    for det in detections:
-                        box = det.get('bounding_box')
-                        if not box:
-                            continue
-                        is_dup = False
-                        for u in unique:
-                            if iou(box, u['bounding_box']) > iou_threshold and det.get('label') == u.get('label'):
-                                is_dup = True
-                                break
-                        if not is_dup:
-                            unique.append(det)
-                    return unique
+                    # Combine all matches
+                    combined = []
+                    for m in matches1:
+                        combined.append({'mark': m[1].strip(), 'count': int(m[0]), 'width': int(m[2]), 'depth': int(m[3])})
+                    for m in matches2:
+                        combined.append({'mark': m[0].strip(), 'count': int(m[1]), 'width': int(m[2]), 'depth': int(m[3])})
+                    for m in matches3:
+                        combined.append({'mark': m[1].strip(), 'count': int(m[0]), 'width': int(m[2]), 'depth': int(m[3])})
+                    for m in matches4:
+                        combined.append({'mark': m[0].strip(), 'count': int(m[3]), 'width': int(m[1]), 'depth': int(m[2])})
 
-                async def run_visual_scratchpad(file_bytes, file_type):
-                    """Run the visual scratchpad loop."""
-                    all_detections = []
-                    current_image = file_bytes
-                    max_passes = 3
-                    pass_count = 0
+                    # If no matches, try to parse line by line
+                    if not combined:
+                        lines = text.split('\n')
+                        for line in lines:
+                            # Look for patterns like "C1: 6 columns, 300x300 mm"
+                            m = re.search(r'([A-Za-z0-9]+)\s*:?\s*(\d+)\s*columns?\s*[,:]\s*(\d+)\s*[xX×]\s*(\d+)\s*mm', line, re.IGNORECASE)
+                            if m:
+                                combined.append({'mark': m.group(1).strip(), 'count': int(m.group(2)), 'width': int(m.group(3)), 'depth': int(m.group(4))})
+                            else:
+                                # Try "C1 300x300 (6)"
+                                m2 = re.search(r'([A-Za-z0-9]+)\s+(\d+)\s*[xX×]\s*(\d+)\s*[\(（](\d+)[\)）]', line, re.IGNORECASE)
+                                if m2:
+                                    combined.append({'mark': m2.group(1).strip(), 'count': int(m2.group(4)), 'width': int(m2.group(2)), 'depth': int(m2.group(3))})
 
-                    while pass_count < max_passes:
-                        pass_count += 1
-                        ui.notify(f'Scratchpad pass {pass_count}...', type='info')
-                        # Extract from current image
-                        detections = await extract_columns_with_bbox(current_image, file_type, temperature=0)
-                        if not detections:
-                            break
-                        # Deduplicate within this pass
-                        deduped = deduplicate_boxes(detections, iou_threshold=0.5)
-                        if not deduped:
-                            break
-                        # Add to all detections (deduplicate globally)
-                        all_detections.extend(deduped)
-                        all_detections = deduplicate_boxes(all_detections, iou_threshold=0.5)
-
-                        # If this is the last pass, break
-                        if pass_count == max_passes:
-                            break
-
-                        # Mark the image with red circles at the centers of newly found columns
-                        marks = [extract_bbox_center(d['bounding_box']) for d in deduped if d.get('bounding_box')]
-                        if marks:
-                            current_image = draw_marks_on_image(current_image, marks)
-                            # Update file_type to PNG (since we converted)
-                            file_type = 'image/png'
-                        else:
-                            break
-
-                    return all_detections
+                    return combined
 
                 # --------------------------------------------------------------------
                 # COMPUTATION FUNCTION
                 # --------------------------------------------------------------------
-                def compute_boq(detections, user_params):
+                def compute_boq_from_parsed(parsed_data, user_params):
                     rows = []
                     floor_height = user_params.get('floor_height_mm', 3000) / 1000
                     wastage = user_params.get('wastage', 5)
                     concrete_rate = UNIT_RATES.get('Concrete (C30/37)', 2500)
 
-                    # Group by label and count
-                    groups = {}
-                    for d in detections:
-                        label = d.get('label', 'Unknown')
-                        if label not in groups:
-                            groups[label] = {'count': 0, 'width': d.get('width_mm', 0), 'depth': d.get('depth_mm', 0)}
-                        groups[label]['count'] += 1
-                        # Use the first non-zero dimensions
-                        if groups[label]['width'] == 0 and d.get('width_mm', 0) != 0:
-                            groups[label]['width'] = d.get('width_mm')
-                        if groups[label]['depth'] == 0 and d.get('depth_mm', 0) != 0:
-                            groups[label]['depth'] = d.get('depth_mm')
-
-                    for label, data in groups.items():
-                        w = data['width']
-                        depth = data['depth']
-                        count = data['count']
-                        if count == 0 or w == 0 or depth == 0:
+                    for item in parsed_data:
+                        label = item.get('mark', 'Unknown')
+                        count = item.get('count', 0)
+                        width = item.get('width', 0)
+                        depth = item.get('depth', 0)
+                        if count == 0 or width == 0 or depth == 0:
                             continue
                         h = None
                         if user_params.get('use_floor_height'):
                             h = user_params.get('floor_height_mm', 3000)
                         if h is None:
-                            # Try to get height from dimensions (if present)
-                            h = None
-                        if h is None:
                             continue
                         h_m = h / 1000
-                        w_m = w / 1000
+                        w_m = width / 1000
                         d_m = depth / 1000
                         volume = w_m * d_m * h_m * count
                         rows.append({
                             'Item': f"Column - {label}",
                             'Count': count,
-                            'Width (mm)': w,
+                            'Width (mm)': width,
                             'Depth (mm)': depth,
                             'Height (mm)': h,
                             'Volume (m³)': round(volume, 2),
@@ -2389,7 +2316,7 @@ Example: [{"label":"C1","width_mm":300,"depth_mm":300,"bounding_box":[120,340,18
                     boq_export.clear()
                     with boq_output:
                         ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
-                        ui.label('Running visual scratchpad (3 passes)...').classes('self-center text-sm')
+                        ui.label('Extracting column schedule using natural language...').classes('self-center text-sm')
 
                     try:
                         user_params = {
@@ -2400,18 +2327,25 @@ Example: [{"label":"C1","width_mm":300,"depth_mm":300,"bounding_box":[120,340,18
                             'rebar_grade': rebar_grade_global.value,
                         }
 
-                        # Run the visual scratchpad
-                        detections = await run_visual_scratchpad(boq_file_data['bytes'], boq_file_data['type'])
-
-                        if not detections:
+                        # Step 1: Get natural language description
+                        description = await extract_columns_natural(boq_file_data['bytes'], boq_file_data['type'])
+                        if not description:
                             boq_output.clear()
                             with boq_output:
-                                ui.label('No columns detected after visual scratchpad.').classes('text-amber-400')
-                                ui.markdown('Please ensure the drawing contains clear column labels and dimensions.').classes('text-white')
+                                ui.label('AI did not return a description. Please try again.').classes('text-amber-400')
                             return
 
-                        # Compute
-                        df = compute_boq(detections, user_params)
+                        # Step 2: Parse the description
+                        parsed = parse_natural_description(description)
+                        if not parsed:
+                            boq_output.clear()
+                            with boq_output:
+                                ui.label('Could not parse the AI description. Please try again with a clearer drawing.').classes('text-amber-400')
+                                ui.markdown(f"**AI Response:**\n```\n{description}\n```").classes('text-xs text-gray-400')
+                            return
+
+                        # Step 3: Compute
+                        df = compute_boq_from_parsed(parsed, user_params)
                         if df is None:
                             boq_output.clear()
                             with boq_output:
@@ -2422,7 +2356,7 @@ Example: [{"label":"C1","width_mm":300,"depth_mm":300,"bounding_box":[120,340,18
                         boq_output.clear()
                         with boq_output:
                             with ui.column().classes('output-card w-full'):
-                                ui.label('Columns Bill of Quantities (Visual Scratchpad)').classes('text-xl font-bold text-white mb-2')
+                                ui.label('Columns Bill of Quantities').classes('text-xl font-bold text-white mb-2')
                                 def df_to_md(df):
                                     lines = []
                                     headers = list(df.columns)
@@ -2482,13 +2416,13 @@ Example: [{"label":"C1","width_mm":300,"depth_mm":300,"bounding_box":[120,340,18
                                 try:
                                     meta = current_meta('BOQ')
                                     pdf_bytes = build_report_pdf(
-                                        "BOQ Report - Columns (Visual Scratchpad)",
-                                        f"Scratchpad extraction",
+                                        "BOQ Report - Columns",
+                                        f"Natural language extraction",
                                         df_to_md(df),
                                         meta,
                                         logo_bytes_holder['bytes'],
                                     )
-                                    ui.download(pdf_bytes, filename=f"BOQ_Columns_Scratchpad_{ticket_input.value}.pdf")
+                                    ui.download(pdf_bytes, filename=f"BOQ_Columns_{ticket_input.value}.pdf")
                                     ui.notify('PDF downloaded', type='positive')
                                 except Exception as ex:
                                     ui.notify(f'PDF Error: {str(ex)}', type='negative')
@@ -2498,7 +2432,7 @@ Example: [{"label":"C1","width_mm":300,"depth_mm":300,"bounding_box":[120,340,18
                                     with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
                                         df.to_excel(writer, sheet_name='BOQ', index=False)
                                     excel_buffer.seek(0)
-                                    ui.download(excel_buffer.getvalue(), filename=f"BOQ_Columns_Scratchpad_{ticket_input.value}.xlsx")
+                                    ui.download(excel_buffer.getvalue(), filename=f"BOQ_Columns_{ticket_input.value}.xlsx")
                                     ui.notify('Excel downloaded', type='positive')
                                 except Exception as ex:
                                     ui.notify(f'Excel Error: {str(ex)}', type='negative')
@@ -2511,7 +2445,7 @@ Example: [{"label":"C1","width_mm":300,"depth_mm":300,"bounding_box":[120,340,18
                             ui.notify(f'Extraction failed: {str(ex)}', type='negative')
                             ui.label('Error occurred. Please try again with a clearer drawing.').classes('text-red-400')
 
-                ui.button('Run Visual Scratchpad Extraction', on_click=run_boq_extraction).classes('primary-btn mt-4')
+                ui.button('Run BOQ Extraction', on_click=run_boq_extraction).classes('primary-btn mt-4')
         # ---------------- FOOTER (unchanged) ----------------
         ui.html('''
         <div class="app-footer">
