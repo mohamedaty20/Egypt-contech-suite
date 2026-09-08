@@ -954,7 +954,7 @@ async def extract_mass_with_ai(element_type, file_bytes, file_type, user_params,
             # Fallback: send full PDF as binary
             contents.append(types.Part.from_bytes(data=file_bytes, mime_type='application/pdf'))
     else:
-        # Image - resize? We'll send as is, but reduce quality if large
+        # Image - we'll send as is
         img_part = types.Part.from_bytes(data=file_bytes, mime_type=file_type)
         contents.append(img_part)
 
@@ -1067,9 +1067,75 @@ def generate_boq_table(results, branch, element_type, wastage, mode):
                     'Unit Rate (EGP)': UNIT_RATES.get('Concrete (C30/37)', 2500),
                     'Total Cost (EGP)': round(r['concrete_m3'] * (1 + wastage/100) * UNIT_RATES.get('Concrete (C30/37)', 2500), 2)
                 })
-    else:  # rebar (not used in this version, but placeholder)
-        pass
+    else:  # rebar
+        for r in results:
+            if 'rebar_ton' in r:
+                rows.append({
+                    'Item': f"{element_type.capitalize()} - {r.get('label', '')} - Rebar",
+                    'Unit': 'ton',
+                    'Quantity (net)': r['rebar_ton'],
+                    'Wastage %': wastage,
+                    'Quantity (with waste)': round(r['rebar_ton'] * (1 + wastage/100), 2),
+                    'Unit Rate (EGP)': UNIT_RATES.get('Rebar (Grade 400)', 15000),
+                    'Total Cost (EGP)': round(r['rebar_ton'] * (1 + wastage/100) * UNIT_RATES.get('Rebar (Grade 400)', 15000), 2)
+                })
+            if 'concrete_m3' in r:
+                rows.append({
+                    'Item': f"{element_type.capitalize()} - {r.get('label', '')} - Concrete",
+                    'Unit': 'm3',
+                    'Quantity (net)': r['concrete_m3'],
+                    'Wastage %': wastage,
+                    'Quantity (with waste)': round(r['concrete_m3'] * (1 + wastage/100), 2),
+                    'Unit Rate (EGP)': UNIT_RATES.get('Concrete (C30/37)', 2500),
+                    'Total Cost (EGP)': round(r['concrete_m3'] * (1 + wastage/100) * UNIT_RATES.get('Concrete (C30/37)', 2500), 2)
+                })
     return pd.DataFrame(rows)
+
+
+# Helper function for rebar quantities
+def compute_rebar_quantities(element_type, data, user_params):
+    """Compute rebar quantities from AI-extracted data."""
+    results = []
+    total_concrete = 0
+    total_rebar = 0
+    # Data is a list of groups (similar to mass but with rebar fields)
+    for group in data:
+        # Check if required fields present
+        required = ['label', 'count', 'width_mm', 'depth_mm', 'height_mm', 'rebar']
+        all_present = True
+        for req in required:
+            if req not in group or group[req] is None:
+                all_present = False
+                break
+        if not all_present:
+            continue
+        # Compute concrete volume
+        height = group.get('height_mm') or user_params.get('floor_height_mm', 3000)
+        vol = (group['width_mm']/1000) * (group['depth_mm']/1000) * (height/1000) * group.get('count', 1)
+        total_concrete += vol
+        # Rebar (simplified)
+        rebar = group.get('rebar', {})
+        main_d = rebar.get('main_diameter_mm', 0)
+        stirrup_d = rebar.get('stirrup_diameter_mm', 0)
+        spacing = rebar.get('spacing_mm', 200)
+        count = group.get('count', 1)
+        height_m = height / 1000
+        main_length = height_m * 4 * count
+        perimeter = 2 * ((group['width_mm'] + group['depth_mm']) / 1000)
+        num_stirrups = (height_m / (spacing/1000)) + 1
+        stirrup_length = perimeter * num_stirrups * count
+        main_weight = main_length * ( (3.1416 * (main_d/1000)**2 / 4) * 7850 )
+        stirrup_weight = stirrup_length * ( (3.1416 * (stirrup_d/1000)**2 / 4) * 7850 )
+        total_rebar += (main_weight + stirrup_weight)
+        results.append({
+            'label': group.get('label', 'Unknown'),
+            'count': count,
+            'concrete_m3': vol,
+            'rebar_ton': (main_weight + stirrup_weight) / 1000
+        })
+    total_concrete = round(total_concrete, 2)
+    total_rebar = round(total_rebar / 1000, 2)
+    return results, total_concrete, total_rebar
 
 
 # =====================================================================================
@@ -2076,7 +2142,7 @@ Return ONLY valid JSON.
                                 ui.button('Refresh Grand Total', on_click=update_arch_grand_total).classes('primary-btn')
                                 update_arch_grand_total()
 
-                    # ========== STRUCTURAL BRANCH (NEW: AI extraction for mass) ==========
+                    # ========== STRUCTURAL BRANCH (AI extraction for mass and rebar) ==========
                     with ui.tab_panel(struct_tab):
                         with ui.tabs().classes('w-full text-white bg-[#0d1a35] rounded-lg') as struct_sub_tabs:
                             struct_elements = ['Columns', 'Beams', 'Slabs', 'Footings', 'Walls', 'Grand Total']
@@ -2215,7 +2281,44 @@ Return ONLY valid JSON.
                                             rebar_export = ui.row().classes('w-full gap-4 mt-4')
                                             rebar_df_holder = [None]
 
-                                            # Rebar extraction uses the existing extract_boq_with_ai (unchanged)
+                                            # Async function for rebar extraction
+                                            async def extract_rebar_with_ai(element_type, file_bytes, file_type, user_params, code_basis):
+                                                prompt = f"""
+You are an expert Quantity Surveyor. Extract rebar details from the drawing.
+Return a JSON array of objects with fields: label, count, width_mm, depth_mm, height_mm (if applicable), and rebar details (main_diameter_mm, stirrup_diameter_mm, spacing_mm).
+Only include groups that are clearly visible.
+Return ONLY valid JSON array.
+"""
+                                                contents = [prompt]
+                                                if file_type == 'application/pdf':
+                                                    try:
+                                                        reader = pypdf.PdfReader(io.BytesIO(file_bytes))
+                                                        txt = "".join([p.extract_text() or "" for p in reader.pages[:3]])
+                                                        if txt.strip():
+                                                            contents.append(f"Extracted text:\n{txt[:6000]}")
+                                                        doc = fitz.open(stream=file_bytes, filetype="pdf")
+                                                        if len(doc) > 0:
+                                                            page = doc.load_page(0)
+                                                            mat = fitz.Matrix(1.2, 1.2)
+                                                            pix = page.get_pixmap(matrix=mat)
+                                                            img_bytes = pix.tobytes("jpeg")
+                                                            img_part = types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg")
+                                                            contents.append(img_part)
+                                                        doc.close()
+                                                    except:
+                                                        contents.append(types.Part.from_bytes(data=file_bytes, mime_type='application/pdf'))
+                                                else:
+                                                    contents.append(types.Part.from_bytes(data=file_bytes, mime_type=file_type))
+                                                response = await call_gemini(contents, temperature=0, timeout=240)
+                                                json_str = response.strip()
+                                                json_str = re.sub(r'^```json\s*', '', json_str)
+                                                json_str = re.sub(r'\s*```$', '', json_str)
+                                                start = json_str.find('[')
+                                                end = json_str.rfind(']')
+                                                if start != -1 and end != -1:
+                                                    json_str = json_str[start:end+1]
+                                                return json.loads(json_str)
+
                                             async def run_rebar_extraction():
                                                 if not client:
                                                     ui.notify('GEMINI_API_KEY missing!', type='negative')
@@ -2235,55 +2338,8 @@ Return ONLY valid JSON.
                                                         'wastage': wastage_percent_global.value,
                                                     }
                                                     code_basis = code_basis_select.value
-                                                    # We'll reuse the old extract_boq_with_ai (for rebar) – it's defined but we need to ensure it works
-                                                    # Since we removed it, we'll use a simplified version here – but we'll keep the existing one.
-                                                    # We'll add a simplified rebar extraction for now.
-                                                    # For brevity, we'll just use the old extract_boq_with_ai function.
-                                                    # We need to ensure it's defined. We'll define a placeholder.
-                                                    # Actually we defined extract_boq_with_ai earlier for rebar, but we removed it.
-                                                    # We'll re-add it quickly.
-                                                    # Let's define a simple one inline.
-                                                    def extract_rebar_with_ai(element_type, mode, file_bytes, file_type, user_params, code_basis):
-                                                        # Simplified – just use a basic prompt
-                                                        prompt = f"""
-You are an expert Quantity Surveyor. Extract rebar details from the drawing.
-Return a JSON array of objects with fields: label, count, width_mm, depth_mm, height_mm (if applicable), and rebar details (main_diameter_mm, stirrup_diameter_mm, spacing_mm).
-Only include groups that are clearly visible.
-Return ONLY valid JSON array.
-"""
-                                                        # We'll call Gemini with this prompt and images
-                                                        contents = [prompt]
-                                                        if file_type == 'application/pdf':
-                                                            try:
-                                                                reader = pypdf.PdfReader(io.BytesIO(file_bytes))
-                                                                txt = "".join([p.extract_text() or "" for p in reader.pages[:3]])
-                                                                if txt.strip():
-                                                                    contents.append(f"Extracted text:\n{txt[:6000]}")
-                                                                doc = fitz.open(stream=file_bytes, filetype="pdf")
-                                                                if len(doc) > 0:
-                                                                    page = doc.load_page(0)
-                                                                    mat = fitz.Matrix(1.2, 1.2)
-                                                                    pix = page.get_pixmap(matrix=mat)
-                                                                    img_bytes = pix.tobytes("jpeg")
-                                                                    img_part = types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg")
-                                                                    contents.append(img_part)
-                                                                doc.close()
-                                                            except:
-                                                                contents.append(types.Part.from_bytes(data=file_bytes, mime_type='application/pdf'))
-                                                        else:
-                                                            contents.append(types.Part.from_bytes(data=file_bytes, mime_type=file_type))
-                                                        response = await call_gemini(contents, temperature=0, timeout=240)
-                                                        json_str = response.strip()
-                                                        json_str = re.sub(r'^```json\s*', '', json_str)
-                                                        json_str = re.sub(r'\s*```$', '', json_str)
-                                                        start = json_str.find('[')
-                                                        end = json_str.rfind(']')
-                                                        if start != -1 and end != -1:
-                                                            json_str = json_str[start:end+1]
-                                                        return json.loads(json_str)
-
-                                                    data = await extract_rebar_with_ai(el_key, 'rebar', rebar_file_data['bytes'], rebar_file_data['type'], user_params, code_basis)
-                                                    # Compute rebar quantities (simplified)
+                                                    data = await extract_rebar_with_ai(el_key, rebar_file_data['bytes'], rebar_file_data['type'], user_params, code_basis)
+                                                    # Compute rebar quantities
                                                     results, total_concrete, total_rebar = compute_rebar_quantities(el_key, data, user_params)
                                                     df = generate_boq_table(results, 'structural', el_key, wastage_percent_global.value, 'rebar')
                                                     rebar_df_holder[0] = df
@@ -2420,52 +2476,6 @@ Return ONLY valid JSON array.
             <span style="color: #FFFFFF; font-weight: 600;">Disclaimer:</span> These AI modules have high accuracy and are specified for the Egyptian codes, but results should be rechecked by a qualified engineer before any decision-making.
         </div>
         ''')
-
-
-# Helper function for rebar quantities (used above)
-def compute_rebar_quantities(element_type, data, user_params):
-    """Compute rebar quantities from AI-extracted data."""
-    results = []
-    total_concrete = 0
-    total_rebar = 0
-    # Data is a list of groups (similar to mass but with rebar fields)
-    for group in data:
-        # Check if required fields present
-        required = ['label', 'count', 'width_mm', 'depth_mm', 'height_mm', 'rebar']
-        all_present = True
-        for req in required:
-            if req not in group or group[req] is None:
-                all_present = False
-                break
-        if not all_present:
-            continue
-        # Compute concrete volume
-        height = group.get('height_mm') or user_params.get('floor_height_mm', 3000)
-        vol = (group['width_mm']/1000) * (group['depth_mm']/1000) * (height/1000) * group.get('count', 1)
-        total_concrete += vol
-        # Rebar (simplified)
-        rebar = group.get('rebar', {})
-        main_d = rebar.get('main_diameter_mm', 0)
-        stirrup_d = rebar.get('stirrup_diameter_mm', 0)
-        spacing = rebar.get('spacing_mm', 200)
-        count = group.get('count', 1)
-        height_m = height / 1000
-        main_length = height_m * 4 * count
-        perimeter = 2 * ((group['width_mm'] + group['depth_mm']) / 1000)
-        num_stirrups = (height_m / (spacing/1000)) + 1
-        stirrup_length = perimeter * num_stirrups * count
-        main_weight = main_length * ( (3.1416 * (main_d/1000)**2 / 4) * 7850 )
-        stirrup_weight = stirrup_length * ( (3.1416 * (stirrup_d/1000)**2 / 4) * 7850 )
-        total_rebar += (main_weight + stirrup_weight)
-        results.append({
-            'label': group.get('label', 'Unknown'),
-            'count': count,
-            'concrete_m3': vol,
-            'rebar_ton': (main_weight + stirrup_weight) / 1000
-        })
-    total_concrete = round(total_concrete, 2)
-    total_rebar = round(total_rebar / 1000, 2)
-    return results, total_concrete, total_rebar
 
 
 ui.run(
