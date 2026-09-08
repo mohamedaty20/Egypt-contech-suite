@@ -2117,16 +2117,15 @@ Ensure all tables are proper Markdown tables with header and separator rows.
 
         
                        # =========================================================================
-            # TAB 5: PROFESSIONAL BOQ TAKEOFF (FIXED)
-                        # =========================================================================
-            # TAB 5: PROFESSIONAL BOQ TAKEOFF (FIXED)
+                      # =========================================================================
+            # TAB 5: PROFESSIONAL BOQ TAKEOFF (REDESIGNED)
             # =========================================================================
             with ui.tab_panel(t_boq):
                 ui.label('Professional AI BOQ Takeoff & Cost Estimation').classes('text-2xl font-bold text-white mb-2')
-                ui.markdown('Upload project drawings (PDF, JPG, PNG). AI will extract mass quantities automatically.').classes('markdown-body mb-2')
+                ui.markdown('Upload project drawings (PDF, JPG, PNG). The AI will extract raw data for the selected items.').classes('markdown-body mb-2')
                 ui.markdown('*For PDFs, up to 6 pages are processed for best results.*').classes('text-xs text-yellow-400 mb-4')
 
-                # Global BOQ parameters (shared across all sub-tabs)
+                # Global BOQ parameters
                 with ui.column().classes('input-card w-full mb-4'):
                     ui.label('Global Parameters').classes('text-lg font-bold text-white')
                     with ui.row().classes('w-full gap-4'):
@@ -2137,837 +2136,371 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                         rebar_grade_global = ui.input(label='Rebar Grade', value='400/600').classes('w-1/2')
                     wastage_percent_global = ui.number(label='Wastage Allowance (%)', value=5, step=1, min=0, max=20).classes('w-1/2')
 
-                # --- Nested Tabs ---
-                with ui.tabs().classes('w-full text-white bg-[#0d1a35] rounded-lg') as boq_main_tabs:
-                    arch_tab = ui.tab('Architectural', icon='home').classes('text-white font-bold')
-                    struct_tab = ui.tab('Structural', icon='build').classes('text-white font-bold')
+                # File upload
+                boq_file_data = {'bytes': None, 'type': None}
+                boq_status_label = ui.label('Status: No file uploaded yet').classes('text-xs text-amber-400 font-semibold mb-2')
+                async def handle_boq_upload(e):
+                    try:
+                        data = await e.file.read()
+                        boq_file_data['bytes'] = data
+                        boq_file_data['type'] = detect_mime_type(e.file.name, data)
+                        boq_status_label.set_text(f'File Ready: {e.file.name} ({(len(data)/1024/1024):.1f} MB)')
+                        boq_status_label.classes(replace='text-xs text-emerald-400 font-semibold mb-2')
+                        ui.notify(f'File uploaded: {e.file.name}', type='positive')
+                    except Exception as ex:
+                        ui.notify(f'Error: {str(ex)}', type='negative')
+                ui.upload(label='Upload Drawing', auto_upload=True, on_upload=handle_boq_upload).props('flat dark').classes('w-full mb-4')
 
-                with ui.tab_panels(boq_main_tabs, value=arch_tab).classes('w-full bg-transparent mt-4'):
+                # Branch selection
+                branch = ui.select(
+                    label='Select Branch',
+                    options=['Structural', 'Architectural'],
+                    value='Structural'
+                ).classes('w-full mb-2')
 
-                    # ========== ARCHITECTURAL BRANCH ==========
-                    with ui.tab_panel(arch_tab):
-                        with ui.tabs().classes('w-full text-white bg-[#0d1a35] rounded-lg') as arch_sub_tabs:
-                            arch_elements = ['Flooring', 'Wall Finishing', 'Ceilings', 'Doors/Windows', 'Grand Total']
-                            arch_tab_objects = {}
-                            for el in arch_elements:
-                                arch_tab_objects[el] = ui.tab(el).classes('text-white font-bold')
+                # Item selection container (will be dynamically updated)
+                items_container = ui.column().classes('w-full mb-4')
+                selected_items = {'items': []}  # store selected item keys
 
-                        with ui.tab_panels(arch_sub_tabs, value=arch_tab_objects['Flooring']).classes('w-full bg-transparent mt-4'):
-                            arch_element_map = {
-                                'Flooring': 'flooring',
-                                'Wall Finishing': 'wall_finishing',
-                                'Ceilings': 'ceilings',
-                                'Doors/Windows': 'doors_windows'
-                            }
-                            arch_result_containers = {}
-                            arch_export_areas = {}
-                            arch_df_holders = {}
-                            arch_file_data = {}
+                # Define item categories
+                structural_items = [
+                    {'key': 'columns', 'label': 'Columns', 'required_fields': ['label', 'count', 'width_mm', 'depth_mm', 'height_mm']},
+                    {'key': 'beams', 'label': 'Beams', 'required_fields': ['label', 'count', 'width_mm', 'depth_mm', 'length_mm']},
+                    {'key': 'slabs', 'label': 'Slabs', 'required_fields': ['label', 'thickness_mm', 'area_m2']},
+                    {'key': 'footings', 'label': 'Footings', 'required_fields': ['label', 'count', 'width_mm', 'depth_mm', 'length_mm']},
+                    {'key': 'shear_walls', 'label': 'Shear Walls', 'required_fields': ['label', 'count', 'length_m', 'height_m', 'thickness_mm']},
+                ]
+                architectural_items = [
+                    {'key': 'area', 'label': 'Area', 'required_fields': ['total_area_m2']},
+                    {'key': 'perimeter', 'label': 'Perimeter', 'required_fields': ['total_perimeter_m']},
+                    {'key': 'walls', 'label': 'Walls (finishing)', 'required_fields': ['total_wall_area_m2']},
+                    {'key': 'ceramic', 'label': 'Ceramic Flooring', 'required_fields': ['ceramic_area_m2']},
+                    {'key': 'paints', 'label': 'Paints', 'required_fields': ['paint_area_m2']},
+                    {'key': 'mortar', 'label': 'Mortar Amount', 'required_fields': ['mortar_volume_m3']},
+                    {'key': 'ceiling', 'label': 'Ceiling', 'required_fields': ['ceiling_area_m2']},
+                    {'key': 'doors', 'label': 'Doors', 'required_fields': ['door_count']},
+                    {'key': 'windows', 'label': 'Windows', 'required_fields': ['window_count']},
+                    {'key': 'wall_sealer', 'label': 'Wall Sealer', 'required_fields': ['sealer_area_m2']},
+                ]
 
-                            for el_display, el_key in arch_element_map.items():
-                                with ui.tab_panel(arch_tab_objects[el_display]):
-                                    ui.label(f'{el_display} Takeoff').classes('text-xl font-bold text-white mb-2')
-                                    arch_file_data[el_key] = {'bytes': None, 'type': None}
-                                    arch_status_label = ui.label('Status: No file uploaded yet').classes('text-xs text-amber-400 font-semibold mb-2')
-                                    async def handle_arch_upload(e, key=el_key):
-                                        try:
-                                            data = await e.file.read()
-                                            arch_file_data[key]['bytes'] = data
-                                            arch_file_data[key]['type'] = detect_mime_type(e.file.name, data)
-                                            arch_status_label.set_text(f'File Ready: {e.file.name}')
-                                            arch_status_label.classes(replace='text-xs text-emerald-400 font-semibold mb-2')
-                                            ui.notify(f'File uploaded: {e.file.name}', type='positive')
-                                        except Exception as ex:
-                                            ui.notify(f'Error: {str(ex)}', type='negative')
-                                    ui.upload(label='Upload Drawing', auto_upload=True, on_upload=handle_arch_upload).props('flat dark').classes('w-full mb-4')
+                def update_items():
+                    items_container.clear()
+                    current_branch = branch.value
+                    items = structural_items if current_branch == 'Structural' else architectural_items
+                    selected_items['items'] = []
+                    with items_container:
+                        ui.label(f'Select {current_branch} Items to Extract:').classes('text-white font-bold mb-2')
+                        with ui.row().classes('w-full gap-3 flex-wrap'):
+                            for item in items:
+                                toggle = ui.toggle(
+                                    label=item['label'],
+                                    value=False,
+                                    on_change=lambda e, key=item['key']: update_selection(key, e.value)
+                                ).props('flat outline').classes('text-white bg-[#0d1a35] border border-[#2c3f6b] rounded-lg px-4 py-2')
+                                # We need to store the toggle state
+                                # We'll use a dict to keep track
+                                if not hasattr(update_items, 'toggles'):
+                                    update_items.toggles = {}
+                                update_items.toggles[item['key']] = toggle
 
-                                    output_container = ui.column().classes('w-full')
-                                    export_area = ui.row().classes('w-full gap-4 mt-4')
-                                    arch_result_containers[el_key] = output_container
-                                    arch_export_areas[el_key] = export_area
-                                    arch_df_holders[el_key] = None
+                def update_selection(key, value):
+                    if value:
+                        if key not in selected_items['items']:
+                            selected_items['items'].append(key)
+                    else:
+                        if key in selected_items['items']:
+                            selected_items['items'].remove(key)
 
-                                    async def run_arch_extraction(key=el_key):
-                                        if not client:
-                                            ui.notify('GEMINI_API_KEY missing!', type='negative')
-                                            return
-                                        if not arch_file_data[key]['bytes']:
-                                            ui.notify('Please upload a drawing file for this element.', type='warning')
-                                            return
-                                        output_container.clear()
-                                        export_area.clear()
-                                        with output_container:
-                                            ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
-                                            ui.label(f'Extracting {el_display} quantities...').classes('self-center text-sm')
+                # Initial render
+                update_items()
+                branch.on('change', update_items)
 
-                                        try:
-                                            user_params = {
-                                                'floor_height_mm': floor_height_global.value,
-                                                'use_floor_height': use_floor_height_check.value,
-                                                'wastage': wastage_percent_global.value,
-                                            }
-                                            code_basis = code_basis_select.value
-                                            data, raw_response = await extract_architectural_with_ai(
-                                                key, arch_file_data[key]['bytes'], arch_file_data[key]['type'],
-                                                user_params, code_basis
-                                            )
-                                            results, total_qty, missing_groups = compute_architectural_quantities(key, data, user_params)
+                # Output area
+                boq_output = ui.column().classes('w-full')
+                boq_export = ui.row().classes('w-full gap-4 mt-4')
 
-                                            if missing_groups:
-                                                modal = ui.dialog()
-                                                with modal, ui.card().classes('w-full max-w-2xl bg-[#0d1a35]'):
-                                                    ui.label('Missing Required Data').classes('text-xl font-bold text-[#FF8C00]')
-                                                    ui.markdown('Please enter the missing values:').classes('text-white')
-                                                    inputs = {}
-                                                    for group in missing_groups:
-                                                        ui.label(group['label']).classes('text-white font-bold mt-2')
-                                                        for field in group['missing']:
-                                                            label = FIELD_LABELS.get(field, field)
-                                                            default_val = None
-                                                            inputs[f"{group['idx']}_{field}"] = ui.number(label=label, value=default_val).classes('w-full')
-                                                    async def confirm_missing():
-                                                        for group in missing_groups:
-                                                            for field in group['missing']:
-                                                                key_input = f"{group['idx']}_{field}"
-                                                                if key_input in inputs and inputs[key_input].value is not None:
-                                                                    data[field] = inputs[key_input].value
-                                                        modal.close()
-                                                        new_results, new_total, _ = compute_architectural_quantities(key, data, user_params)
-                                                        if not new_results:
-                                                            output_container.clear()
-                                                            with output_container:
-                                                                ui.label('Still missing data. Please fill all required fields.').classes('text-amber-400')
-                                                            return
-                                                        df = generate_arch_boq_table(new_results, key, wastage_percent_global.value)
-                                                        arch_df_holders[key] = df
-                                                        boq_results['architectural'][key] = df
-                                                        output_container.clear()
-                                                        with output_container:
-                                                            with ui.column().classes('output-card w-full'):
-                                                                ui.label(f'{el_display} BOQ').classes('text-xl font-bold text-white mb-2')
-                                                                def df_to_md(df):
-                                                                    lines = []
-                                                                    headers = list(df.columns)
-                                                                    lines.append("| " + " | ".join(headers) + " |")
-                                                                    lines.append("|" + "|".join(["---"] * len(headers)) + "|")
-                                                                    for _, row in df.iterrows():
-                                                                        row_str = "| " + " | ".join(str(val) for val in row) + " |"
-                                                                        lines.append(row_str)
-                                                                    return "\n".join(lines)
-                                                                ui.markdown(df_to_md(df)).classes('markdown-body')
-                                                                # Charts
-                                                                fig = go.Figure(data=[go.Pie(
-                                                                    labels=df[df['Item'] != 'TOTAL']['Item'],
-                                                                    values=df[df['Item'] != 'TOTAL']['Total Cost (EGP)'],
-                                                                    hole=0.4,
-                                                                    marker=dict(colors=px.colors.qualitative.Set3),
-                                                                    textinfo='label+percent',
-                                                                )])
-                                                                fig.update_layout(
-                                                                    title=f'{el_display} - Cost Distribution',
-                                                                    template='plotly_dark',
-                                                                    paper_bgcolor='#0d1a35',
-                                                                    plot_bgcolor='#0d1a35',
-                                                                    font=dict(color='white'),
-                                                                    height=400,
-                                                                )
-                                                                ui.plotly(fig).classes('w-full mt-2')
-                                                        with export_area:
-                                                            def download_arch_pdf(df=df, element=key):
-                                                                try:
-                                                                    meta = current_meta('BOQ')
-                                                                    pdf_bytes = build_report_pdf(
-                                                                        f"BOQ - {element.capitalize()}",
-                                                                        f"Architectural Takeoff",
-                                                                        df_to_md(df),
-                                                                        meta,
-                                                                        logo_bytes_holder['bytes'],
-                                                                    )
-                                                                    ui.download(pdf_bytes, filename=f"BOQ_{element}_{ticket_input.value}.pdf")
-                                                                    ui.notify('PDF downloaded', type='positive')
-                                                                except Exception as ex:
-                                                                    ui.notify(f'PDF Error: {str(ex)}', type='negative')
-                                                            def download_arch_excel(df=df, element=key):
-                                                                try:
-                                                                    excel_buffer = io.BytesIO()
-                                                                    with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
-                                                                        df.to_excel(writer, sheet_name='BOQ', index=False)
-                                                                    excel_buffer.seek(0)
-                                                                    ui.download(excel_buffer.getvalue(), filename=f"BOQ_{element}_{ticket_input.value}.xlsx")
-                                                                    ui.notify('Excel downloaded', type='positive')
-                                                                except Exception as ex:
-                                                                    ui.notify(f'Excel Error: {str(ex)}', type='negative')
-                                                            ui.button('Download PDF', on_click=download_arch_pdf).classes('primary-btn flex-1')
-                                                            ui.button('Export Excel', on_click=download_arch_excel).classes('primary-btn flex-1')
-                                                    ui.button('Confirm & Calculate', on_click=confirm_missing).classes('primary-btn')
-                                                modal.open()
-                                                return
+                # Define a strict extraction function
+                async def extract_boq_ai(branch_type, selected_keys, file_bytes, file_type, user_params, code_basis):
+                    """Build a strict prompt and extract data."""
+                    # Build the prompt based on selected items
+                    items_detail = []
+                    all_required_fields = set()
+                    for key in selected_keys:
+                        if branch_type == 'Structural':
+                            item_info = next((i for i in structural_items if i['key'] == key), None)
+                        else:
+                            item_info = next((i for i in architectural_items if i['key'] == key), None)
+                        if item_info:
+                            items_detail.append(f"- {item_info['label']}: extract {', '.join(item_info['required_fields'])}")
+                            all_required_fields.update(item_info['required_fields'])
 
-                                            df = generate_arch_boq_table(results, key, wastage_percent_global.value)
-                                            arch_df_holders[key] = df
-                                            boq_results['architectural'][key] = df
-                                            output_container.clear()
-                                            with output_container:
-                                                with ui.column().classes('output-card w-full'):
-                                                    ui.label(f'{el_display} BOQ').classes('text-xl font-bold text-white mb-2')
-                                                    def df_to_md(df):
-                                                        lines = []
-                                                        headers = list(df.columns)
-                                                        lines.append("| " + " | ".join(headers) + " |")
-                                                        lines.append("|" + "|".join(["---"] * len(headers)) + "|")
-                                                        for _, row in df.iterrows():
-                                                            row_str = "| " + " | ".join(str(val) for val in row) + " |"
-                                                            lines.append(row_str)
-                                                        return "\n".join(lines)
-                                                    ui.markdown(df_to_md(df)).classes('markdown-body')
-                                                    # Charts
-                                                    fig = go.Figure(data=[go.Pie(
-                                                        labels=df[df['Item'] != 'TOTAL']['Item'],
-                                                        values=df[df['Item'] != 'TOTAL']['Total Cost (EGP)'],
-                                                        hole=0.4,
-                                                        marker=dict(colors=px.colors.qualitative.Set3),
-                                                        textinfo='label+percent',
-                                                    )])
-                                                    fig.update_layout(
-                                                        title=f'{el_display} - Cost Distribution',
-                                                        template='plotly_dark',
-                                                        paper_bgcolor='#0d1a35',
-                                                        plot_bgcolor='#0d1a35',
-                                                        font=dict(color='white'),
-                                                        height=400,
-                                                    )
-                                                    ui.plotly(fig).classes('w-full mt-2')
-                                            with export_area:
-                                                def download_arch_pdf(df=df, element=key):
-                                                    try:
-                                                        meta = current_meta('BOQ')
-                                                        pdf_bytes = build_report_pdf(
-                                                            f"BOQ - {element.capitalize()}",
-                                                            f"Architectural Takeoff",
-                                                            df_to_md(df),
-                                                            meta,
-                                                            logo_bytes_holder['bytes'],
-                                                        )
-                                                        ui.download(pdf_bytes, filename=f"BOQ_{element}_{ticket_input.value}.pdf")
-                                                        ui.notify('PDF downloaded', type='positive')
-                                                    except Exception as ex:
-                                                        ui.notify(f'PDF Error: {str(ex)}', type='negative')
-                                                def download_arch_excel(df=df, element=key):
-                                                    try:
-                                                        excel_buffer = io.BytesIO()
-                                                        with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
-                                                            df.to_excel(writer, sheet_name='BOQ', index=False)
-                                                        excel_buffer.seek(0)
-                                                        ui.download(excel_buffer.getvalue(), filename=f"BOQ_{element}_{ticket_input.value}.xlsx")
-                                                        ui.notify('Excel downloaded', type='positive')
-                                                    except Exception as ex:
-                                                        ui.notify(f'Excel Error: {str(ex)}', type='negative')
-                                                ui.button('Download PDF', on_click=download_arch_pdf).classes('primary-btn flex-1')
-                                                ui.button('Export Excel', on_click=download_arch_excel).classes('primary-btn flex-1')
-                                        except Exception as ex:
-                                            output_container.clear()
-                                            with output_container:
-                                                ui.notify(f'Extraction failed: {str(ex)}', type='negative')
+                    if not items_detail:
+                        raise ValueError("No items selected.")
 
-                                    ui.button(f'Extract {el_display} Quantities', on_click=run_arch_extraction).classes('primary-btn mt-2')
+                    prompt = f"""
+You are an expert Quantity Surveyor with strict instructions.
+You are given a drawing (PDF or image). Your task is to EXTRACT ONLY the raw data for the selected items.
 
-                            # Grand Total for Architectural
-                            with ui.tab_panel(arch_tab_objects['Grand Total']):
-                                ui.label('Architectural Grand Total').classes('text-xl font-bold text-white mb-2')
-                                grand_output = ui.column().classes('w-full')
-                                grand_export = ui.row().classes('w-full gap-4 mt-4')
+SELECTED ITEMS:
+{chr(10).join(items_detail)}
 
-                                def update_arch_grand_total():
-                                    grand_output.clear()
-                                    grand_export.clear()
-                                    all_dfs = [df for df in boq_results['architectural'].values() if df is not None and not df.empty]
-                                    if not all_dfs:
-                                        with grand_output:
-                                            ui.markdown('No architectural quantities extracted yet.').classes('text-amber-400')
-                                        return
-                                    combined = pd.concat(all_dfs, ignore_index=True)
-                                    combined = combined[combined['Item'] != 'TOTAL']
-                                    grand = combined.groupby('Item').agg({
-                                        'Quantity (net)': 'sum',
-                                        'Quantity (with waste)': 'sum',
-                                        'Total Cost (EGP)': 'sum'
-                                    }).reset_index()
-                                    grand['Unit Rate (EGP)'] = grand['Total Cost (EGP)'] / grand['Quantity (with waste)']
-                                    grand = grand.round(2)
-                                    total_row = pd.DataFrame({
-                                        'Item': ['GRAND TOTAL'],
-                                        'Quantity (net)': [grand['Quantity (net)'].sum()],
-                                        'Quantity (with waste)': [grand['Quantity (with waste)'].sum()],
-                                        'Unit Rate (EGP)': [''],
-                                        'Total Cost (EGP)': [grand['Total Cost (EGP)'].sum()]
-                                    })
-                                    grand = pd.concat([grand, total_row], ignore_index=True)
-                                    with grand_output:
-                                        ui.markdown('### Architectural Grand Total Summary')
-                                        def df_to_md(df):
-                                            lines = []
-                                            headers = list(df.columns)
-                                            lines.append("| " + " | ".join(headers) + " |")
-                                            lines.append("|" + "|".join(["---"] * len(headers)) + "|")
-                                            for _, row in df.iterrows():
-                                                row_str = "| " + " | ".join(str(val) for val in row) + " |"
-                                                lines.append(row_str)
-                                            return "\n".join(lines)
-                                        ui.markdown(df_to_md(grand)).classes('markdown-body')
-                                    with grand_export:
-                                        def download_grand_pdf():
-                                            try:
-                                                meta = current_meta('GRAND')
-                                                pdf_bytes = build_report_pdf(
-                                                    "Architectural Grand Total BOQ",
-                                                    "Summary of all architectural quantities",
-                                                    df_to_md(grand),
-                                                    meta,
-                                                    logo_bytes_holder['bytes'],
-                                                )
-                                                ui.download(pdf_bytes, filename=f"Arch_Grand_Total_{ticket_input.value}.pdf")
-                                                ui.notify('PDF downloaded', type='positive')
-                                            except Exception as ex:
-                                                ui.notify(f'PDF Error: {str(ex)}', type='negative')
-                                        def download_grand_excel():
-                                            try:
-                                                excel_buffer = io.BytesIO()
-                                                with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
-                                                    grand.to_excel(writer, sheet_name='Grand Total', index=False)
-                                                excel_buffer.seek(0)
-                                                ui.download(excel_buffer.getvalue(), filename=f"Arch_Grand_Total_{ticket_input.value}.xlsx")
-                                                ui.notify('Excel downloaded', type='positive')
-                                            except Exception as ex:
-                                                ui.notify(f'Excel Error: {str(ex)}', type='negative')
-                                        ui.button('Download PDF', on_click=download_grand_pdf).classes('primary-btn flex-1')
-                                        ui.button('Export Excel', on_click=download_grand_excel).classes('primary-btn flex-1')
+CRITICAL RULES:
+1. **FIRST, ANALYZE THE DRAWING**: Determine what the drawing shows. Identify if it is a structural plan, architectural plan, or something else.
+2. **CHECK DATA AVAILABILITY**: If less than 70% of the required data for the selected items is clearly visible (dimensions, counts, labels), respond with a JSON object: {{"status": "insufficient_data", "message": "Explain why the data is insufficient."}} and stop.
+3. **DO NOT REQUEST MISSING DATA**: Only extract what is visible. If a field is not visible, set it to null.
+4. **NEVER ASK FOR REBAR DETAILS** unless rebar details (diameters, spacing) are clearly marked in the drawing.
+5. **DO NOT PERFORM ANY CALCULATIONS** – just extract raw numbers.
+6. **OUTPUT FORMAT**: Return ONLY a JSON object with the following structure:
+   {{
+     "status": "success" or "insufficient_data",
+     "message": "optional explanation",
+     "data": {{
+       "items": [
+         {{
+           "type": "item_key",  // e.g., "columns", "area"
+           "groups": [ ... ]    // array of groups, each with the required fields
+         }}
+       ]
+     }}
+   }}
+   For example, for columns:
+   {{
+     "status": "success",
+     "data": {{
+       "items": [
+         {{
+           "type": "columns",
+           "groups": [
+             {{"label":"C1","count":6,"width_mm":300,"depth_mm":300,"height_mm":3000}},
+             {{"label":"C2","count":4,"width_mm":250,"depth_mm":250,"height_mm":3000}}
+           ]
+         }}
+       ]
+     }}
+   }}
+   For architectural area:
+   {{
+     "status": "success",
+     "data": {{
+       "items": [
+         {{
+           "type": "area",
+           "groups": [{{"total_area_m2": 450.5}}]
+         }}
+       ]
+     }}
+   }}
 
-                                ui.button('Refresh Grand Total', on_click=update_arch_grand_total).classes('primary-btn')
-                                update_arch_grand_total()
-
-                    # ========== STRUCTURAL BRANCH (FIXED) ==========
-                    with ui.tab_panel(struct_tab):
-                        with ui.tabs().classes('w-full text-white bg-[#0d1a35] rounded-lg') as struct_sub_tabs:
-                            struct_elements = ['Columns', 'Beams', 'Slabs', 'Footings', 'Walls', 'Grand Total']
-                            struct_tab_objects = {}
-                            for el in struct_elements:
-                                struct_tab_objects[el] = ui.tab(el).classes('text-white font-bold')
-
-                        with ui.tab_panels(struct_sub_tabs, value=struct_tab_objects['Columns']).classes('w-full bg-transparent mt-4'):
-                            mass_file_data_dict = {}
-                            rebar_file_data_dict = {}
-
-                            # ---- Helper function to compute mass with missing groups ----
-                            def compute_mass_from_ai_data_with_missing(element_type, data, user_params):
-                                """Compute quantities from AI-extracted data, returning missing groups."""
-                                schema_info = MASS_SCHEMAS.get(element_type)
-                                if not schema_info:
-                                    return [], 0, []
-                                required = schema_info['required']
-                                results = []
-                                total_concrete = 0
-                                floor_height = user_params.get('floor_height_mm', 3000) / 1000
-                                missing_groups = []
-
-                                for idx, group in enumerate(data):
-                                    # Ensure count is present, default to 1
-                                    if 'count' not in group or group['count'] is None:
-                                        group['count'] = 1
-
-                                    # Check which required fields are missing
-                                    missing_fields = []
-                                    for req in required:
-                                        if req not in group or group[req] is None:
-                                            # For height, we might fill it later if checkbox enabled
-                                            if req == 'height_mm' and user_params.get('use_floor_height', False):
-                                                group['height_mm'] = user_params.get('floor_height_mm', 3000)
-                                                continue
-                                            missing_fields.append(req)
-
-                                    if missing_fields:
-                                        label = group.get('label', f'Group {idx+1}')
-                                        missing_groups.append({
-                                            'label': label,
-                                            'idx': idx,
-                                            'missing': missing_fields
-                                        })
-                                        continue
-
-                                    # All required fields present – compute volume
-                                    if element_type == 'columns':
-                                        vol = (group['width_mm']/1000) * (group['depth_mm']/1000) * (group['height_mm']/1000) * group['count']
-                                    elif element_type == 'beams':
-                                        vol = (group['width_mm']/1000) * (group['depth_mm']/1000) * (group['length_mm']/1000) * group['count']
-                                    elif element_type == 'slabs':
-                                        vol = group['area_m2'] * (group['thickness_mm']/1000)
-                                    elif element_type == 'footings':
-                                        vol = (group['width_mm']/1000) * (group['depth_mm']/1000) * (group['length_mm']/1000) * group['count']
-                                    elif element_type == 'walls':
-                                        vol = group['length_m'] * group['height_m'] * (group['thickness_mm']/1000) * group['count']
-                                    else:
-                                        vol = 0
-
-                                    total_concrete += vol
-                                    results.append({
-                                        'label': group.get('label', 'Unknown'),
-                                        'count': group['count'],
-                                        'concrete_m3': vol,
-                                        'rebar_ton': 0
-                                    })
-
-                                total_concrete = round(total_concrete, 2)
-                                return results, total_concrete, missing_groups
-
-                            # ---- Improved AI extraction for mass ----
-                            async def extract_mass_with_ai_fixed(element_type, file_bytes, file_type, user_params, code_basis, retry=True):
-                                """Extract mass quantities using AI with a simple JSON array."""
-                                contents = []
-                                schema_info = MASS_SCHEMAS.get(element_type)
-                                if not schema_info:
-                                    raise ValueError(f"Unsupported element type: {element_type}")
-
-                                extra_instruction = ""
-                                if element_type == 'columns':
-                                    extra_instruction = " IMPORTANT: Only count columns that are part of the structural grid/plan. Ignore any columns shown in a separate schedule, detail sheet, or table. "
-
-                                prompt = f"""
-You are an expert Quantity Surveyor. Your task is to EXTRACT raw data from the provided drawing(s) and return ONLY a JSON array of objects.
-
-Extract the following fields for each group:
-{', '.join(schema_info['required'])}
-
-If a dimension is not clearly visible, set it to null.
-{extra_instruction}
-Return ONLY the JSON array, no extra text, no explanations, no markdown.
-
-Example for columns:
-[{{"label":"C1","count":6,"width_mm":300,"depth_mm":300,"height_mm":3000}}]
-
-Now extract from the drawing. Look at all pages.
+Now analyze the drawing and return ONLY the JSON object. No extra text.
 """
-                                contents.append(prompt)
+                    contents = [prompt]
 
-                                # Process file – send up to 6 pages as PNG
-                                if file_type == 'application/pdf':
-                                    try:
-                                        reader = pypdf.PdfReader(io.BytesIO(file_bytes))
-                                        pages_text = []
-                                        for i in range(min(3, len(reader.pages))):
-                                            try:
-                                                txt = reader.pages[i].extract_text() or ""
-                                                pages_text.append(txt)
-                                            except:
-                                                pass
-                                        full_text = "".join(pages_text)
-                                        if full_text.strip():
-                                            contents.append(f"Extracted text from PDF:\n{full_text[:6000]}")
-                                        doc = fitz.open(stream=file_bytes, filetype="pdf")
-                                        for page_num in range(min(6, len(doc))):
-                                            page = doc.load_page(page_num)
-                                            mat = fitz.Matrix(2.0, 2.0)
-                                            pix = page.get_pixmap(matrix=mat)
-                                            img_bytes = pix.tobytes("png")
-                                            img_part = types.Part.from_bytes(data=img_bytes, mime_type="image/png")
-                                            contents.append(img_part)
-                                        doc.close()
-                                    except Exception:
-                                        contents.append(types.Part.from_bytes(data=file_bytes, mime_type='application/pdf'))
-                                else:
-                                    img_part = types.Part.from_bytes(data=file_bytes, mime_type=file_type)
-                                    contents.append(img_part)
-
+                    # Process file – send up to 6 pages as PNG
+                    if file_type == 'application/pdf':
+                        try:
+                            reader = pypdf.PdfReader(io.BytesIO(file_bytes))
+                            pages_text = []
+                            for i in range(min(3, len(reader.pages))):
                                 try:
-                                    response_text = await call_gemini_json(contents, temperature=0, timeout=240)
-                                    json_str = response_text.strip()
-                                    json_str = re.sub(r'^```json\s*', '', json_str)
-                                    json_str = re.sub(r'\s*```$', '', json_str)
-                                    start = json_str.find('[')
-                                    end = json_str.rfind(']')
-                                    if start != -1 and end != -1:
-                                        json_str = json_str[start:end+1]
-                                    data = json.loads(json_str)
-                                    return data
-                                except Exception:
-                                    if retry:
-                                        prompt2 = f"""
-Return a JSON array of objects with fields: {', '.join(schema_info['required'])}.
-{extra_instruction}
-If the drawing is unclear, return an empty array [].
-"""
-                                        contents2 = [prompt2]
-                                        if file_type == 'application/pdf':
-                                            try:
-                                                reader = pypdf.PdfReader(io.BytesIO(file_bytes))
-                                                txt = "".join([p.extract_text() or "" for p in reader.pages[:6]])
-                                                if txt.strip():
-                                                    contents2.append(f"Extracted text from PDF:\n{txt[:6000]}")
-                                            except:
-                                                pass
-                                        try:
-                                            response_text2 = await call_gemini_json(contents2, temperature=0, timeout=240)
-                                            json_str2 = response_text2.strip()
-                                            json_str2 = re.sub(r'^```json\s*', '', json_str2)
-                                            json_str2 = re.sub(r'\s*```$', '', json_str2)
-                                            start = json_str2.find('[')
-                                            end = json_str2.rfind(']')
-                                            if start != -1 and end != -1:
-                                                json_str2 = json_str2[start:end+1]
-                                            data2 = json.loads(json_str2)
-                                            return data2
-                                        except:
-                                            return []
-                                    else:
-                                        return []
+                                    txt = reader.pages[i].extract_text() or ""
+                                    pages_text.append(txt)
+                                except:
+                                    pass
+                            full_text = "".join(pages_text)
+                            if full_text.strip():
+                                contents.append(f"Extracted text from PDF:\n{full_text[:6000]}")
+                            doc = fitz.open(stream=file_bytes, filetype="pdf")
+                            for page_num in range(min(6, len(doc))):
+                                page = doc.load_page(page_num)
+                                mat = fitz.Matrix(2.0, 2.0)
+                                pix = page.get_pixmap(matrix=mat)
+                                img_bytes = pix.tobytes("png")
+                                img_part = types.Part.from_bytes(data=img_bytes, mime_type="image/png")
+                                contents.append(img_part)
+                            doc.close()
+                        except Exception:
+                            contents.append(types.Part.from_bytes(data=file_bytes, mime_type='application/pdf'))
+                    else:
+                        img_part = types.Part.from_bytes(data=file_bytes, mime_type=file_type)
+                        contents.append(img_part)
 
-                            # ---- Loop over structural elements ----
-                            for el_display, el_key in [('Columns', 'columns'), ('Beams', 'beams'), ('Slabs', 'slabs'), ('Footings', 'footings'), ('Walls', 'walls')]:
-                                with ui.tab_panel(struct_tab_objects[el_display]):
-                                    ui.label(f'{el_display} - Mass & Rebar Takeoff').classes('text-xl font-bold text-white mb-2')
-                                    with ui.tabs().classes('w-full text-white bg-[#0d1a35] rounded-lg') as mode_tabs:
-                                        mass_tab = ui.tab('Mass Quantities (AI)').classes('text-white font-bold')
-                                        rebar_tab = ui.tab('Reinforcement (AI)').classes('text-white font-bold')
-                                    with ui.tab_panels(mode_tabs, value=mass_tab).classes('w-full bg-transparent mt-2'):
+                    response_text = await call_gemini_json(contents, temperature=0, timeout=300)
+                    # Clean and parse JSON
+                    json_str = response_text.strip()
+                    json_str = re.sub(r'^```json\s*', '', json_str)
+                    json_str = re.sub(r'\s*```$', '', json_str)
+                    # Find first '{' and last '}'
+                    start = json_str.find('{')
+                    end = json_str.rfind('}')
+                    if start != -1 and end != -1:
+                        json_str = json_str[start:end+1]
+                    data = json.loads(json_str)
+                    return data
 
-                                        # ---- Mass Quantities (AI Extraction) ----
-                                        with ui.tab_panel(mass_tab):
-                                            ui.label(f'{el_display} - Mass Quantities (AI Extract)').classes('text-lg font-bold text-white mb-2')
-                                            mass_file_data = {'bytes': None, 'type': None}
-                                            mass_file_data_dict[el_key] = mass_file_data
-                                            mass_status = ui.label('Status: No file uploaded').classes('text-xs text-amber-400 font-semibold mb-2')
-                                            async def handle_mass_upload(e, key=el_key):
-                                                try:
-                                                    data = await e.file.read()
-                                                    mass_file_data_dict[key]['bytes'] = data
-                                                    mass_file_data_dict[key]['type'] = detect_mime_type(e.file.name, data)
-                                                    mass_status.set_text(f'File Ready: {e.file.name}')
-                                                    mass_status.classes(replace='text-xs text-emerald-400 font-semibold mb-2')
-                                                    ui.notify(f'Mass file uploaded: {e.file.name}', type='positive')
-                                                except Exception as ex:
-                                                    ui.notify(f'Error: {str(ex)}', type='negative')
-                                            ui.upload(label='Upload Drawing for Mass', auto_upload=True, on_upload=handle_mass_upload).props('flat dark').classes('w-full mb-4')
+                async def run_boq_extraction():
+                    if not client:
+                        ui.notify('GEMINI_API_KEY missing!', type='negative')
+                        return
+                    if not boq_file_data['bytes']:
+                        ui.notify('Please upload a drawing first.', type='warning')
+                        return
+                    if not selected_items['items']:
+                        ui.notify('Please select at least one item.', type='warning')
+                        return
 
-                                            mass_output = ui.column().classes('w-full')
-                                            mass_export = ui.row().classes('w-full gap-4 mt-4')
-                                            mass_df_holder = [None]
+                    boq_output.clear()
+                    boq_export.clear()
+                    with boq_output:
+                        ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
+                        ui.label('Extracting quantities via AI... (this may take up to 60 seconds)').classes('self-center text-sm')
 
-                                            async def run_mass_extraction(key=el_key, output=mass_output, export=mass_export, df_holder=mass_df_holder):
-                                                if not client:
-                                                    ui.notify('GEMINI_API_KEY missing!', type='negative')
-                                                    return
-                                                file_data = mass_file_data_dict.get(key)
-                                                if not file_data or not file_data['bytes']:
-                                                    ui.notify('Please upload a drawing for mass quantities.', type='warning')
-                                                    return
-                                                output.clear()
-                                                export.clear()
-                                                with output:
-                                                    ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
-                                                    ui.label('Extracting mass quantities via AI...').classes('self-center text-sm')
+                    try:
+                        user_params = {
+                            'floor_height_mm': floor_height_global.value,
+                            'use_floor_height': use_floor_height_check.value,
+                            'wastage': wastage_percent_global.value,
+                            'concrete_grade': concrete_grade_global.value,
+                            'rebar_grade': rebar_grade_global.value,
+                        }
+                        code_basis = code_basis_select.value
+                        branch_type = branch.value
 
-                                                try:
-                                                    user_params = {
-                                                        'floor_height_mm': floor_height_global.value,
-                                                        'use_floor_height': use_floor_height_check.value,
-                                                        'wastage': wastage_percent_global.value,
-                                                    }
-                                                    code_basis = code_basis_select.value
-                                                    data = await extract_mass_with_ai_fixed(key, file_data['bytes'], file_data['type'], user_params, code_basis)
-                                                    results, total_concrete, missing_groups = compute_mass_from_ai_data_with_missing(key, data, user_params)
+                        # Call AI
+                        ai_response = await extract_boq_ai(
+                            branch_type,
+                            selected_items['items'],
+                            boq_file_data['bytes'],
+                            boq_file_data['type'],
+                            user_params,
+                            code_basis
+                        )
 
-                                                    if missing_groups:
-                                                        modal = ui.dialog()
-                                                        with modal, ui.card().classes('w-full max-w-2xl bg-[#0d1a35]'):
-                                                            ui.label('Missing Required Data').classes('text-xl font-bold text-[#FF8C00]')
-                                                            ui.markdown('Please enter the missing values for each group:').classes('text-white')
-                                                            inputs = {}
-                                                            for group in missing_groups:
-                                                                ui.label(group['label']).classes('text-white font-bold mt-2')
-                                                                for field in group['missing']:
-                                                                    label = FIELD_LABELS.get(field, field)
-                                                                    default_val = None
-                                                                    if field == 'height_mm' and use_floor_height_check.value:
-                                                                        default_val = floor_height_global.value
-                                                                    inputs[f"{group['idx']}_{field}"] = ui.number(label=label, value=default_val).classes('w-full')
-                                                            async def confirm_missing():
-                                                                for group in missing_groups:
-                                                                    for field in group['missing']:
-                                                                        key_input = f"{group['idx']}_{field}"
-                                                                        if key_input in inputs and inputs[key_input].value is not None:
-                                                                            data[group['idx']][field] = inputs[key_input].value
-                                                                modal.close()
-                                                                new_results, new_total, _ = compute_mass_from_ai_data_with_missing(key, data, user_params)
-                                                                if not new_results:
-                                                                    output.clear()
-                                                                    with output:
-                                                                        ui.label('Still missing data. Please fill all required fields.').classes('text-amber-400')
-                                                                    return
-                                                                df = generate_boq_table(new_results, 'structural', key, wastage_percent_global.value, 'mass')
-                                                                df_holder[0] = df
-                                                                boq_results['structural'][f"{key}_mass"] = df
-                                                                output.clear()
-                                                                with output:
-                                                                    with ui.column().classes('output-card w-full'):
-                                                                        ui.label(f'{el_display} Mass Quantities').classes('text-xl font-bold text-white mb-2')
-                                                                        def df_to_md(df):
-                                                                            lines = []
-                                                                            headers = list(df.columns)
-                                                                            lines.append("| " + " | ".join(headers) + " |")
-                                                                            lines.append("|" + "|".join(["---"] * len(headers)) + "|")
-                                                                            for _, row in df.iterrows():
-                                                                                row_str = "| " + " | ".join(str(val) for val in row) + " |"
-                                                                                lines.append(row_str)
-                                                                            return "\n".join(lines)
-                                                                        ui.markdown(df_to_md(df)).classes('markdown-body')
-                                                                        # Charts
-                                                                        fig_bar, fig_pie = generate_charts(df, el_display)
-                                                                        if fig_bar:
-                                                                            ui.plotly(fig_bar).classes('w-full mt-2')
-                                                                        if fig_pie:
-                                                                            ui.plotly(fig_pie).classes('w-full mt-2')
-                                                                with export:
-                                                                    def download_mass_pdf(df=df):
-                                                                        try:
-                                                                            meta = current_meta('BOQ')
-                                                                            pdf_bytes = build_report_pdf(
-                                                                                f"Mass BOQ - {el_display}",
-                                                                                f"Structural Mass Takeoff",
-                                                                                df_to_md(df),
-                                                                                meta,
-                                                                                logo_bytes_holder['bytes'],
-                                                                            )
-                                                                            ui.download(pdf_bytes, filename=f"Mass_{el_key}_{ticket_input.value}.pdf")
-                                                                            ui.notify('PDF downloaded', type='positive')
-                                                                        except Exception as ex:
-                                                                            ui.notify(f'PDF Error: {str(ex)}', type='negative')
-                                                                    def download_mass_excel(df=df):
-                                                                        try:
-                                                                            excel_buffer = io.BytesIO()
-                                                                            with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
-                                                                                df.to_excel(writer, sheet_name='Mass', index=False)
-                                                                            excel_buffer.seek(0)
-                                                                            ui.download(excel_buffer.getvalue(), filename=f"Mass_{el_key}_{ticket_input.value}.xlsx")
-                                                                            ui.notify('Excel downloaded', type='positive')
-                                                                        except Exception as ex:
-                                                                            ui.notify(f'Excel Error: {str(ex)}', type='negative')
-                                                                    ui.button('Download PDF', on_click=download_mass_pdf).classes('primary-btn flex-1')
-                                                                    ui.button('Export Excel', on_click=download_mass_excel).classes('primary-btn flex-1')
-                                                            ui.button('Confirm & Calculate', on_click=confirm_missing).classes('primary-btn')
-                                                        modal.open()
-                                                        return
+                        # Check status
+                        if ai_response.get('status') == 'insufficient_data':
+                            boq_output.clear()
+                            with boq_output:
+                                ui.label('AI could not extract sufficient data.').classes('text-amber-400')
+                                ui.markdown(f"**Reason:** {ai_response.get('message', 'Unknown')}").classes('text-white')
+                            return
 
-                                                    if not results:
-                                                        output.clear()
-                                                        raw_display = data if data else "Empty data received."
-                                                        with output:
-                                                            ui.label('No valid groups extracted. Ensure the drawing contains clear dimensions and labels.').classes('text-amber-400')
-                                                            ui.markdown(f"**AI Response:**\n```json\n{json.dumps(raw_display, indent=2)[:1000]}\n```").classes('text-xs text-gray-400')
-                                                        return
+                        if ai_response.get('status') != 'success':
+                            boq_output.clear()
+                            with boq_output:
+                                ui.label('AI extraction failed.').classes('text-red-400')
+                                ui.markdown(f"**Response:**\n```json\n{json.dumps(ai_response, indent=2)}\n```").classes('text-white')
+                            return
 
-                                                    df = generate_boq_table(results, 'structural', key, wastage_percent_global.value, 'mass')
-                                                    df_holder[0] = df
-                                                    boq_results['structural'][f"{key}_mass"] = df
-                                                    output.clear()
-                                                    with output:
-                                                        with ui.column().classes('output-card w-full'):
-                                                            ui.label(f'{el_display} Mass Quantities').classes('text-xl font-bold text-white mb-2')
-                                                            def df_to_md(df):
-                                                                lines = []
-                                                                headers = list(df.columns)
-                                                                lines.append("| " + " | ".join(headers) + " |")
-                                                                lines.append("|" + "|".join(["---"] * len(headers)) + "|")
-                                                                for _, row in df.iterrows():
-                                                                    row_str = "| " + " | ".join(str(val) for val in row) + " |"
-                                                                    lines.append(row_str)
-                                                                return "\n".join(lines)
-                                                            ui.markdown(df_to_md(df)).classes('markdown-body')
-                                                            # Charts
-                                                            fig_bar, fig_pie = generate_charts(df, el_display)
-                                                            if fig_bar:
-                                                                ui.plotly(fig_bar).classes('w-full mt-2')
-                                                            if fig_pie:
-                                                                ui.plotly(fig_pie).classes('w-full mt-2')
-                                                    with export:
-                                                        def download_mass_pdf(df=df):
-                                                            try:
-                                                                meta = current_meta('BOQ')
-                                                                pdf_bytes = build_report_pdf(
-                                                                    f"Mass BOQ - {el_display}",
-                                                                    f"Structural Mass Takeoff",
-                                                                    df_to_md(df),
-                                                                    meta,
-                                                                    logo_bytes_holder['bytes'],
-                                                                )
-                                                                ui.download(pdf_bytes, filename=f"Mass_{el_key}_{ticket_input.value}.pdf")
-                                                                ui.notify('PDF downloaded', type='positive')
-                                                            except Exception as ex:
-                                                                ui.notify(f'PDF Error: {str(ex)}', type='negative')
-                                                        def download_mass_excel(df=df):
-                                                            try:
-                                                                excel_buffer = io.BytesIO()
-                                                                with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
-                                                                    df.to_excel(writer, sheet_name='Mass', index=False)
-                                                                excel_buffer.seek(0)
-                                                                ui.download(excel_buffer.getvalue(), filename=f"Mass_{el_key}_{ticket_input.value}.xlsx")
-                                                                ui.notify('Excel downloaded', type='positive')
-                                                            except Exception as ex:
-                                                                ui.notify(f'Excel Error: {str(ex)}', type='negative')
-                                                        ui.button('Download PDF', on_click=download_mass_pdf).classes('primary-btn flex-1')
-                                                        ui.button('Export Excel', on_click=download_mass_excel).classes('primary-btn flex-1')
-                                                except Exception as ex:
-                                                    output.clear()
-                                                    with output:
-                                                        ui.notify(f'Extraction failed: {str(ex)}', type='negative')
-                                                        ui.label('Please try a clearer drawing with visible dimensions.').classes('text-amber-400')
+                        # Parse data
+                        data_items = ai_response.get('data', {}).get('items', [])
+                        if not data_items:
+                            boq_output.clear()
+                            with boq_output:
+                                ui.label('No data extracted. Ensure the drawing contains clear dimensions and labels.').classes('text-amber-400')
+                            return
 
-                                            ui.button('Extract Mass Quantities (AI)', on_click=run_mass_extraction).classes('primary-btn mt-2')
+                        # Process each item type
+                        all_results = []
+                        for item in data_items:
+                            item_type = item.get('type')
+                            groups = item.get('groups', [])
+                            if not groups:
+                                continue
+                            # Compute quantities based on type
+                            if item_type in ['columns', 'beams', 'slabs', 'footings', 'shear_walls']:
+                                # Use existing compute functions
+                                # We need to map shear_walls to walls for computation
+                                if item_type == 'shear_walls':
+                                    compute_type = 'walls'
+                                else:
+                                    compute_type = item_type
+                                # We'll call compute_mass_from_ai_data (but it expects a list of groups)
+                                # We need to handle missing fields
+                                results, total, missing = compute_mass_from_ai_data_with_missing(compute_type, groups, user_params)
+                                if results:
+                                    # Generate table for this item
+                                    df = generate_boq_table(results, 'structural', item_type, wastage_percent_global.value, 'mass')
+                                    all_results.append((item_type, df))
+                            elif item_type in ['area', 'perimeter', 'walls', 'ceramic', 'paints', 'mortar', 'ceiling', 'wall_sealer']:
+                                # Architectural items – we'll create a simple table
+                                rows = []
+                                for g in groups:
+                                    # Each group should have the required field
+                                    for key, val in g.items():
+                                        if val is not None:
+                                            rows.append({
+                                                'Item': f"{item_type.capitalize()}",
+                                                'Count': 1,
+                                                'Unit': 'm²' if 'area' in key or 'perimeter' in key or 'length' in key else 'nos' if 'count' in key else 'm³',
+                                                'Quantity (net)': round(val, 2),
+                                                'Wastage %': wastage_percent_global.value,
+                                                'Quantity (with waste)': round(val * (1 + wastage_percent_global.value/100), 2),
+                                                'Unit Rate (EGP)': round(UNIT_RATES.get(item_type.capitalize(), 0), 2),
+                                                'Total Cost (EGP)': round(val * (1 + wastage_percent_global.value/100) * UNIT_RATES.get(item_type.capitalize(), 0), 2)
+                                            })
+                                if rows:
+                                    total_row = {
+                                        'Item': 'TOTAL',
+                                        'Count': '',
+                                        'Unit': '',
+                                        'Quantity (net)': round(sum(r['Quantity (net)'] for r in rows), 2),
+                                        'Wastage %': '',
+                                        'Quantity (with waste)': round(sum(r['Quantity (with waste)'] for r in rows), 2),
+                                        'Unit Rate (EGP)': '',
+                                        'Total Cost (EGP)': round(sum(r['Total Cost (EGP)'] for r in rows), 2)
+                                    }
+                                    rows.append(total_row)
+                                    df = pd.DataFrame(rows)
+                                    all_results.append((item_type, df))
+                            elif item_type in ['doors', 'windows']:
+                                # Similar but count
+                                rows = []
+                                for g in groups:
+                                    count = g.get('door_count' if item_type == 'doors' else 'window_count', 0)
+                                    if count:
+                                        rows.append({
+                                            'Item': f"{item_type.capitalize()}",
+                                            'Count': count,
+                                            'Unit': 'nos',
+                                            'Quantity (net)': count,
+                                            'Wastage %': wastage_percent_global.value,
+                                            'Quantity (with waste)': count,
+                                            'Unit Rate (EGP)': round(UNIT_RATES.get(item_type.capitalize(), 0), 2),
+                                            'Total Cost (EGP)': round(count * UNIT_RATES.get(item_type.capitalize(), 0), 2)
+                                        })
+                                if rows:
+                                    total_row = {
+                                        'Item': 'TOTAL',
+                                        'Count': '',
+                                        'Unit': '',
+                                        'Quantity (net)': sum(r['Quantity (net)'] for r in rows),
+                                        'Wastage %': '',
+                                        'Quantity (with waste)': sum(r['Quantity (with waste)'] for r in rows),
+                                        'Unit Rate (EGP)': '',
+                                        'Total Cost (EGP)': round(sum(r['Total Cost (EGP)'] for r in rows), 2)
+                                    }
+                                    rows.append(total_row)
+                                    df = pd.DataFrame(rows)
+                                    all_results.append((item_type, df))
 
-                                        # ---- Reinforcement (AI Extraction) ----
-                                        with ui.tab_panel(rebar_tab):
-                                            ui.label(f'{el_display} - Reinforcement Takeoff (AI)').classes('text-lg font-bold text-white mb-2')
-                                            rebar_file_data = {'bytes': None, 'type': None}
-                                            rebar_file_data_dict[el_key] = rebar_file_data
-                                            rebar_status = ui.label('Status: No file uploaded').classes('text-xs text-amber-400 font-semibold mb-2')
-                                            async def handle_rebar_upload(e, key=el_key):
-                                                try:
-                                                    data = await e.file.read()
-                                                    rebar_file_data_dict[key]['bytes'] = data
-                                                    rebar_file_data_dict[key]['type'] = detect_mime_type(e.file.name, data)
-                                                    rebar_status.set_text(f'File Ready: {e.file.name}')
-                                                    rebar_status.classes(replace='text-xs text-emerald-400 font-semibold mb-2')
-                                                    ui.notify(f'Rebar file uploaded: {e.file.name}', type='positive')
-                                                except Exception as ex:
-                                                    ui.notify(f'Error: {str(ex)}', type='negative')
-                                            ui.upload(label='Upload Drawing for Reinforcement', auto_upload=True, on_upload=handle_rebar_upload).props('flat dark').classes('w-full mb-4')
-                                            rebar_output = ui.column().classes('w-full')
-                                            rebar_export = ui.row().classes('w-full gap-4 mt-4')
-                                            rebar_df_holder = [None]
+                        if not all_results:
+                            boq_output.clear()
+                            with boq_output:
+                                ui.label('No valid quantities could be computed from the extracted data.').classes('text-amber-400')
+                            return
 
-                                            async def extract_rebar_with_ai(element_type, file_bytes, file_type, user_params, code_basis):
-                                                prompt = f"""
-You are an expert Quantity Surveyor. Extract rebar details from the drawing.
-Return a JSON array of objects with fields: label, count, width_mm, depth_mm, height_mm (if applicable), and rebar details (main_diameter_mm, stirrup_diameter_mm, spacing_mm).
-Only include groups that are clearly visible.
-Return ONLY valid JSON array.
-"""
-                                                contents = [prompt]
-                                                if file_type == 'application/pdf':
-                                                    try:
-                                                        reader = pypdf.PdfReader(io.BytesIO(file_bytes))
-                                                        txt = "".join([p.extract_text() or "" for p in reader.pages[:3]])
-                                                        if txt.strip():
-                                                            contents.append(f"Extracted text:\n{txt[:6000]}")
-                                                        doc = fitz.open(stream=file_bytes, filetype="pdf")
-                                                        if len(doc) > 0:
-                                                            page = doc.load_page(0)
-                                                            mat = fitz.Matrix(1.2, 1.2)
-                                                            pix = page.get_pixmap(matrix=mat)
-                                                            img_bytes = pix.tobytes("jpeg")
-                                                            img_part = types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg")
-                                                            contents.append(img_part)
-                                                        doc.close()
-                                                    except:
-                                                        contents.append(types.Part.from_bytes(data=file_bytes, mime_type='application/pdf'))
-                                                else:
-                                                    contents.append(types.Part.from_bytes(data=file_bytes, mime_type=file_type))
-                                                response = await call_gemini_json(contents, temperature=0, timeout=240)
-                                                json_str = response.strip()
-                                                json_str = re.sub(r'^```json\s*', '', json_str)
-                                                json_str = re.sub(r'\s*```$', '', json_str)
-                                                start = json_str.find('[')
-                                                end = json_str.rfind(']')
-                                                if start != -1 and end != -1:
-                                                    json_str = json_str[start:end+1]
-                                                return json.loads(json_str)
-
-                                            async def run_rebar_extraction(key=el_key, output=rebar_output, export=rebar_export, df_holder=rebar_df_holder):
-                                                if not client:
-                                                    ui.notify('GEMINI_API_KEY missing!', type='negative')
-                                                    return
-                                                file_data = rebar_file_data_dict.get(key)
-                                                if not file_data or not file_data['bytes']:
-                                                    ui.notify('Please upload a drawing for reinforcement.', type='warning')
-                                                    return
-                                                output.clear()
-                                                export.clear()
-                                                with output:
-                                                    ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
-                                                    ui.label('Extracting reinforcement details...').classes('self-center text-sm')
-                                                try:
-                                                    user_params = {
-                                                        'floor_height_mm': floor_height_global.value,
-                                                        'use_floor_height': use_floor_height_check.value,
-                                                        'wastage': wastage_percent_global.value,
-                                                    }
-                                                    code_basis = code_basis_select.value
-                                                    data = await extract_rebar_with_ai(el_key, file_data['bytes'], file_data['type'], user_params, code_basis)
-                                                    results, total_concrete, total_rebar = compute_rebar_quantities(el_key, data, user_params)
-                                                    df = generate_boq_table(results, 'structural', el_key, wastage_percent_global.value, 'rebar')
-                                                    df_holder[0] = df
-                                                    boq_results['structural'][f"{el_key}_rebar"] = df
-                                                    output.clear()
-                                                    with output:
-                                                        with ui.column().classes('output-card w-full'):
-                                                            ui.label(f'{el_display} Reinforcement BOQ').classes('text-xl font-bold text-white mb-2')
-                                                            def df_to_md(df):
-                                                                lines = []
-                                                                headers = list(df.columns)
-                                                                lines.append("| " + " | ".join(headers) + " |")
-                                                                lines.append("|" + "|".join(["---"] * len(headers)) + "|")
-                                                                for _, row in df.iterrows():
-                                                                    row_str = "| " + " | ".join(str(val) for val in row) + " |"
-                                                                    lines.append(row_str)
-                                                                return "\n".join(lines)
-                                                            ui.markdown(df_to_md(df)).classes('markdown-body')
-                                                    with export:
-                                                        def download_rebar_pdf(df=df):
-                                                            try:
-                                                                meta = current_meta('BOQ')
-                                                                pdf_bytes = build_report_pdf(
-                                                                    f"Rebar BOQ - {el_display}",
-                                                                    f"Structural Rebar Takeoff",
-                                                                    df_to_md(df),
-                                                                    meta,
-                                                                    logo_bytes_holder['bytes'],
-                                                                )
-                                                                ui.download(pdf_bytes, filename=f"Rebar_{el_key}_{ticket_input.value}.pdf")
-                                                                ui.notify('PDF downloaded', type='positive')
-                                                            except Exception as ex:
-                                                                ui.notify(f'PDF Error: {str(ex)}', type='negative')
-                                                        def download_rebar_excel(df=df):
-                                                            try:
-                                                                excel_buffer = io.BytesIO()
-                                                                with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
-                                                                    df.to_excel(writer, sheet_name='Rebar', index=False)
-                                                                excel_buffer.seek(0)
-                                                                ui.download(excel_buffer.getvalue(), filename=f"Rebar_{el_key}_{ticket_input.value}.xlsx")
-                                                                ui.notify('Excel downloaded', type='positive')
-                                                            except Exception as ex:
-                                                                ui.notify(f'Excel Error: {str(ex)}', type='negative')
-                                                        ui.button('Download PDF', on_click=download_rebar_pdf).classes('primary-btn flex-1')
-                                                        ui.button('Export Excel', on_click=download_rebar_excel).classes('primary-btn flex-1')
-                                                except Exception as ex:
-                                                    output.clear()
-                                                    with output:
-                                                        ui.notify(f'Extraction failed: {str(ex)}', type='negative')
-
-                                            ui.button('Extract Reinforcement Quantities', on_click=run_rebar_extraction).classes('primary-btn mt-2')
-
-                            # Grand Total for Structural
-                            with ui.tab_panel(struct_tab_objects['Grand Total']):
-                                ui.label('Structural Grand Total').classes('text-xl font-bold text-white mb-2')
-                                struct_grand_output = ui.column().classes('w-full')
-                                struct_grand_export = ui.row().classes('w-full gap-4 mt-4')
-
-                                def update_struct_grand_total():
-                                    struct_grand_output.clear()
-                                    struct_grand_export.clear()
-                                    all_dfs = [df for key, df in boq_results['structural'].items() if df is not None and not df.empty]
-                                    if not all_dfs:
-                                        with struct_grand_output:
-                                            ui.markdown('No structural quantities extracted yet.').classes('text-amber-400')
-                                        return
-                                    combined = pd.concat(all_dfs, ignore_index=True)
-                                    combined = combined[combined['Item'] != 'TOTAL']
+                        # Display results
+                        boq_output.clear()
+                        with boq_output:
+                            with ui.column().classes('output-card w-full'):
+                                # Combine all dataframes into one grand table
+                                all_dfs = [df for _, df in all_results]
+                                if len(all_dfs) == 1:
+                                    final_df = all_dfs[0]
+                                else:
+                                    # Concatenate, but we need to handle totals separately
+                                    # We'll combine everything and then add a grand total
+                                    combined = pd.concat([df[df['Item'] != 'TOTAL'] for df in all_dfs], ignore_index=True)
+                                    # Aggregate
                                     grand = combined.groupby('Item').agg({
                                         'Quantity (net)': 'sum',
                                         'Quantity (with waste)': 'sum',
@@ -2982,49 +2515,102 @@ Return ONLY valid JSON array.
                                         'Unit Rate (EGP)': [''],
                                         'Total Cost (EGP)': [grand['Total Cost (EGP)'].sum()]
                                     })
-                                    grand = pd.concat([grand, total_row], ignore_index=True)
-                                    with struct_grand_output:
-                                        ui.markdown('### Structural Grand Total Summary')
-                                        def df_to_md(df):
-                                            lines = []
-                                            headers = list(df.columns)
-                                            lines.append("| " + " | ".join(headers) + " |")
-                                            lines.append("|" + "|".join(["---"] * len(headers)) + "|")
-                                            for _, row in df.iterrows():
-                                                row_str = "| " + " | ".join(str(val) for val in row) + " |"
-                                                lines.append(row_str)
-                                            return "\n".join(lines)
-                                        ui.markdown(df_to_md(grand)).classes('markdown-body')
-                                    with struct_grand_export:
-                                        def download_struct_grand_pdf():
-                                            try:
-                                                meta = current_meta('GRAND')
-                                                pdf_bytes = build_report_pdf(
-                                                    "Structural Grand Total BOQ",
-                                                    "Summary of all structural quantities (mass + rebar)",
-                                                    df_to_md(grand),
-                                                    meta,
-                                                    logo_bytes_holder['bytes'],
-                                                )
-                                                ui.download(pdf_bytes, filename=f"Struct_Grand_Total_{ticket_input.value}.pdf")
-                                                ui.notify('PDF downloaded', type='positive')
-                                            except Exception as ex:
-                                                ui.notify(f'PDF Error: {str(ex)}', type='negative')
-                                        def download_struct_grand_excel():
-                                            try:
-                                                excel_buffer = io.BytesIO()
-                                                with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
-                                                    grand.to_excel(writer, sheet_name='Grand Total', index=False)
-                                                excel_buffer.seek(0)
-                                                ui.download(excel_buffer.getvalue(), filename=f"Struct_Grand_Total_{ticket_input.value}.xlsx")
-                                                ui.notify('Excel downloaded', type='positive')
-                                            except Exception as ex:
-                                                ui.notify(f'Excel Error: {str(ex)}', type='negative')
-                                        ui.button('Download PDF', on_click=download_struct_grand_pdf).classes('primary-btn flex-1')
-                                        ui.button('Export Excel', on_click=download_struct_grand_excel).classes('primary-btn flex-1')
+                                    final_df = pd.concat([grand, total_row], ignore_index=True)
 
-                                ui.button('Refresh Grand Total', on_click=update_struct_grand_total).classes('primary-btn')
-                                update_struct_grand_total()
+                                # Display table
+                                ui.label('Bill of Quantities').classes('text-xl font-bold text-white mb-2')
+                                def df_to_md(df):
+                                    lines = []
+                                    headers = list(df.columns)
+                                    lines.append("| " + " | ".join(headers) + " |")
+                                    lines.append("|" + "|".join(["---"] * len(headers)) + "|")
+                                    for _, row in df.iterrows():
+                                        row_str = "| " + " | ".join(str(val) for val in row) + " |"
+                                        lines.append(row_str)
+                                    return "\n".join(lines)
+                                ui.markdown(df_to_md(final_df)).classes('markdown-body')
+
+                                # Charts
+                                if len(final_df[final_df['Item'] != 'GRAND TOTAL']) > 0:
+                                    df_chart = final_df[final_df['Item'] != 'GRAND TOTAL']
+                                    # Bar chart
+                                    fig_bar = go.Figure()
+                                    fig_bar.add_trace(go.Bar(
+                                        x=df_chart['Item'],
+                                        y=df_chart['Quantity (net)'],
+                                        name='Quantity (net)',
+                                        marker_color='#FF8C00',
+                                        text=df_chart['Quantity (net)'],
+                                        textposition='auto',
+                                    ))
+                                    fig_bar.update_layout(
+                                        title='Quantities per Item',
+                                        template='plotly_dark',
+                                        paper_bgcolor='#0d1a35',
+                                        plot_bgcolor='#0d1a35',
+                                        font=dict(color='white'),
+                                        margin=dict(t=40, b=20, l=40, r=20),
+                                        height=400,
+                                        xaxis_tickangle=-45,
+                                    )
+                                    ui.plotly(fig_bar).classes('w-full mt-2')
+
+                                    # Pie chart for cost distribution
+                                    fig_pie = go.Figure(data=[go.Pie(
+                                        labels=df_chart['Item'],
+                                        values=df_chart['Total Cost (EGP)'],
+                                        hole=0.4,
+                                        marker=dict(colors=px.colors.sequential.Oranges_r),
+                                        textinfo='label+percent',
+                                        textposition='auto',
+                                    )])
+                                    fig_pie.update_layout(
+                                        title='Cost Distribution',
+                                        template='plotly_dark',
+                                        paper_bgcolor='#0d1a35',
+                                        plot_bgcolor='#0d1a35',
+                                        font=dict(color='white'),
+                                        margin=dict(t=40, b=20, l=40, r=20),
+                                        height=400,
+                                    )
+                                    ui.plotly(fig_pie).classes('w-full mt-2')
+
+                        # Export buttons
+                        with boq_export:
+                            def download_boq_pdf():
+                                try:
+                                    meta = current_meta('BOQ')
+                                    pdf_bytes = build_report_pdf(
+                                        "BOQ Report",
+                                        f"Branch: {branch_type} | Items: {', '.join(selected_items['items'])}",
+                                        df_to_md(final_df),
+                                        meta,
+                                        logo_bytes_holder['bytes'],
+                                    )
+                                    ui.download(pdf_bytes, filename=f"BOQ_{ticket_input.value}.pdf")
+                                    ui.notify('PDF downloaded', type='positive')
+                                except Exception as ex:
+                                    ui.notify(f'PDF Error: {str(ex)}', type='negative')
+                            def download_boq_excel():
+                                try:
+                                    excel_buffer = io.BytesIO()
+                                    with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
+                                        final_df.to_excel(writer, sheet_name='BOQ', index=False)
+                                    excel_buffer.seek(0)
+                                    ui.download(excel_buffer.getvalue(), filename=f"BOQ_{ticket_input.value}.xlsx")
+                                    ui.notify('Excel downloaded', type='positive')
+                                except Exception as ex:
+                                    ui.notify(f'Excel Error: {str(ex)}', type='negative')
+                            ui.button('Download PDF', on_click=download_boq_pdf).classes('primary-btn flex-1')
+                            ui.button('Export Excel', on_click=download_boq_excel).classes('primary-btn flex-1')
+
+                    except Exception as ex:
+                        boq_output.clear()
+                        with boq_output:
+                            ui.notify(f'Extraction failed: {str(ex)}', type='negative')
+                            ui.label('Error occurred. Please try again with a clearer drawing.').classes('text-red-400')
+
+                ui.button('Run BOQ Extraction', on_click=run_boq_extraction).classes('primary-btn mt-4')
         # ---------------- FOOTER (unchanged) ----------------
         ui.html('''
         <div class="app-footer">
