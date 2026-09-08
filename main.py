@@ -760,7 +760,7 @@ NO_LATEX_RULE = (
 )
 
 
-async def call_gemini(contents, system_instruction=None, temperature=0.1, timeout=60):
+async def call_gemini(contents, system_instruction=None, temperature=0.1, timeout=180):
     cfg_kwargs = {"temperature": temperature}
     if system_instruction:
         cfg_kwargs["system_instruction"] = system_instruction
@@ -777,7 +777,9 @@ async def call_gemini(contents, system_instruction=None, temperature=0.1, timeou
         )
         return sanitize_ai_markdown(response.text)
     except asyncio.TimeoutError:
-        raise Exception("AI request timed out. Please try with a smaller file or simplify your query.")
+        raise Exception("AI request timed out after 180 seconds. Please try with a smaller file or simplify your query.")
+    except Exception as e:
+        raise Exception(f"AI request failed: {str(e)}")
 
 
 # =====================================================================================
@@ -1114,7 +1116,7 @@ async def extract_boq_with_ai(element_type, mode, file_bytes, file_type, user_pa
         contents.append(img_part)
 
     try:
-        response = await call_gemini(contents, temperature=0, timeout=120)
+        response = await call_gemini(contents, temperature=0, timeout=180)
         json_str = response.strip()
         json_str = re.sub(r'^```json\s*', '', json_str)
         json_str = re.sub(r'\s*```$', '', json_str)
@@ -1125,14 +1127,14 @@ async def extract_boq_with_ai(element_type, mode, file_bytes, file_type, user_pa
             strict_prompt = get_element_prompt(element_type, mode, user_params, code_basis) + "\n\nREMEMBER: Return ONLY valid JSON. No explanations."
             contents2 = [strict_prompt] + contents[1:]
             try:
-                response2 = await call_gemini(contents2, temperature=0, timeout=120)
+                response2 = await call_gemini(contents2, temperature=0, timeout=180)
                 json_str2 = response2.strip()
                 json_str2 = re.sub(r'^```json\s*', '', json_str2)
                 json_str2 = re.sub(r'\s*```$', '', json_str2)
                 data2 = json.loads(json_str2)
                 return data2
-            except:
-                raise Exception("AI did not return valid JSON after two attempts. Please check the drawing clarity.")
+            except Exception as e2:
+                raise Exception(f"AI did not return valid JSON after two attempts: {str(e2)}")
         else:
             raise Exception(f"JSON parse error: {str(e)}")
 
@@ -1773,7 +1775,7 @@ report with clear ## section headings and real Markdown tables for any comparati
                             img_part = types.Part.from_bytes(data=uploaded_file_data['bytes'], mime_type=uploaded_file_data['type'])
                             contents.append(img_part)
 
-                        audit_result_text = await call_gemini(contents, timeout=120)
+                        audit_result_text = await call_gemini(contents, timeout=180)
                         audit_result_text_holder['text'] = audit_result_text
 
                         audit_output_container.clear()
@@ -1894,7 +1896,7 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                             img_part = types.Part.from_bytes(data=defect_file_data['bytes'], mime_type=defect_file_data['type'])
                             contents.append(img_part)
 
-                        res_text = await call_gemini(contents, timeout=120)
+                        res_text = await call_gemini(contents, timeout=180)
                         defect_result_holder['text'] = res_text
 
                         defect_output.clear()
@@ -1983,7 +1985,7 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                             f"{get_code_directive(basis)}\n\n{NO_LATEX_RULE}\n\n"
                             "UNIT SYSTEM: Use strictly METRIC (SI) units (mm, cm, m, MPa, kN, kg/m3, C)."
                         )
-                        cleaned_response = await call_gemini(q, system_instruction=system_prompt)
+                        cleaned_response = await call_gemini(q, system_instruction=system_prompt, timeout=180)
                         chat_messages.append({"role": "assistant", "content": cleaned_response})
                     except Exception as e:
                         chat_messages.append({"role": "assistant", "content": f"Error: {str(e)}"})
@@ -2183,7 +2185,7 @@ Return ONLY valid JSON.
                                                 img_part = types.Part.from_bytes(data=arch_file_data[key]['bytes'], mime_type=arch_file_data[key]['type'])
                                                 contents.append(img_part)
 
-                                            response = await call_gemini(contents, temperature=0, timeout=120)
+                                            response = await call_gemini(contents, temperature=0, timeout=180)
                                             json_str = response.strip()
                                             json_str = re.sub(r'^```json\s*', '', json_str)
                                             json_str = re.sub(r'\s*```$', '', json_str)
@@ -2458,7 +2460,6 @@ Return ONLY valid JSON.
                                                                 ui.label(group['label']).classes('text-white font-bold mt-2')
                                                                 for field in group['missing']:
                                                                     label = FIELD_LABELS.get(field, field)
-                                                                    # Pre-fill with floor height if height and checkbox is checked, but allow editing
                                                                     if field == 'height_mm' and use_floor_height_check.value:
                                                                         inputs[f"{group['idx']}_{field}"] = ui.number(label=label, value=floor_height_global.value).classes('w-full')
                                                                     else:
