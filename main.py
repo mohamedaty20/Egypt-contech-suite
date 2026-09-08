@@ -2117,8 +2117,8 @@ Ensure all tables are proper Markdown tables with header and separator rows.
 
         
                        # =========================================================================
-                # =========================================================================
-            # TAB 5: PROFESSIONAL BOQ TAKEOFF (BOUNDING BOX + ENSEMBLE)
+            # =========================================================================
+            # TAB 5: PROFESSIONAL BOQ TAKEOFF (BOUNDING BOX + ENSEMBLE - FIXED)
             # =========================================================================
             with ui.tab_panel(t_boq):
                 ui.label('Professional AI BOQ Takeoff & Cost Estimation').classes('text-2xl font-bold text-white mb-2')
@@ -2162,10 +2162,8 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                 # HELPER FUNCTIONS FOR BOUNDING BOX
                 # --------------------------------------------------------------------
                 def compute_iou(box1, box2):
-                    """Compute Intersection over Union of two bounding boxes [ymin, xmin, ymax, xmax]."""
                     y1, x1, y2, x2 = box1
                     y3, x3, y4, x4 = box2
-                    # Intersection
                     inter_y1 = max(y1, y3)
                     inter_x1 = max(x1, x3)
                     inter_y2 = min(y2, y4)
@@ -2179,16 +2177,16 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                     return inter_area / union_area if union_area > 0 else 0.0
 
                 def deduplicate_boxes(detections, iou_threshold=0.5):
-                    """Remove duplicate detections within a single run using IoU."""
                     if not detections:
                         return []
-                    # Sort by confidence or box size (larger first)
                     unique = []
                     for det in detections:
-                        box = det['bounding_box']
+                        box = det.get('bounding_box')
+                        if not box:
+                            continue
                         is_dup = False
                         for u in unique:
-                            if compute_iou(box, u['bounding_box']) > iou_threshold and det['label'] == u['label']:
+                            if compute_iou(box, u['bounding_box']) > iou_threshold and det.get('label') == u.get('label'):
                                 is_dup = True
                                 break
                         if not is_dup:
@@ -2196,38 +2194,28 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                     return unique
 
                 def match_columns_across_runs(all_runs, match_threshold=50):
-                    """
-                    Match columns across multiple runs using label and bounding box center.
-                    Returns a list of matched groups, each with a label, dimensions, count, and list of runs.
-                    """
-                    # Flatten all detections from all runs with run_id
                     all_detections = []
                     for run_id, dets in enumerate(all_runs):
                         for det in dets:
                             det['run_id'] = run_id
                             all_detections.append(det)
 
-                    # Group by label
                     groups = {}
                     for det in all_detections:
-                        label = det['label']
+                        label = det.get('label', 'Unknown')
                         if label not in groups:
                             groups[label] = []
                         groups[label].append(det)
 
-                    # For each label, match by bounding box center proximity
                     matched_groups = []
                     for label, dets in groups.items():
-                        # Sort by y center, x center
                         dets_sorted = sorted(dets, key=lambda d: (d['bounding_box'][0] + d['bounding_box'][2]) / 2)
-                        # We'll cluster by center proximity
                         clusters = []
                         for det in dets_sorted:
                             center_y = (det['bounding_box'][0] + det['bounding_box'][2]) / 2
                             center_x = (det['bounding_box'][1] + det['bounding_box'][3]) / 2
                             assigned = False
                             for cluster in clusters:
-                                # Check if center is within threshold of any existing in cluster
                                 for existing in cluster:
                                     ex_center_y = (existing['bounding_box'][0] + existing['bounding_box'][2]) / 2
                                     ex_center_x = (existing['bounding_box'][1] + existing['bounding_box'][3]) / 2
@@ -2239,22 +2227,27 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                                     break
                             if not assigned:
                                 clusters.append([det])
-                        # For each cluster, we have a physical column
                         for cluster in clusters:
-                            # Extract dimensions (use the most frequent)
-                            dims_list = [json.dumps(d['dimensions'], sort_keys=True) for d in cluster]
-                            from collections import Counter
-                            dims_counter = Counter(dims_list)
-                            most_common_dims_str = dims_counter.most_common(1)[0][0]
-                            most_common_dims = json.loads(most_common_dims_str)
-                            # Count occurrences (number of runs that detected this column)
+                            # Get most common dimensions
+                            dims_list = []
+                            for d in cluster:
+                                dims = d.get('dimensions', {})
+                                if dims:
+                                    dims_list.append(json.dumps(dims, sort_keys=True))
+                            if dims_list:
+                                from collections import Counter
+                                dims_counter = Counter(dims_list)
+                                most_common_dims_str = dims_counter.most_common(1)[0][0]
+                                most_common_dims = json.loads(most_common_dims_str)
+                            else:
+                                most_common_dims = {}
                             run_ids = set(d['run_id'] for d in cluster)
                             matched_groups.append({
                                 'label': label,
                                 'dimensions': most_common_dims,
                                 'detection_runs': len(run_ids),
                                 'total_runs': len(all_runs),
-                                'cluster': cluster  # store for bounding box reference
+                                'cluster': cluster
                             })
                     return matched_groups
 
@@ -2262,32 +2255,21 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                 # AI EXTRACTION FUNCTION (BOUNDING BOX PROMPT)
                 # --------------------------------------------------------------------
                 async def extract_columns_with_bbox(file_bytes, file_type, code_basis, user_params, temperature):
-                    """Call Gemini with bounding box prompt."""
                     prompt = """
 You are an expert Quantity Surveyor. Scan the structural column layout drawing.
 
-For every column you see, output a JSON object with:
+For every column you see, output a JSON array of objects. Each object must have:
 - label: the column mark (e.g., C1)
 - width_mm: the width dimension in mm
 - depth_mm: the depth dimension in mm
 - bounding_box: [ymin, xmin, ymax, xmax] as integer pixel coordinates (the bounding box around the column label and its grid intersection)
 
-Return a JSON array of such objects.
+Return ONLY a JSON array. If no columns are found, return an empty array [].
 
 Example:
 [
-  {
-    "label": "C1",
-    "width_mm": 250,
-    "depth_mm": 500,
-    "bounding_box": [120, 340, 180, 410]
-  },
-  {
-    "label": "C2",
-    "width_mm": 300,
-    "depth_mm": 600,
-    "bounding_box": [450, 780, 520, 870]
-  }
+  {"label": "C1", "width_mm": 250, "depth_mm": 500, "bounding_box": [120, 340, 180, 410]},
+  {"label": "C2", "width_mm": 300, "depth_mm": 600, "bounding_box": [450, 780, 520, 870]}
 ]
 """
                     contents = [prompt]
@@ -2321,23 +2303,52 @@ Example:
                         img_part = types.Part.from_bytes(data=file_bytes, mime_type=file_type)
                         contents.append(img_part)
 
-                    response_text = await call_gemini_json(contents, temperature=temperature, timeout=300)
-                    # Clean and parse JSON
-                    json_str = response_text.strip()
-                    json_str = re.sub(r'^```json\s*', '', json_str)
-                    json_str = re.sub(r'\s*```$', '', json_str)
-                    start = json_str.find('[')
-                    end = json_str.rfind(']')
-                    if start != -1 and end != -1:
-                        json_str = json_str[start:end+1]
-                    data = json.loads(json_str)
-                    return data  # list of detections
+                    try:
+                        response_text = await call_gemini_json(contents, temperature=temperature, timeout=300)
+                        # Clean and parse JSON
+                        json_str = response_text.strip()
+                        json_str = re.sub(r'^```json\s*', '', json_str)
+                        json_str = re.sub(r'\s*```$', '', json_str)
+                        start = json_str.find('[')
+                        end = json_str.rfind(']')
+                        if start != -1 and end != -1:
+                            json_str = json_str[start:end+1]
+                        else:
+                            # Maybe it's an object with a "data" field?
+                            start = json_str.find('{')
+                            end = json_str.rfind('}')
+                            if start != -1 and end != -1:
+                                obj_str = json_str[start:end+1]
+                                obj = json.loads(obj_str)
+                                if isinstance(obj, dict) and 'data' in obj and isinstance(obj['data'], list):
+                                    return obj['data']
+                                elif isinstance(obj, dict) and 'extracted_columns' in obj and isinstance(obj['extracted_columns'], list):
+                                    return obj['extracted_columns']
+                                else:
+                                    # Try to convert single object to array
+                                    if isinstance(obj, dict) and 'label' in obj:
+                                        return [obj]
+                            return []
+                        data = json.loads(json_str)
+                        if isinstance(data, list):
+                            return data
+                        elif isinstance(data, dict):
+                            # Maybe it's a single object
+                            if 'label' in data:
+                                return [data]
+                            elif 'data' in data and isinstance(data['data'], list):
+                                return data['data']
+                            elif 'extracted_columns' in data and isinstance(data['extracted_columns'], list):
+                                return data['extracted_columns']
+                        return []
+                    except Exception as e:
+                        # If parsing fails, return the raw response for debugging
+                        raise Exception(f"JSON parse error: {str(e)}\nRaw response: {response_text[:500]}...")
 
                 # --------------------------------------------------------------------
                 # COMPUTATION FUNCTION
                 # --------------------------------------------------------------------
                 def compute_boq_from_columns(matched_groups, user_params):
-                    """Compute volumes and costs from matched columns."""
                     rows = []
                     floor_height = user_params.get('floor_height_mm', 3000) / 1000
                     wastage = user_params.get('wastage', 5)
@@ -2345,36 +2356,30 @@ Example:
 
                     for group in matched_groups:
                         label = group['label']
-                        count = group['detection_runs']  # number of runs that detected this column
-                        # Actually, we need the actual count of columns, not detection runs.
-                        # We can infer the count from the number of columns in the cluster? No, each run has one detection per physical column.
-                        # So the detection_runs = number of runs that saw this column. That's our confidence, not the count.
-                        # The count is 1 per physical column, but we need to count how many physical columns of this label exist.
-                        # Since we have one cluster per physical column, the count is the number of clusters with this label.
-                        # We'll compute that later. For now, we have one group per physical column, so count = 1.
-                        # We'll aggregate later.
-
-                        # For now, we'll store each physical column as a row with count=1, then sum later.
-                        dims = group['dimensions']
-                        w = dims.get('width', 0)
-                        d = dims.get('depth', 0)
-                        unit = 'mm'  # assume
+                        dims = group.get('dimensions', {})
+                        w = dims.get('width_mm') or dims.get('width') or 0
+                        d = dims.get('depth_mm') or dims.get('depth') or 0
+                        # Height: either from user_params or from AI
+                        h = None
+                        if user_params.get('use_floor_height'):
+                            h = user_params.get('floor_height_mm', 3000)
+                        if h is None:
+                            # If we have a 'height_mm' in dims, use it
+                            h = dims.get('height_mm') or dims.get('height')
+                        if h is None:
+                            continue  # skip this column, will be caught later
+                        h_m = h / 1000
                         w_m = w / 1000
                         d_m = d / 1000
-
-                        # Height: either from user_params or from AI (if present)
-                        h = user_params.get('floor_height_mm', 3000) if user_params.get('use_floor_height') else None
-                        if h is None:
-                            continue
-                        h_m = h / 1000
-                        volume = w_m * d_m * h_m  # per column
+                        # Each group represents one physical column
+                        volume = w_m * d_m * h_m
                         rows.append({
                             'Item': f"Column - {label}",
                             'Count': 1,
                             'Width (mm)': w,
                             'Depth (mm)': d,
                             'Height (mm)': h,
-                            'Detection Confidence': f"{count}/{len(all_runs)}",
+                            'Detection Confidence': f"{group['detection_runs']}/{group['total_runs']}",
                             'Volume (m³)': round(volume, 2),
                             'Wastage %': wastage,
                             'Quantity (with waste)': round(volume * (1 + wastage/100), 2),
@@ -2384,6 +2389,7 @@ Example:
 
                     if not rows:
                         return None
+
                     df = pd.DataFrame(rows)
                     # Aggregate by label to get total count and volume
                     df_agg = df.groupby('Item').agg({
@@ -2398,7 +2404,7 @@ Example:
                         'Unit Rate (EGP)': 'first',
                         'Total Cost (EGP)': 'sum'
                     }).reset_index()
-                    # Add grand total row
+
                     total_row = {
                         'Item': 'GRAND TOTAL',
                         'Count': df_agg['Count'].sum(),
@@ -2408,7 +2414,6 @@ Example:
                         'Unit Rate (EGP)': '',
                         'Total Cost (EGP)': round(df_agg['Total Cost (EGP)'].sum(), 2)
                     }
-                    # Keep other columns empty
                     for col in ['Width (mm)', 'Depth (mm)', 'Height (mm)', 'Detection Confidence']:
                         if col in total_row:
                             total_row[col] = ''
@@ -2442,6 +2447,7 @@ Example:
                         }
 
                         all_run_detections = []
+                        raw_responses = []
                         for i in range(num_passes.value):
                             try:
                                 detections = await extract_columns_with_bbox(
@@ -2451,24 +2457,61 @@ Example:
                                     user_params,
                                     temperature=0.2
                                 )
-                                if detections:
-                                    # Deduplicate within run using IoU
-                                    deduped = deduplicate_boxes(detections, iou_threshold=0.5)
-                                    all_run_detections.append(deduped)
+                                if detections and isinstance(detections, list):
+                                    # Normalize field names
+                                    normalized = []
+                                    for d in detections:
+                                        if not isinstance(d, dict):
+                                            continue
+                                        # Extract label
+                                        label = d.get('label') or d.get('mark_name') or d.get('name')
+                                        if not label:
+                                            continue
+                                        # Extract dimensions
+                                        dims = d.get('dimensions', {})
+                                        width = dims.get('width_mm') or dims.get('width') or 0
+                                        depth = dims.get('depth_mm') or dims.get('depth') or 0
+                                        # If dimensions are at top level
+                                        if not width:
+                                            width = d.get('width_mm') or d.get('width') or 0
+                                        if not depth:
+                                            depth = d.get('depth_mm') or d.get('depth') or 0
+                                        # Bounding box
+                                        bbox = d.get('bounding_box')
+                                        if not bbox or len(bbox) != 4:
+                                            continue
+                                        normalized.append({
+                                            'label': label,
+                                            'dimensions': {'width_mm': width, 'depth_mm': depth},
+                                            'bounding_box': bbox
+                                        })
+                                    if normalized:
+                                        # Deduplicate within run
+                                        deduped = deduplicate_boxes(normalized, iou_threshold=0.5)
+                                        all_run_detections.append(deduped)
                             except Exception as e:
                                 print(f"Pass {i+1} failed: {e}")
+                                raw_responses.append(str(e))
                             await asyncio.sleep(0.5)
 
                         if not all_run_detections:
                             boq_output.clear()
                             with boq_output:
                                 ui.label('All extraction passes failed. Please try again with a clearer drawing.').classes('text-red-400')
+                                if raw_responses:
+                                    ui.markdown(f"**Last error:** {raw_responses[-1][:500]}").classes('text-xs text-gray-400')
                             return
 
                         # Match columns across runs
                         matched_groups = match_columns_across_runs(all_run_detections, match_threshold=50)
 
-                        # Filter groups with low detection confidence (appeared in <60% of runs)
+                        if not matched_groups:
+                            boq_output.clear()
+                            with boq_output:
+                                ui.label('No columns detected consistently across runs.').classes('text-amber-400')
+                            return
+
+                        # Filter by confidence
                         total_runs = len(all_run_detections)
                         low_confidence = []
                         high_confidence = []
@@ -2508,6 +2551,8 @@ Example:
                         with boq_output:
                             ui.notify(f'Extraction failed: {str(ex)}', type='negative')
                             ui.label('Error occurred. Please try again with a clearer drawing.').classes('text-red-400')
+                            if hasattr(ex, 'response_text'):
+                                ui.markdown(f"**AI Response:**\n```json\n{ex.response_text[:1000]}\n```").classes('text-xs text-gray-400')
 
                 async def finish_boq_calculation(matched_groups, user_params):
                     # Compute BOQ
@@ -2515,7 +2560,8 @@ Example:
                     if df is None:
                         boq_output.clear()
                         with boq_output:
-                            ui.label('Could not compute quantities. Missing critical dimensions.').classes('text-amber-400')
+                            ui.label('Could not compute quantities. Missing critical dimensions (height).').classes('text-amber-400')
+                            ui.markdown('Please ensure the "Use floor height" checkbox is checked or provide the height in the drawing.').classes('text-white')
                         return
 
                     boq_output.clear()
