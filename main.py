@@ -39,7 +39,7 @@ load_dotenv()
 api_key = os.getenv("GEMINI_API_KEY")
 client = genai.Client(api_key=api_key) if api_key else None
 
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash-lite")  # better for vision
+GEMINI_MODEL = "gemini-3.5-flash-lite"  # Use the model that works for you
 
 PAGE_WIDTH, PAGE_HEIGHT = A4
 MARGIN = 32
@@ -760,7 +760,7 @@ NO_LATEX_RULE = (
 )
 
 
-async def call_gemini(contents, system_instruction=None, temperature=0.1, timeout=240):
+async def call_gemini(contents, system_instruction=None, temperature=0.1, timeout=300):
     cfg_kwargs = {"temperature": temperature}
     if system_instruction:
         cfg_kwargs["system_instruction"] = system_instruction
@@ -777,16 +777,13 @@ async def call_gemini(contents, system_instruction=None, temperature=0.1, timeou
         )
         return sanitize_ai_markdown(response.text)
     except asyncio.TimeoutError:
-        raise Exception("AI request timed out after 240 seconds. Please try with a smaller file or simplify your query.")
+        raise Exception("AI request timed out after 300 seconds. Please try with a smaller file or simplify your query.")
     except Exception as e:
         raise Exception(f"AI request failed: {str(e)}")
 
-async def call_gemini_json(contents, temperature=0.1, timeout=240):
-    """Call Gemini and return raw JSON text (enforced by response_mime_type)."""
-    cfg_kwargs = {
-        "temperature": temperature,
-        "response_mime_type": "application/json",   # Force JSON output
-    }
+async def call_gemini_json(contents, temperature=0.1, timeout=300):
+    """Call Gemini and return raw text without sanitization (for JSON)."""
+    cfg_kwargs = {"temperature": temperature}
     config = types.GenerateContentConfig(**cfg_kwargs)
     try:
         response = await asyncio.wait_for(
@@ -798,9 +795,9 @@ async def call_gemini_json(contents, temperature=0.1, timeout=240):
             ),
             timeout=timeout
         )
-        return response.text
+        return response.text  # raw text, no sanitization
     except asyncio.TimeoutError:
-        raise Exception("AI request timed out after 240 seconds.")
+        raise Exception("AI request timed out after 300 seconds.")
     except Exception as e:
         raise Exception(f"AI request failed: {str(e)}")
 
@@ -817,15 +814,13 @@ def detect_mime_type(filename: str, data: bytes) -> str:
         return 'image/jpeg'
     elif ext in ['.pdf']:
         return 'application/pdf'
-    # Fallback to magic bytes (using filetype library if available, else simple check)
-    # Simple checks:
+    # Fallback to magic bytes
     if data.startswith(b'\x89PNG'):
         return 'image/png'
     if data.startswith(b'\xff\xd8'):
         return 'image/jpeg'
     if data.startswith(b'%PDF'):
         return 'application/pdf'
-    # Default to image/jpeg
     return 'image/jpeg'
 
 # =====================================================================================
@@ -883,8 +878,7 @@ FIELD_LABELS = {
 # ---- Element-specific schemas for mass extraction (simplified) ----
 MASS_SCHEMAS = {
     'columns': {
-        'required': ['label', 'width_mm', 'depth_mm', 'height_mm'],
-        'optional': ['count'],
+        'required': ['label', 'count', 'width_mm', 'depth_mm', 'height_mm'],
         'field_aliases': {
             'width': 'width_mm',
             'depth': 'depth_mm',
@@ -896,8 +890,7 @@ MASS_SCHEMAS = {
         }
     },
     'beams': {
-        'required': ['label', 'width_mm', 'depth_mm', 'length_mm'],
-        'optional': ['count'],
+        'required': ['label', 'count', 'width_mm', 'depth_mm', 'length_mm'],
         'field_aliases': {
             'width': 'width_mm',
             'depth': 'depth_mm',
@@ -910,7 +903,6 @@ MASS_SCHEMAS = {
     },
     'slabs': {
         'required': ['label', 'thickness_mm', 'area_m2'],
-        'optional': [],
         'field_aliases': {
             'thickness': 'thickness_mm',
             'area': 'area_m2',
@@ -919,8 +911,7 @@ MASS_SCHEMAS = {
         }
     },
     'footings': {
-        'required': ['label', 'width_mm', 'depth_mm', 'length_mm'],
-        'optional': ['count'],
+        'required': ['label', 'count', 'width_mm', 'depth_mm', 'length_mm'],
         'field_aliases': {
             'width': 'width_mm',
             'depth': 'depth_mm',
@@ -932,8 +923,7 @@ MASS_SCHEMAS = {
         }
     },
     'walls': {
-        'required': ['label', 'length_m', 'height_m', 'thickness_mm'],
-        'optional': ['count'],
+        'required': ['label', 'count', 'length_m', 'height_m', 'thickness_mm'],
         'field_aliases': {
             'length': 'length_m',
             'height': 'height_m',
@@ -957,116 +947,95 @@ def normalize_keys(obj, aliases):
     return new_obj
 
 async def extract_mass_with_ai(element_type, file_bytes, file_type, user_params, code_basis, retry=True):
-    """Extract mass quantities using AI with a simple JSON array, processing up to 6 pages."""
+    """Extract mass quantities using AI with a direct prompt (single image)."""
     contents = []
     schema_info = MASS_SCHEMAS.get(element_type)
     if not schema_info:
         raise ValueError(f"Unsupported element type: {element_type}")
 
-    # Build prompt: include required and optional fields
     required_fields = ', '.join(schema_info['required'])
-    optional_fields = ', '.join(schema_info['optional']) if schema_info['optional'] else ''
-    all_fields = required_fields
-    if optional_fields:
-        all_fields += f" (optional: {optional_fields})"
 
     prompt = f"""
-You are an expert Quantity Surveyor. Your task is to EXTRACT raw data from the provided drawing(s) and return ONLY a JSON array of objects.
-
-Extract the following fields for each group:
-{all_fields}
-
+You are a Quantity Surveyor. Extract the column schedule from the drawing.
+Return a JSON array of objects with fields: {required_fields}.
 If a dimension is not clearly visible, set it to null.
-If count is not visible, you can omit it or set it to 1.
-Return ONLY the JSON array, no extra text, no explanations, no markdown.
-
-Example for columns:
-[{{"label":"C1","width_mm":300,"depth_mm":300,"height_mm":3000,"count":6}}]
-
-Now extract from the drawing. Look at all pages if it's a PDF. Pay attention to the units: dimensions are in mm unless specified otherwise (e.g., area in m², length/height in m for walls).
+Return ONLY the JSON array, no explanations.
+Example:
+[{{"label":"C1","count":6,"width_mm":300,"depth_mm":300,"height_mm":3000}}]
 """
     contents.append(prompt)
 
-    # Process file – send up to 6 pages as images
+    # Process file – send only the first image (for PDF, convert first page)
     if file_type == 'application/pdf':
         try:
-            # Extract text from all pages
-            reader = pypdf.PdfReader(io.BytesIO(file_bytes))
-            pages_text = []
-            for i in range(min(6, len(reader.pages))):
-                try:
-                    txt = reader.pages[i].extract_text() or ""
-                    pages_text.append(txt)
-                except:
-                    pass
-            full_text = "".join(pages_text)
-            if full_text.strip():
-                contents.append(f"Extracted text from PDF:\n{full_text[:6000]}")
-            # Send first 6 pages as high-quality PNG images
+            # Convert first page to PNG
             doc = fitz.open(stream=file_bytes, filetype="pdf")
-            for page_num in range(min(6, len(doc))):
-                page = doc.load_page(page_num)
-                mat = fitz.Matrix(2.0, 2.0)  # higher resolution
+            if len(doc) > 0:
+                page = doc.load_page(0)
+                mat = fitz.Matrix(2.0, 2.0)  # high resolution
                 pix = page.get_pixmap(matrix=mat)
                 img_bytes = pix.tobytes("png")
                 img_part = types.Part.from_bytes(data=img_bytes, mime_type="image/png")
                 contents.append(img_part)
             doc.close()
-        except Exception as e:
-            # Fallback: send full PDF as binary
+        except Exception:
+            # Fallback: send PDF as binary
             contents.append(types.Part.from_bytes(data=file_bytes, mime_type='application/pdf'))
     else:
-        # Image – we'll send as is (PNG or JPEG)
+        # Image – send as is (PNG or JPEG)
         img_part = types.Part.from_bytes(data=file_bytes, mime_type=file_type)
         contents.append(img_part)
 
+    raw_response = None
     try:
-        response_text = await call_gemini_json(contents, temperature=0, timeout=240)
-        # The response should be pure JSON; but let's be robust: try to parse
-        data = json.loads(response_text)
-        # If the data is a dictionary with a "groups" key, use that
-        if isinstance(data, dict) and 'groups' in data:
-            data = data['groups']
-        # If data is not a list, try to convert it
+        response_text = await call_gemini_json(contents, temperature=0, timeout=300)
+        raw_response = response_text
+        # Try to extract JSON array
+        json_str = response_text.strip()
+        # Remove markdown fences if present
+        json_str = re.sub(r'^```json\s*', '', json_str)
+        json_str = re.sub(r'\s*```$', '', json_str)
+        # Find the first '[' and last ']'
+        start = json_str.find('[')
+        end = json_str.rfind(']')
+        if start != -1 and end != -1:
+            json_str = json_str[start:end+1]
+        data = json.loads(json_str)
+        # If data is not a list, try to convert
         if not isinstance(data, list):
-            # Maybe it's a single object? Wrap in list
             if isinstance(data, dict):
                 data = [data]
             else:
                 data = []
-        # Normalize field names using aliases
+        # Normalize field names
         aliases = schema_info.get('field_aliases', {})
         normalized_data = []
         for item in data:
             if isinstance(item, dict):
                 norm_item = normalize_keys(item, aliases)
-                # Ensure label exists, default to 'Unknown'
                 if 'label' not in norm_item:
                     norm_item['label'] = 'Unknown'
                 normalized_data.append(norm_item)
-        return normalized_data
+        return normalized_data, raw_response
     except Exception as e:
         if retry:
-            # Fallback to a simpler prompt
+            # Try a simpler prompt without images
             prompt2 = f"""
-Return a JSON array of objects with fields: {', '.join(schema_info['required'])}.
-If count is not visible, omit it.
+Return a JSON array of objects with fields: {required_fields}.
 If the drawing is unclear, return an empty array [].
 """
             contents2 = [prompt2]
-            if file_type == 'application/pdf':
-                try:
-                    reader = pypdf.PdfReader(io.BytesIO(file_bytes))
-                    txt = "".join([p.extract_text() or "" for p in reader.pages[:6]])
-                    if txt.strip():
-                        contents2.append(f"Extracted text from PDF:\n{txt[:6000]}")
-                except:
-                    pass
             try:
-                response_text2 = await call_gemini_json(contents2, temperature=0, timeout=240)
-                data2 = json.loads(response_text2)
-                if isinstance(data2, dict) and 'groups' in data2:
-                    data2 = data2['groups']
+                response_text2 = await call_gemini_json(contents2, temperature=0, timeout=300)
+                raw_response = response_text2
+                json_str2 = response_text2.strip()
+                json_str2 = re.sub(r'^```json\s*', '', json_str2)
+                json_str2 = re.sub(r'\s*```$', '', json_str2)
+                start = json_str2.find('[')
+                end = json_str2.rfind(']')
+                if start != -1 and end != -1:
+                    json_str2 = json_str2[start:end+1]
+                data2 = json.loads(json_str2)
                 if not isinstance(data2, list):
                     if isinstance(data2, dict):
                         data2 = [data2]
@@ -1080,20 +1049,18 @@ If the drawing is unclear, return an empty array [].
                         if 'label' not in norm_item:
                             norm_item['label'] = 'Unknown'
                         normalized_data2.append(norm_item)
-                return normalized_data2
+                return normalized_data2, raw_response
             except:
-                return []
+                return [], raw_response
         else:
-            return []
+            return [], raw_response
 
 def compute_mass_from_ai_data(element_type, data, user_params):
     """Compute quantities from AI-extracted data, defaulting missing count to 1.
        Returns: (results, total_concrete, missing_groups)
-       missing_groups is a list of dicts with 'label', 'idx', 'missing_fields'
     """
     schema_info = MASS_SCHEMAS.get(element_type)
     required = schema_info['required']
-    optional = schema_info.get('optional', [])
     results = []
     total_concrete = 0
     floor_height = user_params.get('floor_height_mm', 3000) / 1000
@@ -1110,7 +1077,6 @@ def compute_mass_from_ai_data(element_type, data, user_params):
             if req not in group or group[req] is None:
                 missing_fields.append(req)
 
-        # If any missing, store for later modal
         if missing_fields:
             label = group.get('label', f'Group {idx+1}')
             missing_groups.append({
@@ -1118,24 +1084,23 @@ def compute_mass_from_ai_data(element_type, data, user_params):
                 'idx': idx,
                 'missing': missing_fields
             })
-            continue  # skip this group for now
+            continue
 
-        # All required fields present – compute volume
+        # Compute volume based on element type
         if element_type == 'columns':
-            # Use floor height if height is None and allowed
             if group.get('height_mm') is None and user_params.get('use_floor_height', False):
                 group['height_mm'] = user_params.get('floor_height_mm', 3000)
             if group.get('height_mm') is None:
                 continue
-            vol = (group['width_mm']/1000) * (group['depth_mm']/1000) * (group['height_mm']/1000) * group.get('count', 1)
+            vol = (group['width_mm']/1000) * (group['depth_mm']/1000) * (group['height_mm']/1000) * group['count']
         elif element_type == 'beams':
-            vol = (group['width_mm']/1000) * (group['depth_mm']/1000) * (group['length_mm']/1000) * group.get('count', 1)
+            vol = (group['width_mm']/1000) * (group['depth_mm']/1000) * (group['length_mm']/1000) * group['count']
         elif element_type == 'slabs':
             vol = group['area_m2'] * (group['thickness_mm']/1000)
         elif element_type == 'footings':
-            vol = (group['width_mm']/1000) * (group['depth_mm']/1000) * (group['length_mm']/1000) * group.get('count', 1)
+            vol = (group['width_mm']/1000) * (group['depth_mm']/1000) * (group['length_mm']/1000) * group['count']
         elif element_type == 'walls':
-            vol = group['length_m'] * group['height_m'] * (group['thickness_mm']/1000) * group.get('count', 1)
+            vol = group['length_m'] * group['height_m'] * (group['thickness_mm']/1000) * group['count']
         else:
             vol = 0
 
@@ -1628,7 +1593,7 @@ report with clear ## section headings and real Markdown tables for any comparati
                             img_part = types.Part.from_bytes(data=uploaded_file_data['bytes'], mime_type=uploaded_file_data['type'])
                             contents.append(img_part)
 
-                        audit_result_text = await call_gemini(contents, timeout=240)
+                        audit_result_text = await call_gemini(contents, timeout=300)
                         audit_result_text_holder['text'] = audit_result_text
 
                         audit_output_container.clear()
@@ -1747,7 +1712,7 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                             img_part = types.Part.from_bytes(data=defect_file_data['bytes'], mime_type=defect_file_data['type'])
                             contents.append(img_part)
 
-                        res_text = await call_gemini(contents, timeout=240)
+                        res_text = await call_gemini(contents, timeout=300)
                         defect_result_holder['text'] = res_text
 
                         defect_output.clear()
@@ -1836,7 +1801,7 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                             f"{get_code_directive(basis)}\n\n{NO_LATEX_RULE}\n\n"
                             "UNIT SYSTEM: Use strictly METRIC (SI) units (mm, cm, m, MPa, kN, kg/m3, C)."
                         )
-                        cleaned_response = await call_gemini(q, system_instruction=system_prompt, timeout=240)
+                        cleaned_response = await call_gemini(q, system_instruction=system_prompt, timeout=300)
                         chat_messages.append({"role": "assistant", "content": cleaned_response})
                     except Exception as e:
                         chat_messages.append({"role": "assistant", "content": f"Error: {str(e)}"})
@@ -1874,7 +1839,7 @@ Ensure all tables are proper Markdown tables with header and separator rows.
             with ui.tab_panel(t_boq):
                 ui.label('Professional AI BOQ Takeoff & Cost Estimation').classes('text-2xl font-bold text-white mb-2')
                 ui.markdown('Upload project drawings (PDF, JPG, PNG). AI will extract mass quantities automatically.').classes('markdown-body mb-2')
-                ui.markdown('*For PDFs, up to 6 pages are processed for best results.*').classes('text-xs text-yellow-400 mb-4')
+                ui.markdown('*For PDFs, only the first page is processed for best quality.*').classes('text-xs text-yellow-400 mb-4')
 
                 # Global BOQ parameters (shared across all sub-tabs)
                 with ui.column().classes('input-card w-full mb-4'):
@@ -2037,7 +2002,7 @@ Return ONLY valid JSON.
                                                 img_part = types.Part.from_bytes(data=arch_file_data[key]['bytes'], mime_type=arch_file_data[key]['type'])
                                                 contents.append(img_part)
 
-                                            response = await call_gemini(contents, temperature=0, timeout=240)
+                                            response = await call_gemini(contents, temperature=0, timeout=300)
                                             json_str = response.strip()
                                             json_str = re.sub(r'^```json\s*', '', json_str)
                                             json_str = re.sub(r'\s*```$', '', json_str)
@@ -2304,7 +2269,7 @@ Return ONLY valid JSON.
                                                     }
                                                     code_basis = code_basis_select.value
                                                     # Call AI extraction
-                                                    data = await extract_mass_with_ai(key, file_data['bytes'], file_data['type'], user_params, code_basis)
+                                                    data, raw_response = await extract_mass_with_ai(key, file_data['bytes'], file_data['type'], user_params, code_basis)
                                                     # Compute quantities – now returns results, total_concrete, missing_groups
                                                     results, total_concrete, missing_groups = compute_mass_from_ai_data(key, data, user_params)
 
@@ -2319,28 +2284,24 @@ Return ONLY valid JSON.
                                                                 ui.label(group['label']).classes('text-white font-bold mt-2')
                                                                 for field in group['missing']:
                                                                     label = FIELD_LABELS.get(field, field)
-                                                                    # Pre-fill with floor height if height and checkbox enabled
                                                                     if field == 'height_mm' and use_floor_height_check.value:
                                                                         default_val = floor_height_global.value
                                                                     else:
                                                                         default_val = None
                                                                     inputs[f"{group['idx']}_{field}"] = ui.number(label=label, value=default_val).classes('w-full')
                                                             async def confirm_missing():
-                                                                # Update the original data with filled values
                                                                 for group in missing_groups:
                                                                     for field in group['missing']:
                                                                         key_input = f"{group['idx']}_{field}"
                                                                         if key_input in inputs and inputs[key_input].value is not None:
                                                                             data[group['idx']][field] = inputs[key_input].value
                                                                 modal.close()
-                                                                # Recompute with filled data
                                                                 new_results, new_total, _ = compute_mass_from_ai_data(key, data, user_params)
                                                                 if not new_results:
                                                                     output.clear()
                                                                     with output:
                                                                         ui.label('Still missing data. Please fill all required fields.').classes('text-amber-400')
                                                                     return
-                                                                # Display results
                                                                 df = generate_boq_table(new_results, 'structural', key, wastage_percent_global.value, 'mass')
                                                                 df_holder[0] = df
                                                                 boq_results['structural'][f"{key}_mass"] = df
@@ -2387,17 +2348,16 @@ Return ONLY valid JSON.
                                                                     ui.button('Export Excel', on_click=download_mass_excel).classes('primary-btn flex-1')
                                                             ui.button('Confirm & Calculate', on_click=confirm_missing).classes('primary-btn')
                                                         modal.open()
-                                                        return  # Wait for modal to close
+                                                        return
 
-                                                    # If no missing groups, directly display results
                                                     if not results:
                                                         output.clear()
-                                                        # Show the raw AI response for debugging
-                                                        raw_response = json.dumps(data, indent=2) if data else "Empty data received."
+                                                        raw_display = raw_response if raw_response else "Empty data received."
                                                         with output:
                                                             ui.label('No valid groups extracted. Ensure the drawing contains clear dimensions and labels.').classes('text-amber-400')
-                                                            ui.markdown(f"**AI Response:**\n```json\n{raw_response[:1000]}\n```").classes('text-xs text-gray-400')
+                                                            ui.markdown(f"**AI Response:**\n```json\n{raw_display[:1000]}\n```").classes('text-xs text-gray-400')
                                                         return
+
                                                     df = generate_boq_table(results, 'structural', key, wastage_percent_global.value, 'mass')
                                                     df_holder[0] = df
                                                     boq_results['structural'][f"{key}_mass"] = df
@@ -2498,7 +2458,7 @@ Return ONLY valid JSON array.
                                                         contents.append(types.Part.from_bytes(data=file_bytes, mime_type='application/pdf'))
                                                 else:
                                                     contents.append(types.Part.from_bytes(data=file_bytes, mime_type=file_type))
-                                                response = await call_gemini_json(contents, temperature=0, timeout=240)
+                                                response = await call_gemini_json(contents, temperature=0, timeout=300)
                                                 return json.loads(response)
 
                                             async def run_rebar_extraction(key=el_key, output=rebar_output, export=rebar_export, df_holder=rebar_df_holder):
@@ -2522,7 +2482,6 @@ Return ONLY valid JSON array.
                                                     }
                                                     code_basis = code_basis_select.value
                                                     data = await extract_rebar_with_ai(el_key, file_data['bytes'], file_data['type'], user_params, code_basis)
-                                                    # Compute rebar quantities
                                                     results, total_concrete, total_rebar = compute_rebar_quantities(el_key, data, user_params)
                                                     df = generate_boq_table(results, 'structural', el_key, wastage_percent_global.value, 'rebar')
                                                     df_holder[0] = df
