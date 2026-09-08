@@ -2118,11 +2118,11 @@ Ensure all tables are proper Markdown tables with header and separator rows.
         
                        # =========================================================================
             # =========================================================================
-            # TAB 5: PROFESSIONAL BOQ TAKEOFF (SIMPLEST RELIABLE APPROACH)
+            # TAB 5: PROFESSIONAL BOQ TAKEOFF (VISUAL SCRATCHPAD)
             # =========================================================================
             with ui.tab_panel(t_boq):
                 ui.label('Professional AI BOQ Takeoff & Cost Estimation').classes('text-2xl font-bold text-white mb-2')
-                ui.markdown('Upload a structural plan (PDF, JPG, PNG). The AI will extract columns and counts separately for accuracy.').classes('markdown-body mb-2')
+                ui.markdown('Upload a structural plan (PDF, JPG, PNG). The AI will mark columns with a visual scratchpad.').classes('markdown-body mb-2')
                 ui.markdown('*For PDFs, up to 6 pages are processed.*').classes('text-xs text-yellow-400 mb-4')
 
                 # Global Parameters
@@ -2156,21 +2156,40 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                 boq_export = ui.row().classes('w-full gap-4 mt-4')
 
                 # --------------------------------------------------------------------
-                # AI EXTRACTION FUNCTIONS
+                # VISUAL SCRATCHPAD EXTRACTION
                 # --------------------------------------------------------------------
-                async def extract_dimensions(file_bytes, file_type):
-                    """Extract labels and dimensions (without counts)."""
+                import io
+                from PIL import Image, ImageDraw
+
+                def draw_marks_on_image(image_bytes, marks, output_format='PNG'):
+                    """Draw red circles on the image at the given mark centers."""
+                    img = Image.open(io.BytesIO(image_bytes))
+                    draw = ImageDraw.Draw(img)
+                    for mark in marks:
+                        y, x = mark  # y, x are pixel coordinates from bounding box center
+                        draw.ellipse((x-10, y-10, x+10, y+10), outline='red', width=3)
+                    buf = io.BytesIO()
+                    img.save(buf, format=output_format)
+                    return buf.getvalue()
+
+                def extract_bbox_center(bbox):
+                    """Return (center_y, center_x) from [ymin, xmin, ymax, xmax]."""
+                    ymin, xmin, ymax, xmax = bbox
+                    return ((ymin + ymax) // 2, (xmin + xmax) // 2)
+
+                async def extract_columns_with_bbox(file_bytes, file_type, temperature=0):
+                    """Extract columns with bounding boxes."""
                     prompt = """
-You are a Quantity Surveyor. Extract the column schedule from the drawing.
-For each unique column label (e.g., C1, C2), provide:
-- label: the column mark
+You are a Quantity Surveyor. Scan the column layout drawing.
+For each column you see, output a JSON array of objects with:
+- label: the column mark (e.g., C1)
 - width_mm: width in mm
 - depth_mm: depth in mm
+- bounding_box: [ymin, xmin, ymax, xmax] as integer pixel coordinates
 
-Return ONLY a JSON array of objects.
-Example: [{"label":"C1","width_mm":300,"depth_mm":300}]
-
-If a dimension is not visible, set it to null.
+If a column is already marked with a red circle, ignore it.
+Return ONLY a JSON array. If no unmarked columns are found, return an empty array [].
+Example: [{"label":"C1","width_mm":300,"depth_mm":300,"bounding_box":[120,340,180,410]}]
 """
                     contents = [prompt]
                     if file_type == 'application/pdf':
@@ -2188,7 +2207,7 @@ If a dimension is not visible, set it to null.
                             contents.append(types.Part.from_bytes(data=file_bytes, mime_type='application/pdf'))
                     else:
                         contents.append(types.Part.from_bytes(data=file_bytes, mime_type=file_type))
-                    response_text = await call_gemini_json(contents, temperature=0, timeout=300)
+                    response_text = await call_gemini_json(contents, temperature=temperature, timeout=300)
                     json_str = response_text.strip()
                     json_str = re.sub(r'^```json\s*', '', json_str)
                     json_str = re.sub(r'\s*```$', '', json_str)
@@ -2196,78 +2215,127 @@ If a dimension is not visible, set it to null.
                     end = json_str.rfind(']')
                     if start != -1 and end != -1:
                         json_str = json_str[start:end+1]
+                    else:
+                        # try to parse as object with data field
+                        start = json_str.find('{')
+                        end = json_str.rfind('}')
+                        if start != -1 and end != -1:
+                            obj = json.loads(json_str[start:end+1])
+                            if 'data' in obj and isinstance(obj['data'], list):
+                                return obj['data']
+                            elif 'extracted_columns' in obj and isinstance(obj['extracted_columns'], list):
+                                return obj['extracted_columns']
+                            elif 'label' in obj:
+                                return [obj]
+                        return []
                     data = json.loads(json_str)
                     if isinstance(data, list):
                         return data
-                    elif isinstance(data, dict):
-                        if 'data' in data and isinstance(data['data'], list):
-                            return data['data']
-                        elif 'label' in data:
-                            return [data]
+                    elif isinstance(data, dict) and 'label' in data:
+                        return [data]
                     return []
 
-                async def extract_counts(file_bytes, file_type, labels):
-                    """Count occurrences of each label."""
-                    if not labels:
-                        return {}
-                    prompt = f"""
-You are a Quantity Surveyor. Count how many times each of the following column labels appears in the drawing.
-Labels: {', '.join(labels)}
+                def iou(box1, box2):
+                    y1, x1, y2, x2 = box1
+                    y3, x3, y4, x4 = box2
+                    inter_y1 = max(y1, y3)
+                    inter_x1 = max(x1, x3)
+                    inter_y2 = min(y2, y4)
+                    inter_x2 = min(x2, x4)
+                    if inter_y2 < inter_y1 or inter_x2 < inter_x1:
+                        return 0.0
+                    inter_area = (inter_y2 - inter_y1) * (inter_x2 - inter_x1)
+                    box1_area = (y2 - y1) * (x2 - x1)
+                    box2_area = (y4 - y3) * (x4 - x3)
+                    union_area = box1_area + box2_area - inter_area
+                    return inter_area / union_area if union_area > 0 else 0.0
 
-Return ONLY a JSON object mapping label -> count.
-Example: {{"C1": 6, "C2": 4}}
-If a label does not appear, set its count to 0.
-"""
-                    contents = [prompt]
-                    if file_type == 'application/pdf':
-                        try:
-                            doc = fitz.open(stream=file_bytes, filetype="pdf")
-                            for page_num in range(min(6, len(doc))):
-                                page = doc.load_page(page_num)
-                                mat = fitz.Matrix(2.0, 2.0)
-                                pix = page.get_pixmap(matrix=mat)
-                                img_bytes = pix.tobytes("png")
-                                img_part = types.Part.from_bytes(data=img_bytes, mime_type="image/png")
-                                contents.append(img_part)
-                            doc.close()
-                        except:
-                            contents.append(types.Part.from_bytes(data=file_bytes, mime_type='application/pdf'))
-                    else:
-                        contents.append(types.Part.from_bytes(data=file_bytes, mime_type=file_type))
-                    response_text = await call_gemini_json(contents, temperature=0, timeout=300)
-                    json_str = response_text.strip()
-                    json_str = re.sub(r'^```json\s*', '', json_str)
-                    json_str = re.sub(r'\s*```$', '', json_str)
-                    start = json_str.find('{')
-                    end = json_str.rfind('}')
-                    if start != -1 and end != -1:
-                        json_str = json_str[start:end+1]
-                    data = json.loads(json_str)
-                    return data
+                def deduplicate_boxes(detections, iou_threshold=0.5):
+                    unique = []
+                    for det in detections:
+                        box = det.get('bounding_box')
+                        if not box:
+                            continue
+                        is_dup = False
+                        for u in unique:
+                            if iou(box, u['bounding_box']) > iou_threshold and det.get('label') == u.get('label'):
+                                is_dup = True
+                                break
+                        if not is_dup:
+                            unique.append(det)
+                    return unique
+
+                async def run_visual_scratchpad(file_bytes, file_type):
+                    """Run the visual scratchpad loop."""
+                    all_detections = []
+                    current_image = file_bytes
+                    max_passes = 3
+                    pass_count = 0
+
+                    while pass_count < max_passes:
+                        pass_count += 1
+                        ui.notify(f'Scratchpad pass {pass_count}...', type='info')
+                        # Extract from current image
+                        detections = await extract_columns_with_bbox(current_image, file_type, temperature=0)
+                        if not detections:
+                            break
+                        # Deduplicate within this pass
+                        deduped = deduplicate_boxes(detections, iou_threshold=0.5)
+                        if not deduped:
+                            break
+                        # Add to all detections (deduplicate globally)
+                        all_detections.extend(deduped)
+                        all_detections = deduplicate_boxes(all_detections, iou_threshold=0.5)
+
+                        # If this is the last pass, break
+                        if pass_count == max_passes:
+                            break
+
+                        # Mark the image with red circles at the centers of newly found columns
+                        marks = [extract_bbox_center(d['bounding_box']) for d in deduped if d.get('bounding_box')]
+                        if marks:
+                            current_image = draw_marks_on_image(current_image, marks)
+                            # Update file_type to PNG (since we converted)
+                            file_type = 'image/png'
+                        else:
+                            break
+
+                    return all_detections
 
                 # --------------------------------------------------------------------
                 # COMPUTATION FUNCTION
                 # --------------------------------------------------------------------
-                def compute_boq(dimensions, counts, user_params):
+                def compute_boq(detections, user_params):
                     rows = []
                     floor_height = user_params.get('floor_height_mm', 3000) / 1000
                     wastage = user_params.get('wastage', 5)
                     concrete_rate = UNIT_RATES.get('Concrete (C30/37)', 2500)
 
-                    for d in dimensions:
+                    # Group by label and count
+                    groups = {}
+                    for d in detections:
                         label = d.get('label', 'Unknown')
-                        w = d.get('width_mm', 0)
-                        depth = d.get('depth_mm', 0)
-                        count = counts.get(label, 0)
-                        if count == 0:
-                            continue
-                        if w == 0 or depth == 0:
+                        if label not in groups:
+                            groups[label] = {'count': 0, 'width': d.get('width_mm', 0), 'depth': d.get('depth_mm', 0)}
+                        groups[label]['count'] += 1
+                        # Use the first non-zero dimensions
+                        if groups[label]['width'] == 0 and d.get('width_mm', 0) != 0:
+                            groups[label]['width'] = d.get('width_mm')
+                        if groups[label]['depth'] == 0 and d.get('depth_mm', 0) != 0:
+                            groups[label]['depth'] = d.get('depth_mm')
+
+                    for label, data in groups.items():
+                        w = data['width']
+                        depth = data['depth']
+                        count = data['count']
+                        if count == 0 or w == 0 or depth == 0:
                             continue
                         h = None
                         if user_params.get('use_floor_height'):
                             h = user_params.get('floor_height_mm', 3000)
                         if h is None:
-                            h = d.get('height_mm')
+                            # Try to get height from dimensions (if present)
+                            h = None
                         if h is None:
                             continue
                         h_m = h / 1000
@@ -2321,7 +2389,7 @@ If a label does not appear, set its count to 0.
                     boq_export.clear()
                     with boq_output:
                         ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
-                        ui.label('Extracting column dimensions...').classes('self-center text-sm')
+                        ui.label('Running visual scratchpad (3 passes)...').classes('self-center text-sm')
 
                     try:
                         user_params = {
@@ -2332,50 +2400,29 @@ If a label does not appear, set its count to 0.
                             'rebar_grade': rebar_grade_global.value,
                         }
 
-                        # Step 1: Extract dimensions
-                        dimensions = await extract_dimensions(boq_file_data['bytes'], boq_file_data['type'])
-                        if not dimensions:
+                        # Run the visual scratchpad
+                        detections = await run_visual_scratchpad(boq_file_data['bytes'], boq_file_data['type'])
+
+                        if not detections:
                             boq_output.clear()
                             with boq_output:
-                                ui.label('No columns detected. Please ensure the drawing contains clear column labels and dimensions.').classes('text-amber-400')
-                                ui.markdown('You can manually enter the data using the "Manual Entry" button below.').classes('text-white')
+                                ui.label('No columns detected after visual scratchpad.').classes('text-amber-400')
+                                ui.markdown('Please ensure the drawing contains clear column labels and dimensions.').classes('text-white')
                             return
 
-                        labels = [d.get('label') for d in dimensions if d.get('label')]
-                        if not labels:
-                            boq_output.clear()
-                            with boq_output:
-                                ui.label('No column labels found.').classes('text-amber-400')
-                            return
-
-                        # Step 2: Count occurrences
-                        ui.notify(f'Counting {len(labels)} labels...', type='info')
-                        with boq_output:
-                            ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
-                            ui.label('Counting column occurrences...').classes('self-center text-sm')
-
-                        counts = await extract_counts(boq_file_data['bytes'], boq_file_data['type'], labels)
-
-                        if not counts:
-                            boq_output.clear()
-                            with boq_output:
-                                ui.label('Could not count columns. Please try again or use manual entry.').classes('text-amber-400')
-                            return
-
-                        # Step 3: Compute
-                        df = compute_boq(dimensions, counts, user_params)
+                        # Compute
+                        df = compute_boq(detections, user_params)
                         if df is None:
                             boq_output.clear()
                             with boq_output:
-                                ui.label('Could not compute quantities. Missing dimensions (height).').classes('text-amber-400')
-                                ui.markdown('Please check "Use floor height" or provide height manually.').classes('text-white')
+                                ui.label('Could not compute quantities. Missing height or dimensions.').classes('text-amber-400')
                             return
 
                         # Display
                         boq_output.clear()
                         with boq_output:
                             with ui.column().classes('output-card w-full'):
-                                ui.label('Columns Bill of Quantities').classes('text-xl font-bold text-white mb-2')
+                                ui.label('Columns Bill of Quantities (Visual Scratchpad)').classes('text-xl font-bold text-white mb-2')
                                 def df_to_md(df):
                                     lines = []
                                     headers = list(df.columns)
@@ -2435,13 +2482,13 @@ If a label does not appear, set its count to 0.
                                 try:
                                     meta = current_meta('BOQ')
                                     pdf_bytes = build_report_pdf(
-                                        "BOQ Report - Columns",
-                                        f"AI extraction",
+                                        "BOQ Report - Columns (Visual Scratchpad)",
+                                        f"Scratchpad extraction",
                                         df_to_md(df),
                                         meta,
                                         logo_bytes_holder['bytes'],
                                     )
-                                    ui.download(pdf_bytes, filename=f"BOQ_Columns_{ticket_input.value}.pdf")
+                                    ui.download(pdf_bytes, filename=f"BOQ_Columns_Scratchpad_{ticket_input.value}.pdf")
                                     ui.notify('PDF downloaded', type='positive')
                                 except Exception as ex:
                                     ui.notify(f'PDF Error: {str(ex)}', type='negative')
@@ -2451,7 +2498,7 @@ If a label does not appear, set its count to 0.
                                     with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
                                         df.to_excel(writer, sheet_name='BOQ', index=False)
                                     excel_buffer.seek(0)
-                                    ui.download(excel_buffer.getvalue(), filename=f"BOQ_Columns_{ticket_input.value}.xlsx")
+                                    ui.download(excel_buffer.getvalue(), filename=f"BOQ_Columns_Scratchpad_{ticket_input.value}.xlsx")
                                     ui.notify('Excel downloaded', type='positive')
                                 except Exception as ex:
                                     ui.notify(f'Excel Error: {str(ex)}', type='negative')
@@ -2463,135 +2510,8 @@ If a label does not appear, set its count to 0.
                         with boq_output:
                             ui.notify(f'Extraction failed: {str(ex)}', type='negative')
                             ui.label('Error occurred. Please try again with a clearer drawing.').classes('text-red-400')
-                            if hasattr(ex, 'response_text'):
-                                ui.markdown(f"**AI Response:**\n```json\n{ex.response_text[:1000]}\n```").classes('text-xs text-gray-400')
 
-                # --------------------------------------------------------------------
-                # MANUAL ENTRY FALLBACK
-                # --------------------------------------------------------------------
-                def show_manual_entry():
-                    boq_output.clear()
-                    boq_export.clear()
-                    with boq_output:
-                        ui.label('Manual Column Entry').classes('text-xl font-bold text-white mb-2')
-                        ui.markdown('Enter the column data below. Click "Add Row" to add more columns.').classes('text-white')
-                        rows_container = ui.column().classes('w-full')
-                        manual_rows = []
-
-                        def add_row(label='', width=0, depth=0, count=0, height=0):
-                            with rows_container:
-                                with ui.row().classes('w-full gap-2 items-center'):
-                                    lbl = ui.input(label='Label', value=label).classes('w-1/6')
-                                    w = ui.number(label='Width (mm)', value=width, step=10).classes('w-1/6')
-                                    d = ui.number(label='Depth (mm)', value=depth, step=10).classes('w-1/6')
-                                    h = ui.number(label='Height (mm)', value=height, step=10).classes('w-1/6')
-                                    c = ui.number(label='Count', value=count, step=1, min=0).classes('w-1/6')
-                                    btn = ui.button('✕', on_click=lambda row=len(manual_rows): remove_row(row)).classes('bg-red-800 text-white p-1 min-w-[30px] !shadow-none !rounded-full')
-                                    manual_rows.append({'label': lbl, 'width': w, 'depth': d, 'height': h, 'count': c, 'ui': (lbl, w, d, h, c, btn)})
-
-                        def remove_row(index):
-                            if index < len(manual_rows):
-                                row = manual_rows[index]
-                                for el in row['ui']:
-                                    el.delete()
-                                manual_rows.pop(index)
-                                ui.notify('Row removed', type='info')
-
-                        # Add a default row
-                        add_row()
-
-                        ui.button('Add Row', on_click=lambda: add_row()).classes('primary-btn mt-2')
-
-                        async def calculate_manual():
-                            # Gather data
-                            rows_data = []
-                            for row in manual_rows:
-                                label = row['label'].value.strip()
-                                if not label:
-                                    continue
-                                w = row['width'].value or 0
-                                d = row['depth'].value or 0
-                                h = row['height'].value or 0
-                                c = row['count'].value or 0
-                                if w == 0 or d == 0 or h == 0 or c == 0:
-                                    ui.notify(f'Missing data for {label}. Please fill all fields.', type='warning')
-                                    return
-                                rows_data.append({
-                                    'label': label,
-                                    'width_mm': w,
-                                    'depth_mm': d,
-                                    'height_mm': h,
-                                    'count': c
-                                })
-                            if not rows_data:
-                                ui.notify('No valid rows. Add at least one row with data.', type='warning')
-                                return
-
-                            # Compute
-                            user_params = {
-                                'floor_height_mm': floor_height_global.value,
-                                'use_floor_height': use_floor_height_check.value,
-                                'wastage': wastage_percent_global.value,
-                                'concrete_grade': concrete_grade_global.value,
-                                'rebar_grade': rebar_grade_global.value,
-                            }
-                            # Build dimensions and counts
-                            dimensions = [{'label': d['label'], 'width_mm': d['width_mm'], 'depth_mm': d['depth_mm']} for d in rows_data]
-                            counts = {d['label']: d['count'] for d in rows_data}
-                            df = compute_boq(dimensions, counts, user_params)
-                            if df is None:
-                                ui.notify('Could not compute quantities. Check dimensions.', type='error')
-                                return
-                            # Display
-                            boq_output.clear()
-                            with boq_output:
-                                with ui.column().classes('output-card w-full'):
-                                    ui.label('Columns Bill of Quantities (Manual Entry)').classes('text-xl font-bold text-white mb-2')
-                                    def df_to_md(df):
-                                        lines = []
-                                        headers = list(df.columns)
-                                        lines.append("| " + " | ".join(headers) + " |")
-                                        lines.append("|" + "|".join(["---"] * len(headers)) + "|")
-                                        for _, row in df.iterrows():
-                                            row_str = "| " + " | ".join(str(val) for val in row) + " |"
-                                            lines.append(row_str)
-                                        return "\n".join(lines)
-                                    ui.markdown(df_to_md(df)).classes('markdown-body')
-                            boq_export.clear()
-                            with boq_export:
-                                def download_manual_pdf():
-                                    try:
-                                        meta = current_meta('BOQ')
-                                        pdf_bytes = build_report_pdf(
-                                            "BOQ Report - Columns (Manual)",
-                                            "Manual entry",
-                                            df_to_md(df),
-                                            meta,
-                                            logo_bytes_holder['bytes'],
-                                        )
-                                        ui.download(pdf_bytes, filename=f"BOQ_Columns_Manual_{ticket_input.value}.pdf")
-                                        ui.notify('PDF downloaded', type='positive')
-                                    except Exception as ex:
-                                        ui.notify(f'PDF Error: {str(ex)}', type='negative')
-                                def download_manual_excel():
-                                    try:
-                                        excel_buffer = io.BytesIO()
-                                        with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
-                                            df.to_excel(writer, sheet_name='BOQ', index=False)
-                                        excel_buffer.seek(0)
-                                        ui.download(excel_buffer.getvalue(), filename=f"BOQ_Columns_Manual_{ticket_input.value}.xlsx")
-                                        ui.notify('Excel downloaded', type='positive')
-                                    except Exception as ex:
-                                        ui.notify(f'Excel Error: {str(ex)}', type='negative')
-                                ui.button('Download PDF', on_click=download_manual_pdf).classes('primary-btn flex-1')
-                                ui.button('Export Excel', on_click=download_manual_excel).classes('primary-btn flex-1')
-
-                        ui.button('Calculate Manual BOQ', on_click=calculate_manual).classes('primary-btn mt-4')
-
-                # Buttons
-                with ui.row().classes('w-full gap-4 mt-4'):
-                    ui.button('Run AI Extraction', on_click=run_boq_extraction).classes('primary-btn flex-1')
-                    ui.button('Manual Entry (Fallback)', on_click=show_manual_entry).classes('primary-btn flex-1')
+                ui.button('Run Visual Scratchpad Extraction', on_click=run_boq_extraction).classes('primary-btn mt-4')
         # ---------------- FOOTER (unchanged) ----------------
         ui.html('''
         <div class="app-footer">
