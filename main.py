@@ -2152,6 +2152,10 @@ Return ONLY valid JSON.
 
                         with ui.tab_panels(struct_sub_tabs, value=struct_tab_objects['Columns']).classes('w-full bg-transparent mt-4'):
                             # For each structural element, we have mass (AI) and rebar (AI) sub-tabs
+                            # We'll use dictionaries to store file data per element key
+                            mass_file_data_dict = {}
+                            rebar_file_data_dict = {}
+
                             for el_display, el_key in [('Columns', 'columns'), ('Beams', 'beams'), ('Slabs', 'slabs'), ('Footings', 'footings'), ('Walls', 'walls')]:
                                 with ui.tab_panel(struct_tab_objects[el_display]):
                                     ui.label(f'{el_display} - Mass & Rebar Takeoff').classes('text-xl font-bold text-white mb-2')
@@ -2163,12 +2167,14 @@ Return ONLY valid JSON.
                                         # ---- Mass Quantities (AI Extraction) ----
                                         with ui.tab_panel(mass_tab):
                                             ui.label(f'{el_display} - Mass Quantities (AI Extract)').classes('text-lg font-bold text-white mb-2')
+                                            # Use a dict for this element's mass file
                                             mass_file_data = {'bytes': None, 'type': None}
+                                            mass_file_data_dict[el_key] = mass_file_data
                                             mass_status = ui.label('Status: No file uploaded').classes('text-xs text-amber-400 font-semibold mb-2')
                                             async def handle_mass_upload(e, key=el_key):
                                                 try:
-                                                    mass_file_data['bytes'] = await e.file.read()
-                                                    mass_file_data['type'] = 'application/pdf' if e.file.name.lower().endswith('.pdf') else 'image/jpeg'
+                                                    mass_file_data_dict[key]['bytes'] = await e.file.read()
+                                                    mass_file_data_dict[key]['type'] = 'application/pdf' if e.file.name.lower().endswith('.pdf') else 'image/jpeg'
                                                     mass_status.set_text(f'File Ready: {e.file.name}')
                                                     mass_status.classes(replace='text-xs text-emerald-400 font-semibold mb-2')
                                                     ui.notify(f'Mass file uploaded: {e.file.name}', type='positive')
@@ -2180,11 +2186,12 @@ Return ONLY valid JSON.
                                             mass_export = ui.row().classes('w-full gap-4 mt-4')
                                             mass_df_holder = [None]
 
-                                            async def run_mass_extraction(key=el_key, file_data=mass_file_data, output=mass_output, export=mass_export, df_holder=mass_df_holder):
+                                            async def run_mass_extraction(key=el_key, output=mass_output, export=mass_export, df_holder=mass_df_holder):
                                                 if not client:
                                                     ui.notify('GEMINI_API_KEY missing!', type='negative')
                                                     return
-                                                if not file_data['bytes']:
+                                                file_data = mass_file_data_dict.get(key)
+                                                if not file_data or not file_data['bytes']:
                                                     ui.notify('Please upload a drawing for mass quantities.', type='warning')
                                                     return
                                                 output.clear()
@@ -2266,11 +2273,12 @@ Return ONLY valid JSON.
                                         with ui.tab_panel(rebar_tab):
                                             ui.label(f'{el_display} - Reinforcement Takeoff (AI)').classes('text-lg font-bold text-white mb-2')
                                             rebar_file_data = {'bytes': None, 'type': None}
+                                            rebar_file_data_dict[el_key] = rebar_file_data
                                             rebar_status = ui.label('Status: No file uploaded').classes('text-xs text-amber-400 font-semibold mb-2')
                                             async def handle_rebar_upload(e, key=el_key):
                                                 try:
-                                                    rebar_file_data['bytes'] = await e.file.read()
-                                                    rebar_file_data['type'] = 'application/pdf' if e.file.name.lower().endswith('.pdf') else 'image/jpeg'
+                                                    rebar_file_data_dict[key]['bytes'] = await e.file.read()
+                                                    rebar_file_data_dict[key]['type'] = 'application/pdf' if e.file.name.lower().endswith('.pdf') else 'image/jpeg'
                                                     rebar_status.set_text(f'File Ready: {e.file.name}')
                                                     rebar_status.classes(replace='text-xs text-emerald-400 font-semibold mb-2')
                                                     ui.notify(f'Rebar file uploaded: {e.file.name}', type='positive')
@@ -2281,7 +2289,6 @@ Return ONLY valid JSON.
                                             rebar_export = ui.row().classes('w-full gap-4 mt-4')
                                             rebar_df_holder = [None]
 
-                                            # Async function for rebar extraction
                                             async def extract_rebar_with_ai(element_type, file_bytes, file_type, user_params, code_basis):
                                                 prompt = f"""
 You are an expert Quantity Surveyor. Extract rebar details from the drawing.
@@ -2319,16 +2326,17 @@ Return ONLY valid JSON array.
                                                     json_str = json_str[start:end+1]
                                                 return json.loads(json_str)
 
-                                            async def run_rebar_extraction():
+                                            async def run_rebar_extraction(key=el_key, output=rebar_output, export=rebar_export, df_holder=rebar_df_holder):
                                                 if not client:
                                                     ui.notify('GEMINI_API_KEY missing!', type='negative')
                                                     return
-                                                if not rebar_file_data['bytes']:
+                                                file_data = rebar_file_data_dict.get(key)
+                                                if not file_data or not file_data['bytes']:
                                                     ui.notify('Please upload a drawing for reinforcement.', type='warning')
                                                     return
-                                                rebar_output.clear()
-                                                rebar_export.clear()
-                                                with rebar_output:
+                                                output.clear()
+                                                export.clear()
+                                                with output:
                                                     ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
                                                     ui.label('Extracting reinforcement details...').classes('self-center text-sm')
                                                 try:
@@ -2338,14 +2346,14 @@ Return ONLY valid JSON array.
                                                         'wastage': wastage_percent_global.value,
                                                     }
                                                     code_basis = code_basis_select.value
-                                                    data = await extract_rebar_with_ai(el_key, rebar_file_data['bytes'], rebar_file_data['type'], user_params, code_basis)
+                                                    data = await extract_rebar_with_ai(el_key, file_data['bytes'], file_data['type'], user_params, code_basis)
                                                     # Compute rebar quantities
                                                     results, total_concrete, total_rebar = compute_rebar_quantities(el_key, data, user_params)
                                                     df = generate_boq_table(results, 'structural', el_key, wastage_percent_global.value, 'rebar')
-                                                    rebar_df_holder[0] = df
+                                                    df_holder[0] = df
                                                     boq_results['structural'][f"{el_key}_rebar"] = df
-                                                    rebar_output.clear()
-                                                    with rebar_output:
+                                                    output.clear()
+                                                    with output:
                                                         with ui.column().classes('output-card w-full'):
                                                             ui.label(f'{el_display} Reinforcement BOQ').classes('text-xl font-bold text-white mb-2')
                                                             def df_to_md(df):
@@ -2358,7 +2366,7 @@ Return ONLY valid JSON array.
                                                                     lines.append(row_str)
                                                                 return "\n".join(lines)
                                                             ui.markdown(df_to_md(df)).classes('markdown-body')
-                                                    with rebar_export:
+                                                    with export:
                                                         def download_rebar_pdf(df=df):
                                                             try:
                                                                 meta = current_meta('BOQ')
@@ -2386,8 +2394,8 @@ Return ONLY valid JSON array.
                                                         ui.button('Download PDF', on_click=download_rebar_pdf).classes('primary-btn flex-1')
                                                         ui.button('Export Excel', on_click=download_rebar_excel).classes('primary-btn flex-1')
                                                 except Exception as ex:
-                                                    rebar_output.clear()
-                                                    with rebar_output:
+                                                    output.clear()
+                                                    with output:
                                                         ui.notify(f'Extraction failed: {str(ex)}', type='negative')
 
                                             ui.button('Extract Reinforcement Quantities', on_click=run_rebar_extraction).classes('primary-btn mt-2')
