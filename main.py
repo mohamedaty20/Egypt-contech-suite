@@ -2437,6 +2437,56 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import quote_plus
 
+"""
+job_scraper.py
+==============
+Drop-in replacement for `scrape_jobs()` used by the NiceGUI Job Board tab.
+
+Sources (in priority order — Wuzzuf results are always listed first):
+    1. Wuzzuf   (primary)
+    2. Bayt     (fallback)
+    3. Forasna  (extra)
+    4. Akhtaboot (extra)
+
+Design notes / why the old version likely returned nothing:
+--------------------------------------------------------------
+- Wuzzuf's frontend is built with a CSS-in-JS library (emotion/styled-
+  components), so class names like `css-1gatmva` are randomly hashed and
+  change on every deploy. Any scraper that hardcodes those class names
+  breaks the moment Wuzzuf ships a new build. This version instead anchors
+  on STABLE structural signals — the `<a href="...">` patterns each site
+  uses for job postings (e.g. `/jobs/p/` on Wuzzuf) — which survive CSS
+  rebuilds.
+- Cloud hosts (Render, Heroku, etc.) use shared/datacenter IPs. Some sites
+  are stricter with non-browser-looking traffic, so a realistic
+  `User-Agent` + `Accept-Language` header is included on every request.
+- Each source is wrapped in its own try/except so one site failing (layout
+  change, timeout, block) doesn't wipe out the other sources' results.
+- Debug logging (`print(...)`) is included so you can see exactly what
+  happened in your Render logs (status code, HTML length, cards found)
+  instead of silently getting an empty list.
+
+IMPORTANT CAVEAT
+-----------------
+I could not test this against the live sites (this environment has no
+outbound network access), so selectors are based on each site's typical
+HTML structure. Websites change their markup over time. If a source stops
+returning results:
+  1. Check the printed debug line for that source — status code 200 with
+     0 cards found means the SELECTOR is stale, not the network.
+  2. A non-200 status (403/429) usually means you're being rate-limited or
+     blocked — try adding a delay between requests, or rotating the
+     User-Agent.
+  3. Open the search URL in an incognito browser tab, view-source, and
+     search for a snippet of a job title to see the current wrapping tags.
+"""
+
+import os
+import re
+import requests
+from bs4 import BeautifulSoup
+from urllib.parse import quote_plus
+
 # ---------------------------------------------------------------------------
 # PRIMARY SOURCE: JSearch (RapidAPI), built on Google for Jobs.
 #
@@ -2451,7 +2501,7 @@ from urllib.parse import quote_plus
 # Get a free key at: https://rapidapi.com/letscrape-6bRBa3QguO5/api/jsearch
 # Then set the RAPIDAPI_KEY environment variable on Render.
 # ---------------------------------------------------------------------------
-RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY", "")
+RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY", "").strip()
 JSEARCH_HOST = "jsearch.p.rapidapi.com"
 
 
@@ -2462,6 +2512,7 @@ def scrape_jsearch(query, max_results=20):
     if not RAPIDAPI_KEY:
         print("[scraper][JSearch] No RAPIDAPI_KEY set — skipping primary source.")
         return jobs
+    print(f"[scraper][JSearch] Using key: length={len(RAPIDAPI_KEY)}, last4='{RAPIDAPI_KEY[-4:]}'")
     try:
         resp = requests.get(
             f"https://{JSEARCH_HOST}/search",
