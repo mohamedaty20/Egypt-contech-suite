@@ -2280,19 +2280,9 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
 # =====================================================================================
 # JOB SCRAPING FUNCTIONS (ULTRA-ROBUST + DEBUG LOGGING FOR RENDER)
 # =====================================================================================
-import os
-import re
-import time
-import random
-import requests
-import cloudscraper
-from bs4 import BeautifulSoup
-from urllib.parse import quote_plus
-
 RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY", "").strip()
 JSEARCH_HOST = "jsearch.p.rapidapi.com"
 REQUEST_TIMEOUT = 30
-SCRAPER_DEBUG = os.environ.get("SCRAPER_DEBUG", "false").lower() == "true"
 
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -2314,35 +2304,28 @@ def get_headers():
         "Connection": "keep-alive",
     }
 
-# Create a session with random user-agent
-session = requests.Session()
-session.headers.update(get_headers())
-session.cookies.set("wuzzuf_session", "1")
-session.cookies.set("bayt_session", "1")
-
-# Cloudscraper with fixed browser (no dict)
-scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False})
-scraper.headers.update(get_headers())
-
-def fetch_html(url, label, use_cloudscraper=False):
+def fetch_html(url, label):
     """Fetch URL with retries and detailed logging."""
     for attempt in range(2):
         try:
-            if use_cloudscraper:
-                resp = scraper.get(url, timeout=REQUEST_TIMEOUT)
-            else:
-                resp = session.get(url, timeout=REQUEST_TIMEOUT)
+            session = requests.Session()
+            session.headers.update(get_headers())
+            session.cookies.set("wuzzuf_session", "1")
+            session.cookies.set("bayt_session", "1")
+            resp = session.get(url, timeout=REQUEST_TIMEOUT)
             log(f"{label} GET {url} -> status={resp.status_code}, len={len(resp.text)}")
             if resp.status_code != 200:
                 log(f"{label} non-200 body preview: {resp.text[:200]}")
                 return None
-            # If debug mode, log the title and a snippet
             soup = BeautifulSoup(resp.text, "html.parser")
             title = soup.title.string if soup.title else "No title"
             log(f"{label} page title: {title}")
-            if SCRAPER_DEBUG:
-                snippet = re.sub(r'\s+', ' ', resp.text)[:500]
-                log(f"{label} HTML snippet: {snippet}")
+            # Log a snippet around 'job' for debugging
+            snippet = re.sub(r'\s+', ' ', resp.text)
+            idx = snippet.lower().find('job')
+            if idx != -1:
+                snippet = snippet[max(0, idx-100):idx+200]
+            log(f"{label} snippet: {snippet[:300]}")
             return soup
         except Exception as e:
             log(f"{label} request failed (attempt {attempt+1}): {e}")
@@ -2359,7 +2342,6 @@ def scrape_jsearch(query, max_results=20):
         {"query": query, "page": "1", "num_pages": "1", "engine": "google_jobs"},
         {"query": f"{query} Egypt", "page": "1", "num_pages": "1", "engine": "google_jobs"},
         {"query": query, "page": "1", "num_pages": "1", "country": "eg", "engine": "google_jobs"},
-        {"query": query, "page": "1", "num_pages": "1"},
     ]
     for params in params_list:
         try:
@@ -2403,12 +2385,7 @@ def scrape_jsearch(query, max_results=20):
 def scrape_wuzzuf_direct(query, max_results=20):
     jobs = []
     url = f"https://wuzzuf.net/search/jobs/?q={quote_plus(query)}&a=hpb"
-
-    # Try with normal session first
-    soup = fetch_html(url, "Wuzzuf", use_cloudscraper=False)
-    if soup is None:
-        # Fallback to cloudscraper
-        soup = fetch_html(url, "Wuzzuf", use_cloudscraper=True)
+    soup = fetch_html(url, "Wuzzuf")
     if soup is None:
         return jobs
 
@@ -2475,16 +2452,12 @@ def scrape_wuzzuf_direct(query, max_results=20):
                 break
 
     log(f"Wuzzuf parsed {len(jobs)} jobs")
-    if not jobs:
-        log("Wuzzuf: No job links found. Check the HTML title: " + (soup.title.string if soup.title else "No title"))
     return jobs
 
 def scrape_bayt_direct(query, max_results=20):
     jobs = []
     url = f"https://www.bayt.com/en/egypt/jobs/?search={quote_plus(query)}"
-    soup = fetch_html(url, "Bayt", use_cloudscraper=False)
-    if soup is None:
-        soup = fetch_html(url, "Bayt", use_cloudscraper=True)
+    soup = fetch_html(url, "Bayt")
     if soup is None:
         return jobs
 
@@ -2517,8 +2490,6 @@ def scrape_bayt_direct(query, max_results=20):
             })
         except Exception as e:
             log(f"Bayt card parse error: {e}")
-    if not jobs:
-        log("Bayt: No job cards found. Check the HTML title: " + (soup.title.string if soup.title else "No title"))
     log(f"Bayt parsed {len(jobs)} jobs")
     return jobs
 
