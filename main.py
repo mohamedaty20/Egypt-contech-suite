@@ -2387,68 +2387,311 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                 with ocr_output:
                     ui.markdown('*Upload a file and click "Transcribe Handwriting" to start.*').classes('text-sm text-[#A9B6D0]')
 
-            # =========================================================================
-            # TAB 6: JOB BOARD (FIXED)
-            # =========================================================================
-            with ui.tab_panel(t_jobs):
-                ui.label('Engineering Job Board - Egypt').classes('text-2xl font-bold text-white mb-4')
-                ui.markdown('Search for the latest engineering jobs in Egypt. Results are scraped from **Wuzzuf** (fallback to **Bayt** if needed). No API key required.').classes('markdown-body mb-2')
+"""
+job_scraper.py
+==============
+Drop-in replacement for `scrape_jobs()` used by the NiceGUI Job Board tab.
 
-                with ui.row().classes('w-full gap-4 mb-4'):
-                    search_input = ui.input(label='Search for jobs', placeholder='e.g., Civil Engineer', value='Civil Engineer').classes('flex-1')
-                    location_input = ui.input(label='Location (optional)', placeholder='e.g., Cairo').classes('flex-1')
-                    search_button = ui.button('Search Jobs', on_click=lambda: search_jobs()).classes('primary-btn')
+Sources (in priority order — Wuzzuf results are always listed first):
+    1. Wuzzuf   (primary)
+    2. Bayt     (fallback)
+    3. Forasna  (extra)
+    4. Akhtaboot (extra)
 
-                filter_input = ui.input(label='Filter results', placeholder='Type to filter title, company, description...', on_change=lambda: filter_jobs()).classes('w-full mb-2')
+Design notes / why the old version likely returned nothing:
+--------------------------------------------------------------
+- Wuzzuf's frontend is built with a CSS-in-JS library (emotion/styled-
+  components), so class names like `css-1gatmva` are randomly hashed and
+  change on every deploy. Any scraper that hardcodes those class names
+  breaks the moment Wuzzuf ships a new build. This version instead anchors
+  on STABLE structural signals — the `<a href="...">` patterns each site
+  uses for job postings (e.g. `/jobs/p/` on Wuzzuf) — which survive CSS
+  rebuilds.
+- Cloud hosts (Render, Heroku, etc.) use shared/datacenter IPs. Some sites
+  are stricter with non-browser-looking traffic, so a realistic
+  `User-Agent` + `Accept-Language` header is included on every request.
+- Each source is wrapped in its own try/except so one site failing (layout
+  change, timeout, block) doesn't wipe out the other sources' results.
+- Debug logging (`print(...)`) is included so you can see exactly what
+  happened in your Render logs (status code, HTML length, cards found)
+  instead of silently getting an empty list.
 
-                results_container = ui.column().classes('w-full')
-                jobs_data = []
+IMPORTANT CAVEAT
+-----------------
+I could not test this against the live sites (this environment has no
+outbound network access), so selectors are based on each site's typical
+HTML structure. Websites change their markup over time. If a source stops
+returning results:
+  1. Check the printed debug line for that source — status code 200 with
+     0 cards found means the SELECTOR is stale, not the network.
+  2. A non-200 status (403/429) usually means you're being rate-limited or
+     blocked — try adding a delay between requests, or rotating the
+     User-Agent.
+  3. Open the search URL in an incognito browser tab, view-source, and
+     search for a snippet of a job title to see the current wrapping tags.
+"""
 
-                def display_jobs(jobs, filter_text=''):
-                    results_container.clear()
-                    with results_container:
-                        if not jobs:
-                            ui.label('No jobs found. Try a different search.').classes('text-white')
-                            return
-                        filtered = jobs
-                        if filter_text:
-                            f_lower = filter_text.lower()
-                            filtered = [j for j in jobs if f_lower in j['title'].lower() or f_lower in j['company'].lower() or f_lower in j['description'].lower()]
-                        if not filtered:
-                            ui.label('No jobs match the filter.').classes('text-white')
-                            return
-                        for job in filtered:
-                            with ui.card().classes('w-full bg-[#0d1a35] border border-[#2c3f6b] rounded-lg p-3 mb-2'):
-                                with ui.row().classes('w-full justify-between'):
-                                    ui.label(job['title']).classes('text-lg font-bold text-white')
-                                    ui.label(job['company']).classes('text-sm text-[#A9B6D0]')
-                                ui.label(job['location']).classes('text-sm text-[#A9B6D0]')
-                                desc = job['description'][:200] + ('...' if len(job['description']) > 200 else '')
-                                ui.label(desc).classes('text-sm text-white mt-1')
-                                ui.link('View Job', job['url'], new_tab=True).classes('text-[#4FC3F7] hover:text-[#FF8C00]')
+import re
+import requests
+from bs4 import BeautifulSoup
+from urllib.parse import quote_plus
 
-                def filter_jobs():
-                    filter_text = filter_input.value.strip()
-                    display_jobs(jobs_data, filter_text)
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept-Language": "en-US,en;q=0.9,ar;q=0.8",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+}
 
-                async def search_jobs():
-                    query = search_input.value.strip()
-                    if not query:
-                        ui.notify('Please enter a search term.', type='warning')
-                        return
-                    location = location_input.value.strip()
-                    if location:
-                        query += f' {location}'
-                    ui.notify(f'Searching for "{query}"...', type='info')
-                    results_container.clear()
-                    with results_container:
-                        ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
-                        ui.label('Fetching job listings...').classes('self-center text-sm')
+REQUEST_TIMEOUT = 15
 
-                    jobs = await run.io_bound(scrape_jobs, query)
-                    jobs_data.clear()
-                    jobs_data.extend(jobs)
-                    display_jobs(jobs_data)
+
+def _get(url):
+    """Shared GET with logging. Returns BeautifulSoup or None."""
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+        print(f"[scraper] GET {url} -> status={resp.status_code}, len={len(resp.text)}")
+        if resp.status_code != 200:
+            return None
+        return BeautifulSoup(resp.text, "html.parser")
+    except Exception as e:
+        print(f"[scraper] request failed for {url}: {e}")
+        return None
+
+
+def scrape_wuzzuf(query, max_results=20):
+    jobs = []
+    url = f"https://wuzzuf.net/search/jobs/?q={quote_plus(query)}&a=hpb"
+    soup = _get(url)
+    if soup is None:
+        return jobs
+
+    # Job title links always point to /jobs/p/<id>-... regardless of CSS build.
+    title_links = soup.select('a[href*="/jobs/p/"]')
+    seen_urls = set()
+
+    for a in title_links:
+        href = a.get("href", "")
+        title = a.get_text(strip=True)
+        if not href or not title or href in seen_urls:
+            continue
+        seen_urls.add(href)
+
+        full_url = href if href.startswith("http") else f"https://wuzzuf.net{href}"
+
+        # Walk up to the nearest ancestor that looks like a job card
+        # (has more than one link inside it, e.g. company + title).
+        card = a
+        for _ in range(6):
+            card = card.parent
+            if card is None:
+                break
+            if len(card.find_all("a")) >= 2:
+                break
+
+        company, location_txt, desc = "", "", ""
+        if card is not None:
+            company_link = card.find("a", href=re.compile(r"/employers/"))
+            if company_link:
+                company = company_link.get_text(strip=True)
+            text_chunks = [
+                t.get_text(strip=True)
+                for t in card.find_all(["span", "div"])
+                if t.get_text(strip=True)
+            ]
+            # Filter out the title/company text we already captured, keep the rest as description
+            text_chunks = [t for t in text_chunks if t not in (title, company)]
+            desc = " | ".join(dict.fromkeys(text_chunks))[:400]  # dedupe, keep order
+
+        jobs.append({
+            "title": title,
+            "company": company or "N/A",
+            "location": location_txt or "Egypt",
+            "description": desc or "No description preview available — click 'View Job' for details.",
+            "url": full_url,
+            "source": "Wuzzuf",
+        })
+        if len(jobs) >= max_results:
+            break
+
+    print(f"[scraper] Wuzzuf: {len(jobs)} jobs parsed")
+    return jobs
+
+
+def scrape_bayt(query, max_results=20):
+    jobs = []
+    slug = quote_plus(query.replace(" ", "-"))
+    url = f"https://www.bayt.com/en/egypt/jobs/{slug}-jobs/"
+    soup = _get(url)
+    if soup is None:
+        return jobs
+
+    # Bayt job cards are <li> elements with an id starting with "job_"
+    cards = soup.select('li[id^="job_"]') or soup.select("div.has-pointer-d")
+
+    for card in cards[:max_results]:
+        a = card.find("h2") and card.find("h2").find("a")
+        if not a:
+            a = card.find("a", href=re.compile(r"/job/"))
+        if not a:
+            continue
+        title = a.get_text(strip=True)
+        href = a.get("href", "")
+        full_url = href if href.startswith("http") else f"https://www.bayt.com{href}"
+
+        company_el = card.select_one("div.t-nowrap.p10l.p10r.t-mute, .jb-company")
+        company = company_el.get_text(strip=True) if company_el else "N/A"
+
+        loc_el = card.select_one(".t-mute.t-small")
+        location_txt = loc_el.get_text(strip=True) if loc_el else "Egypt"
+
+        desc_el = card.select_one("p")
+        desc = desc_el.get_text(strip=True) if desc_el else "No description preview available."
+
+        jobs.append({
+            "title": title,
+            "company": company,
+            "location": location_txt,
+            "description": desc,
+            "url": full_url,
+            "source": "Bayt",
+        })
+
+    print(f"[scraper] Bayt: {len(jobs)} jobs parsed")
+    return jobs
+
+
+def scrape_forasna(query, max_results=15):
+    jobs = []
+    url = f"https://forasna.com/jobs-in-egypt/?s={quote_plus(query)}"
+    soup = _get(url)
+    if soup is None:
+        return jobs
+
+    articles = soup.select("article") or soup.select(".job-listing, .job_listing")
+    for art in articles[:max_results]:
+        a = art.find("a", href=True)
+        if not a:
+            continue
+        title = a.get_text(strip=True) or (art.find("h2").get_text(strip=True) if art.find("h2") else "")
+        if not title:
+            continue
+        href = a["href"]
+        full_url = href if href.startswith("http") else f"https://forasna.com{href}"
+        desc_el = art.find("p")
+        desc = desc_el.get_text(strip=True) if desc_el else "No description preview available."
+
+        jobs.append({
+            "title": title,
+            "company": "N/A",
+            "location": "Egypt",
+            "description": desc,
+            "url": full_url,
+            "source": "Forasna",
+        })
+
+    print(f"[scraper] Forasna: {len(jobs)} jobs parsed")
+    return jobs
+
+
+def scrape_akhtaboot(query, max_results=15):
+    jobs = []
+    url = f"https://www.akhtaboot.com/en/jobs-in-egypt?keywords={quote_plus(query)}"
+    soup = _get(url)
+    if soup is None:
+        return jobs
+
+    cards = soup.select("div.job-item, div.job-card, li.job")
+    for card in cards[:max_results]:
+        a = card.find("a", href=True)
+        if not a:
+            continue
+        title = a.get_text(strip=True)
+        if not title:
+            continue
+        href = a["href"]
+        full_url = href if href.startswith("http") else f"https://www.akhtaboot.com{href}"
+        company_el = card.select_one(".company, .job-company")
+        company = company_el.get_text(strip=True) if company_el else "N/A"
+        loc_el = card.select_one(".location, .job-location")
+        location_txt = loc_el.get_text(strip=True) if loc_el else "Egypt"
+        desc_el = card.find("p")
+        desc = desc_el.get_text(strip=True) if desc_el else "No description preview available."
+
+        jobs.append({
+            "title": title,
+            "company": company,
+            "location": location_txt,
+            "description": desc,
+            "url": full_url,
+            "source": "Akhtaboot",
+        })
+
+    print(f"[scraper] Akhtaboot: {len(jobs)} jobs parsed")
+    return jobs
+
+
+def scrape_jobs(query, location=""):
+    """
+    Main entry point — call this exactly like before:
+        jobs = await run.io_bound(scrape_jobs, query)
+
+    Returns a combined list of job dicts, Wuzzuf results first, then Bayt,
+    then Forasna, then Akhtaboot. Each dict has:
+        title, company, location, description, url, source
+    """
+    full_query = f"{query} {location}".strip() if location else query
+    all_jobs = []
+
+    # 1. Wuzzuf (primary — always tried first, always listed first)
+    try:
+        all_jobs.extend(scrape_wuzzuf(full_query))
+    except Exception as e:
+        print(f"[scraper] Wuzzuf top-level failure: {e}")
+
+    # 2. Bayt (fallback / supplement)
+    try:
+        all_jobs.extend(scrape_bayt(full_query))
+    except Exception as e:
+        print(f"[scraper] Bayt top-level failure: {e}")
+
+    # 3 & 4. Extra Egypt job sources
+    try:
+        all_jobs.extend(scrape_forasna(full_query))
+    except Exception as e:
+        print(f"[scraper] Forasna top-level failure: {e}")
+
+    try:
+        all_jobs.extend(scrape_akhtaboot(full_query))
+    except Exception as e:
+        print(f"[scraper] Akhtaboot top-level failure: {e}")
+
+    # De-dupe by URL while preserving source priority order (Wuzzuf first)
+    seen = set()
+    deduped = []
+    for job in all_jobs:
+        if job["url"] in seen:
+            continue
+        seen.add(job["url"])
+        deduped.append(job)
+
+    print(f"[scraper] TOTAL after de-dup: {len(deduped)} jobs "
+          f"({sum(1 for j in deduped if j['source']=='Wuzzuf')} Wuzzuf, "
+          f"{sum(1 for j in deduped if j['source']=='Bayt')} Bayt, "
+          f"{sum(1 for j in deduped if j['source']=='Forasna')} Forasna, "
+          f"{sum(1 for j in deduped if j['source']=='Akhtaboot')} Akhtaboot)")
+
+    return deduped
+
+
+if __name__ == "__main__":
+    # Quick manual test — run `python job_scraper.py` locally (not on Render)
+    # to see debug output and confirm selectors still match live HTML.
+    results = scrape_jobs("Civil Engineer", "Cairo")
+    for r in results[:10]:
+        print(f"- [{r['source']}] {r['title']} @ {r['company']} ({r['location']}) -> {r['url']}")
 
         # ---------------- FOOTER (unchanged) ----------------
         ui.html('''
