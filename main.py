@@ -2431,10 +2431,82 @@ returning results:
      search for a snippet of a job title to see the current wrapping tags.
 """
 
+import os
 import re
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import quote_plus
+
+# ---------------------------------------------------------------------------
+# PRIMARY SOURCE: JSearch (RapidAPI), built on Google for Jobs.
+#
+# Why this exists: Wuzzuf, Bayt, and Forasna are protected by Cloudflare /
+# Akamai-style bot management (confirmed via Render logs — they return
+# "Just a moment..." Cloudflare challenge pages, not real job HTML). No
+# amount of header-spoofing in a plain `requests` scraper gets past that.
+# JSearch already indexes Bayt directly and, via Google for Jobs' own
+# crawling, surfaces postings from Wuzzuf/Forasna/Akhtaboot/etc. too — so
+# it sidesteps the anti-bot problem entirely instead of fighting it.
+#
+# Get a free key at: https://rapidapi.com/letscrape-6bRBa3QguO5/api/jsearch
+# Then set the RAPIDAPI_KEY environment variable on Render.
+# ---------------------------------------------------------------------------
+RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY", "")
+JSEARCH_HOST = "jsearch.p.rapidapi.com"
+
+
+def scrape_jsearch(query, max_results=20):
+    """Primary source. Returns [] (not an exception) if no key is set or
+    the call fails, so callers can safely fall back to direct scraping."""
+    jobs = []
+    if not RAPIDAPI_KEY:
+        print("[scraper][JSearch] No RAPIDAPI_KEY set — skipping primary source.")
+        return jobs
+    try:
+        resp = requests.get(
+            f"https://{JSEARCH_HOST}/search",
+            headers={
+                "X-RapidAPI-Key": RAPIDAPI_KEY,
+                "X-RapidAPI-Host": JSEARCH_HOST,
+            },
+            params={
+                "query": f"{query} in Egypt",
+                "page": "1",
+                "num_pages": "1",
+                "country": "eg",
+            },
+            timeout=REQUEST_TIMEOUT,
+        )
+        print(f"[scraper][JSearch] status={resp.status_code}, len={len(resp.text)}")
+        if resp.status_code != 200:
+            print(f"[scraper][JSearch] body preview: {resp.text[:300]!r}")
+            return jobs
+        data = resp.json().get("data", [])
+        for item in data[:max_results]:
+            title = item.get("job_title", "")
+            if not title:
+                continue
+            company = item.get("employer_name") or "N/A"
+            city = item.get("job_city") or ""
+            country = item.get("job_country") or "Egypt"
+            location_txt = ", ".join(p for p in [city, country] if p)
+            desc = (item.get("job_description") or "No description available.")[:400]
+            url = item.get("job_apply_link") or item.get("job_google_link") or ""
+            source = item.get("job_publisher") or "JSearch"
+            if not url:
+                continue
+            jobs.append({
+                "title": title,
+                "company": company,
+                "location": location_txt or "Egypt",
+                "description": desc,
+                "url": url,
+                "source": source,
+            })
+    except Exception as e:
+        print(f"[scraper][JSearch] request failed: {e}")
+    print(f"[scraper] JSearch: {len(jobs)} jobs parsed")
+    return jobs
 
 HEADERS = {
     "User-Agent": (
@@ -2666,28 +2738,39 @@ def scrape_jobs(query, location=""):
     full_query = f"{query} {location}".strip() if location else query
     all_jobs = []
 
-    # 1. Wuzzuf (primary — always tried first, always listed first)
+    # 1. JSearch (primary) — indexes Bayt directly and, via Google for Jobs'
+    # own crawl, surfaces Wuzzuf/Forasna/Akhtaboot postings too, without
+    # hitting their Cloudflare/Akamai bot protection at all.
     try:
-        all_jobs.extend(scrape_wuzzuf(full_query))
+        all_jobs.extend(scrape_jsearch(full_query))
     except Exception as e:
-        print(f"[scraper] Wuzzuf top-level failure: {e}")
+        print(f"[scraper] JSearch top-level failure: {e}")
 
-    # 2. Bayt (fallback / supplement)
-    try:
-        all_jobs.extend(scrape_bayt(full_query))
-    except Exception as e:
-        print(f"[scraper] Bayt top-level failure: {e}")
+    # 2-4. Direct scrapers, kept as a best-effort fallback only. Wuzzuf,
+    # Bayt, and Forasna are confirmed (via Render logs) to sit behind bot
+    # protection that returns a "Just a moment..." Cloudflare challenge —
+    # these calls will typically return [] and that's expected, not a bug.
+    if not all_jobs:
+        print("[scraper] JSearch returned nothing — falling back to direct scrapers.")
+        try:
+            all_jobs.extend(scrape_wuzzuf(full_query))
+        except Exception as e:
+            print(f"[scraper] Wuzzuf top-level failure: {e}")
 
-    # 3 & 4. Extra Egypt job sources
-    try:
-        all_jobs.extend(scrape_forasna(full_query))
-    except Exception as e:
-        print(f"[scraper] Forasna top-level failure: {e}")
+        try:
+            all_jobs.extend(scrape_bayt(full_query))
+        except Exception as e:
+            print(f"[scraper] Bayt top-level failure: {e}")
 
-    try:
-        all_jobs.extend(scrape_akhtaboot(full_query))
-    except Exception as e:
-        print(f"[scraper] Akhtaboot top-level failure: {e}")
+        try:
+            all_jobs.extend(scrape_forasna(full_query))
+        except Exception as e:
+            print(f"[scraper] Forasna top-level failure: {e}")
+
+        try:
+            all_jobs.extend(scrape_akhtaboot(full_query))
+        except Exception as e:
+            print(f"[scraper] Akhtaboot top-level failure: {e}")
 
     # De-dupe by URL while preserving source priority order (Wuzzuf first)
     seen = set()
@@ -2698,11 +2781,14 @@ def scrape_jobs(query, location=""):
         seen.add(job["url"])
         deduped.append(job)
 
-    print(f"[scraper] TOTAL after de-dup: {len(deduped)} jobs "
-          f"({sum(1 for j in deduped if j['source']=='Wuzzuf')} Wuzzuf, "
-          f"{sum(1 for j in deduped if j['source']=='Bayt')} Bayt, "
-          f"{sum(1 for j in deduped if j['source']=='Forasna')} Forasna, "
-          f"{sum(1 for j in deduped if j['source']=='Akhtaboot')} Akhtaboot)")
+    source_counts = {}
+    for j in deduped:
+        source_counts[j["source"]] = source_counts.get(j["source"], 0) + 1
+    print(f"[scraper] TOTAL after de-dup: {len(deduped)} jobs — by source: {source_counts}")
+
+    # Keep Wuzzuf-sourced postings on top regardless of which underlying
+    # call surfaced them (direct scrape or via JSearch's job_publisher field).
+    deduped.sort(key=lambda j: 0 if j["source"] == "Wuzzuf" else 1)
 
     return deduped
 
