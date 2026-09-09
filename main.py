@@ -1305,7 +1305,7 @@ Data (CSV format):
         return f"Error generating overview: {str(e)}"
 
 # =====================================================================================
-# DXF FUNCTIONS (FIXED: using bytes and errors='ignore')
+# DXF FUNCTIONS (FIXED: no 'errors' argument)
 # =====================================================================================
 def detect_dxf_layers(doc):
     layers = {}
@@ -2732,15 +2732,15 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
 
                 async def handle_dxf_upload(e):
                     try:
-                        data = await e.file.read()  # bytes
+                        data = await e.file.read()
                         dxf_file_data['bytes'] = data
                         dxf_file_data['name'] = e.file.name
                         dxf_status_label.set_text(f'File Ready: {e.file.name} ({(len(data)/1024):.1f} KB)')
                         dxf_status_label.classes(replace='text-xs text-emerald-400 font-semibold mb-2')
                         ui.notify(f'Uploaded: {e.file.name}', type='positive')
                         try:
-                            # Ensure we pass bytes as a BytesIO object
-                            doc = ezdxf.read(io.BytesIO(data), errors='ignore')
+                            # No 'errors' argument
+                            doc = ezdxf.read(io.BytesIO(data))
                             layers = detect_dxf_layers(doc)
                             layer_info = "\n".join([f"{layer}: {info['count']} entities, keywords: {', '.join(info['keywords'])}" for layer, info in layers.items()])
                             detected_layers_label.set_text(f"Detected layers:\n{layer_info}")
@@ -2783,7 +2783,7 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                         ui.label('Processing DXF file...').classes('self-center text-sm')
 
                     try:
-                        doc = ezdxf.read(io.BytesIO(dxf_file_data['bytes']), errors='ignore')
+                        doc = ezdxf.read(io.BytesIO(dxf_file_data['bytes']))
                         workflow = workflow_select.value
                         unit = unit_select.value
                         areas = extract_areas_from_dxf(doc, unit=unit, workflow=workflow.lower().split()[0])
