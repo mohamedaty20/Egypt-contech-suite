@@ -2896,12 +2896,13 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                         dxf_status_label.set_text(f'File Ready: {e.file.name} ({(len(data)/1024):.1f} KB)')
                         dxf_status_label.classes(replace='text-xs text-emerald-400 font-semibold mb-2')
                         ui.notify(f'Uploaded: {e.file.name}', type='positive')
-                        try:
-                            # Ensure data is bytes
-if isinstance(data, str):
-    data = data.encode('utf-8')
-doc = ezdxf.read(io.BytesIO(data))
-layers = detect_dxf_layers(doc)
+                       try:
+                           if isinstance(data, str):
+                                  data = data.encode('utf-8')
+                           doc = ezdxf.read(io.BytesIO(data))
+                           layers = detect_dxf_layers(doc)
+                           # ... rest of the code inside the try block
+
                             layer_info = "\n".join([f"{layer}: {info['count']} entities, keywords: {', '.join(info['keywords'])}" for layer, info in layers.items()])
                             detected_layers_label.set_text(f"Detected layers:\n{layer_info}")
                             detected_layers_label.classes(replace='text-xs text-white')
