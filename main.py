@@ -5,6 +5,7 @@ import uuid
 import re
 import asyncio
 import json
+import time
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -12,19 +13,16 @@ import plotly.express as px
 import qrcode
 import pypdf
 import fitz  # PyMuPDF
-import requests  # NEW: for job scraping
-from bs4 import BeautifulSoup  # NEW: for job scraping
+import requests
+from bs4 import BeautifulSoup
 
-# Dotenv & FastAPI / NiceGUI
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from nicegui import app, ui, run
 
-# Google GenAI SDK (using google-genai package)
 from google import genai
 from google.genai import types
 
-# ReportLab for Professional PDF Generation
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
@@ -802,10 +800,10 @@ async def call_gemini_json(contents, temperature=0.1, timeout=240):
 
 
 # =====================================================================================
-# JOB SCRAPING FUNCTIONS (NEW)
+# JOB SCRAPING FUNCTIONS (FIXED)
 # =====================================================================================
 def scrape_wuzzuf(query: str) -> list:
-    """Scrape Wuzzuf job search results for the given query."""
+    """Scrape Wuzzuf job search results with fallback selectors."""
     url = f"https://wuzzuf.net/search/jobs/?q={query}"
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
@@ -814,41 +812,127 @@ def scrape_wuzzuf(query: str) -> list:
         response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
         soup = BeautifulSoup(response.content, 'html.parser')
-        # Find all job cards – adjust selectors based on actual Wuzzuf structure
-        job_cards = soup.find_all('div', class_='job-card')
         jobs = []
-        for card in job_cards:
-            # Title and link
-            title_elem = card.find('h2', class_='job-title') or card.find('a', class_='job-link')
-            if not title_elem:
+
+        # Try multiple selectors to find job cards
+        selectors = [
+            'div.job-card',
+            'div[class*="job-card"]',
+            'div[class*="css-"]',  # Wuzzuf uses these
+            'div[data-testid="job-card"]',
+            'div[class*="job"]',
+        ]
+        cards = []
+        for sel in selectors:
+            cards = soup.select(sel)
+            if cards:
+                break
+        if not cards:
+            # Fallback: find all <a> with href containing '/jobs/' and take their parent div
+            job_links = soup.find_all('a', href=re.compile(r'/jobs/'))
+            seen = set()
+            for link in job_links:
+                parent = link.find_parent('div')
+                if parent and parent not in seen:
+                    cards.append(parent)
+                    seen.add(parent)
+
+        for card in cards:
+            try:
+                # Title & link
+                title_elem = card.find('h2') or card.find('a', class_=re.compile(r'job.*title', re.I)) or card.find('a', href=re.compile(r'/jobs/'))
+                if not title_elem:
+                    continue
+                title = title_elem.text.strip()
+                link = title_elem.get('href')
+                if link and not link.startswith('http'):
+                    link = 'https://wuzzuf.net' + link
+
+                # Company
+                company_elem = card.find('div', class_=re.compile(r'company', re.I)) or card.find('a', class_=re.compile(r'company', re.I))
+                company = company_elem.text.strip() if company_elem else ''
+
+                # Location
+                location_elem = card.find('span', class_=re.compile(r'location', re.I)) or card.find('div', class_=re.compile(r'location', re.I))
+                location = location_elem.text.strip() if location_elem else ''
+
+                # Description (excerpt)
+                desc_elem = card.find('div', class_=re.compile(r'description', re.I)) or card.find('p', class_=re.compile(r'description', re.I))
+                description = desc_elem.text.strip() if desc_elem else ''
+
+                if title and link:
+                    jobs.append({
+                        'title': title,
+                        'company': company,
+                        'location': location,
+                        'description': description,
+                        'url': link
+                    })
+            except Exception:
                 continue
-            title = title_elem.text.strip()
-            link = title_elem.get('href')
-            if link and not link.startswith('http'):
-                link = 'https://wuzzuf.net' + link
-            # Company
-            company_elem = card.find('div', class_='company-name') or card.find('a', class_='company')
-            company = company_elem.text.strip() if company_elem else ''
-            # Location
-            location_elem = card.find('span', class_='location') or card.find('div', class_='location')
-            location = location_elem.text.strip() if location_elem else ''
-            # Description (excerpt)
-            desc_elem = card.find('div', class_='job-description') or card.find('p', class_='job-description')
-            description = desc_elem.text.strip() if desc_elem else ''
-            jobs.append({
-                'title': title,
-                'company': company,
-                'location': location,
-                'description': description,
-                'url': link
-            })
         return jobs
-    except Exception as e:
-        # Log or handle silently; we'll return empty list
+    except Exception:
         return []
 
+
+def scrape_bayt(query: str) -> list:
+    """Scrape Bayt job search results as a fallback."""
+    url = f"https://www.bayt.com/en/egypt/jobs/?search={query}"
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    }
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.content, 'html.parser')
+        jobs = []
+        # Bayt uses <li class="has-pointer"> or <div class="job-card">
+        cards = soup.find_all('li', class_='has-pointer') or soup.find_all('div', class_='job-card')
+        for card in cards:
+            try:
+                title_elem = card.find('h2') or card.find('a', class_='job-title')
+                if not title_elem:
+                    continue
+                title = title_elem.text.strip()
+                link = title_elem.get('href')
+                if link and not link.startswith('http'):
+                    link = 'https://www.bayt.com' + link
+
+                company_elem = card.find('span', class_='company-name') or card.find('a', class_='company')
+                company = company_elem.text.strip() if company_elem else ''
+
+                location_elem = card.find('span', class_='location') or card.find('div', class_='location')
+                location = location_elem.text.strip() if location_elem else ''
+
+                desc_elem = card.find('div', class_='description') or card.find('p', class_='description')
+                description = desc_elem.text.strip() if desc_elem else ''
+
+                if title and link:
+                    jobs.append({
+                        'title': title,
+                        'company': company,
+                        'location': location,
+                        'description': description,
+                        'url': link
+                    })
+            except Exception:
+                continue
+        return jobs
+    except Exception:
+        return []
+
+
+def scrape_jobs(query: str) -> list:
+    """Try Wuzzuf first; if empty, fallback to Bayt."""
+    jobs = scrape_wuzzuf(query)
+    if not jobs:
+        time.sleep(1)  # avoid rapid requests
+        jobs = scrape_bayt(query)
+    return jobs
+
+
 # =====================================================================================
-# BOQ CALCULATION ENGINE - AI EXTRACTION (unchanged, but not used anymore)
+# BOQ CALCULATION ENGINE - AI EXTRACTION (unchanged)
 # =====================================================================================
 
 # Global storage for BOQ results per branch, element, and mode
@@ -1616,14 +1700,14 @@ def main_page():
         </div>
         ''')
 
-        # Tabs (now with Job Board added)
+        # Tabs (now with Job Board)
         with ui.tabs().classes('w-full text-white bg-[#0d1a35] rounded-lg') as tabs:
             t_dash = ui.tab('Concrete Cube Verifier').classes('text-white font-bold')
             t_audit = ui.tab('AI Multi-Standard Auditor').classes('text-white font-bold')
             t_defect = ui.tab('Defect Diagnostic').classes('text-white font-bold')
             t_chat = ui.tab('AI Chatbot').classes('text-white font-bold')
             t_handwriting = ui.tab('Handwriting OCR').classes('text-white font-bold')
-            t_jobs = ui.tab('Job Board').classes('text-white font-bold')  # NEW
+            t_jobs = ui.tab('Job Board').classes('text-white font-bold')
 
         with ui.tab_panels(tabs, value=t_dash).classes('w-full bg-transparent mt-4'):
 
@@ -2303,11 +2387,11 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                     ui.markdown('*Upload a file and click "Transcribe Handwriting" to start.*').classes('text-sm text-[#A9B6D0]')
 
             # =========================================================================
-            # TAB 6: JOB BOARD (NEW)
+            # TAB 6: JOB BOARD (FIXED)
             # =========================================================================
             with ui.tab_panel(t_jobs):
-                ui.label('Engineering Job Board - Egypt (Wuzzuf)').classes('text-2xl font-bold text-white mb-4')
-                ui.markdown('Search for the latest engineering jobs in Egypt. Results are scraped directly from Wuzzuf – no API key required.').classes('markdown-body mb-2')
+                ui.label('Engineering Job Board - Egypt').classes('text-2xl font-bold text-white mb-4')
+                ui.markdown('Search for the latest engineering jobs in Egypt. Results are scraped from **Wuzzuf** (fallback to **Bayt** if needed). No API key required.').classes('markdown-body mb-2')
 
                 # Search inputs
                 with ui.row().classes('w-full gap-4 mb-4'):
@@ -2353,14 +2437,14 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                     display_jobs(jobs_data, filter_text)
 
                 async def search_jobs():
-                    """Scrape jobs from Wuzzuf and display."""
+                    """Scrape jobs from Wuzzuf/Bayt and display."""
                     query = search_input.value.strip()
                     if not query:
                         ui.notify('Please enter a search term.', type='warning')
                         return
                     location = location_input.value.strip()
                     if location:
-                        query += f' {location}'  # simple location append
+                        query += f' {location}'
                     ui.notify(f'Searching for "{query}"...', type='info')
                     results_container.clear()
                     with results_container:
@@ -2368,14 +2452,12 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                         ui.label('Fetching job listings...').classes('self-center text-sm')
 
                     # Run synchronous scraper in thread
-                    jobs = await run.io_bound(scrape_wuzzuf, query)
+                    jobs = await run.io_bound(scrape_jobs, query)
                     jobs_data.clear()
                     jobs_data.extend(jobs)
                     display_jobs(jobs_data)  # initial display without filter
 
-                # Initialize with a default search (optional)
-                # We'll run search on page load if we want, but let user click.
-                # Could add a flag to auto‑search, but let's keep it manual.
+                # Optional: auto‑search on load (disabled; user must click)
 
         # ---------------- FOOTER (unchanged) ----------------
         ui.html('''
