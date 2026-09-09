@@ -2387,27 +2387,23 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                     ui.markdown('*Upload a file and click "Transcribe Handwriting" to start.*').classes('text-sm text-[#A9B6D0]')
 
             # =========================================================================
-            # TAB 6: JOB BOARD (FIXED)
+            # TAB 6: JOB BOARD (FIXED - JSON‑LD)
             # =========================================================================
             with ui.tab_panel(t_jobs):
                 ui.label('Engineering Job Board - Egypt').classes('text-2xl font-bold text-white mb-4')
                 ui.markdown('Search for the latest engineering jobs in Egypt. Results are scraped from **Wuzzuf** (fallback to **Bayt** if needed). No API key required.').classes('markdown-body mb-2')
 
-                # Search inputs
                 with ui.row().classes('w-full gap-4 mb-4'):
                     search_input = ui.input(label='Search for jobs', placeholder='e.g., Civil Engineer', value='Civil Engineer').classes('flex-1')
                     location_input = ui.input(label='Location (optional)', placeholder='e.g., Cairo').classes('flex-1')
                     search_button = ui.button('Search Jobs', on_click=lambda: search_jobs()).classes('primary-btn')
 
-                # Filter input (client‑side filtering)
                 filter_input = ui.input(label='Filter results', placeholder='Type to filter title, company, description...', on_change=lambda: filter_jobs()).classes('w-full mb-2')
 
-                # Container for results
                 results_container = ui.column().classes('w-full')
-                jobs_data = []  # store current job list
+                jobs_data = []
 
                 def display_jobs(jobs, filter_text=''):
-                    """Render job cards with optional client‑side filtering."""
                     results_container.clear()
                     with results_container:
                         if not jobs:
@@ -2420,7 +2416,6 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                         if not filtered:
                             ui.label('No jobs match the filter.').classes('text-white')
                             return
-                        # Display each job as a card
                         for job in filtered:
                             with ui.card().classes('w-full bg-[#0d1a35] border border-[#2c3f6b] rounded-lg p-3 mb-2'):
                                 with ui.row().classes('w-full justify-between'):
@@ -2432,12 +2427,10 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                                 ui.link('View Job', job['url'], new_tab=True).classes('text-[#4FC3F7] hover:text-[#FF8C00]')
 
                 def filter_jobs():
-                    """Client‑side filter triggered by filter_input changes."""
                     filter_text = filter_input.value.strip()
                     display_jobs(jobs_data, filter_text)
 
                 async def search_jobs():
-                    """Scrape jobs from Wuzzuf/Bayt and display."""
                     query = search_input.value.strip()
                     if not query:
                         ui.notify('Please enter a search term.', type='warning')
@@ -2451,11 +2444,10 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                         ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
                         ui.label('Fetching job listings...').classes('self-center text-sm')
 
-                    # Run synchronous scraper in thread
                     jobs = await run.io_bound(scrape_jobs, query)
                     jobs_data.clear()
                     jobs_data.extend(jobs)
-                    display_jobs(jobs_data)  # initial display without filter
+                    display_jobs(jobs_data)
 
         # ---------------- FOOTER (unchanged) ----------------
         ui.html('''
