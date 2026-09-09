@@ -1,3 +1,5 @@
+[file name]: import io.txt
+[file content begin]
 import io
 import datetime
 import os
@@ -1477,10 +1479,10 @@ def generate_autocad_layout(plot_area_m2, street_width_m, location):
 
     # Add dimensions? Not necessary.
 
-    # Save DXF to bytes
-    dxf_buffer = io.BytesIO()
+    # Save DXF to bytes – FIX: use text stream and then encode
+    dxf_buffer = io.StringIO()
     doc.write(dxf_buffer)
-    dxf_bytes = dxf_buffer.getvalue()
+    dxf_bytes = dxf_buffer.getvalue().encode('utf-8')
 
     # 3. BOQ calculations
     # Concrete volume: foundations, columns, slabs (simplified)
@@ -2879,7 +2881,7 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                 ui.button('Run AI Analysis', on_click=run_progress_analysis).classes('primary-btn mt-4')
 
             # ==============================================================
-            # TAB 8: DXF AREA EXTRACTOR (FIXED)
+            # TAB 8: DXF AREA EXTRACTOR (FIXED - no changes needed here)
             # ==============================================================
             with ui.tab_panel(t_dxf):
                 ui.label('📐 DXF Area Extractor').classes('text-2xl font-bold text-white mb-4')
@@ -3008,7 +3010,7 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                     ui.markdown('*Upload a DXF and click "Process DXF" to extract areas.*').classes('text-sm text-[#A9B6D0]')
 
             # ==============================================================
-            # TAB 9: AUTOCAD LAYOUT GENERATOR (NEW)
+            # TAB 9: AUTOCAD LAYOUT GENERATOR (FIXED)
             # ==============================================================
             with ui.tab_panel(t_autocad):
                 ui.label('🏗️ AutoCAD Layout Generator').classes('text-2xl font-bold text-white mb-4')
@@ -3398,3 +3400,4 @@ ui.run(
     reload=False,
     reconnect_timeout=30.0,
 )
+[file content end]
