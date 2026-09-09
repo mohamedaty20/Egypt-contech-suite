@@ -13,3 +13,6 @@ xlsxwriter
 Pillow
 requests
 beautifulsoup4
+cloudscraper
+openpyxl
+kaleido
