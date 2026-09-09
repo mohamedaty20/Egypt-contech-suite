@@ -11,3 +11,5 @@ google-genai
 reportlab
 xlsxwriter
 Pillow
+requests
+beautifulsoup4
