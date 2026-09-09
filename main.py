@@ -19,9 +19,8 @@ import cloudscraper
 from bs4 import BeautifulSoup
 from urllib.parse import quote_plus
 from io import BytesIO
-import ezdxf  # NEW for DXF processing
+import ezdxf
 from ezdxf.math import Vec2
-from ezdxf.path import Path, make_path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -56,7 +55,7 @@ MARGIN = 32
 USABLE_WIDTH = PAGE_WIDTH - (2 * MARGIN)
 
 # =====================================================================================
-# CODE-COMPLIANCE & TEXT SANITIZATION (unchanged)
+# CODE-COMPLIANCE & TEXT SANITIZATION
 # =====================================================================================
 CODE_BASIS_OPTIONS = [
     "Egyptian Codes: ECP 203 / ECP 202 / ECP 104 (Default Core Basis)",
@@ -358,7 +357,7 @@ async def call_gemini_json(contents, temperature=0.1, timeout=240):
         raise Exception(f"AI request failed: {str(e)}")
 
 # =====================================================================================
-# BOQ CALCULATION ENGINE (unchanged)
+# BOQ CALCULATION ENGINE (full version from original)
 # =====================================================================================
 boq_results = {
     'architectural': {},
@@ -1196,10 +1195,9 @@ def scrape_jobs(query, location=""):
     return deduped
 
 # =====================================================================================
-# PROGRESS TRACKER FUNCTIONS (unchanged)
+# PROGRESS TRACKER FUNCTIONS
 # =====================================================================================
 def parse_progress_from_gemini_response(raw_text):
-    """Extract JSON from Gemini response for progress data."""
     raw_text = raw_text.strip()
     raw_text = re.sub(r'^```json\s*', '', raw_text)
     raw_text = re.sub(r'\s*```$', '', raw_text)
@@ -1213,7 +1211,6 @@ def parse_progress_from_gemini_response(raw_text):
         return {}
 
 async def extract_progress_from_image(file_bytes, file_type):
-    """Send image to Gemini and get progress info as JSON."""
     if not client:
         raise Exception("GEMINI_API_KEY missing.")
     prompt = """
@@ -1249,7 +1246,6 @@ Example: {"date": "2026-03-15", "description": "Formwork installation for slab",
     return data
 
 def process_excel_file(file_bytes, filename):
-    """Read Excel file and return DataFrame with expected columns."""
     try:
         df = pd.read_excel(io.BytesIO(file_bytes), engine='openpyxl')
         df.columns = df.columns.str.lower().str.strip()
@@ -1288,7 +1284,6 @@ def process_excel_file(file_bytes, filename):
         return pd.DataFrame()
 
 async def generate_progress_overview(df, start_date, end_date, description):
-    """Ask Gemini for an overview of the progress data."""
     if df.empty or not client:
         return "No data available for overview."
     csv_data = df.to_csv(index=False)
@@ -1310,18 +1305,20 @@ Data (CSV format):
         return f"Error generating overview: {str(e)}"
 
 # =====================================================================================
-# DXF PROCESSING FUNCTIONS (NEW)
+# DXF PROCESSING FUNCTIONS (FIXED)
 # =====================================================================================
 def detect_dxf_layers(doc):
-    """Return a dict of layer names with counts and keywords."""
     layers = {}
-    for entity in doc.modelspace():
-        layer = entity.dxf.layer
-        if layer not in layers:
-            layers[layer] = {'count': 0, 'types': set(), 'keywords': []}
-        layers[layer]['count'] += 1
-        layers[layer]['types'].add(entity.dxftype())
-    # Add keyword detection
+    try:
+        for entity in doc.modelspace():
+            layer = entity.dxf.layer
+            if layer not in layers:
+                layers[layer] = {'count': 0, 'types': set(), 'keywords': []}
+            layers[layer]['count'] += 1
+            layers[layer]['types'].add(entity.dxftype())
+    except Exception as e:
+        print(f"Error detecting layers: {e}")
+        return {}
     for layer in layers:
         lc = layer.lower()
         keywords = []
@@ -1338,65 +1335,50 @@ def detect_dxf_layers(doc):
     return layers
 
 def extract_areas_from_dxf(doc, unit='mm', workflow='architectural'):
-    """Extract closed polylines, compute areas, try to find text labels."""
-    # Determine scale factor
     if unit == 'mm':
-        scale = 1.0
-        area_scale = 1e-6  # to m²
+        area_scale = 1e-6
     elif unit == 'cm':
-        scale = 10.0
         area_scale = 1e-4
-    else:  # meters
-        scale = 1000.0
-        area_scale = 1.0  # already in m²
+    else:
+        area_scale = 1.0
 
     results = []
     msp = doc.modelspace()
-    # Collect all closed polylines
-    polylines = []
     for entity in msp:
         if entity.dxftype() in ('LWPOLYLINE', 'POLYLINE'):
             if entity.closed:
                 try:
-                    # Get vertices
                     if entity.dxftype() == 'LWPOLYLINE':
                         points = [(p.x, p.y) for p in entity.get_points()]
-                    else:  # POLYLINE
+                    else:
                         points = [(v.dxf.location.x, v.dxf.location.y) for v in entity.vertices]
-                    # Compute area using shoelace
                     area = 0.0
                     for i in range(len(points)):
                         x1, y1 = points[i]
                         x2, y2 = points[(i+1) % len(points)]
                         area += x1*y2 - x2*y1
                     area = abs(area) / 2.0
-                    # Find any text inside the polyline (approximate)
                     label = ""
-                    # We'll check all TEXT and MTEXT entities within the bounding box
-                    # For simplicity, we just check if any text is near the centroid
                     centroid_x = sum(p[0] for p in points) / len(points)
                     centroid_y = sum(p[1] for p in points) / len(points)
                     for txt in msp.query('TEXT MTEXT'):
                         if txt.dxftype() == 'TEXT':
                             pos = txt.dxf.insert
-                        else:  # MTEXT
-                            pos = txt.dxf.insert  # or location?
-                        # distance threshold: 10 units in drawing coordinates
+                        else:
+                            pos = txt.dxf.insert
                         if abs(pos.x - centroid_x) < 10 and abs(pos.y - centroid_y) < 10:
                             label = txt.dxf.text
                             break
-                    # Apply scaling and unit conversion
-                    raw_area = area * scale * scale * area_scale  # now in m²
+                    raw_area = area * area_scale
                     results.append({
                         'layer': entity.dxf.layer,
                         'area_m2': round(raw_area, 4),
                         'label': label.strip() if label else '',
                         'vertices': len(points)
                     })
-                except Exception:
+                except Exception as e:
+                    print(f"Skipping entity: {e}")
                     continue
-    # If workflow is architectural, we might exclude walls? For now, we just show all.
-    # We'll sort and group by layer.
     return results
 
 # =====================================================================================
@@ -1869,11 +1851,13 @@ def main_page():
             t_handwriting = ui.tab('Handwriting OCR').classes('text-white font-bold')
             t_jobs = ui.tab('Job Board').classes('text-white font-bold')
             t_progress = ui.tab('Progress Tracker').classes('text-white font-bold')
-            t_dxf = ui.tab('DXF Area Extractor').classes('text-white font-bold')  # NEW
+            t_dxf = ui.tab('DXF Area Extractor').classes('text-white font-bold')
 
         with ui.tab_panels(tabs, value=t_dash).classes('w-full bg-transparent mt-4'):
 
+            # --------------------------------------------------------------
             # TAB 1: CONCRETE CUBE VERIFIER (unchanged)
+            # --------------------------------------------------------------
             with ui.tab_panel(t_dash):
                 ui.label('Concrete Cube Calculation Sheet & Statistical Verifier').classes('text-2xl font-bold text-white mb-4')
                 with ui.row().classes('w-full gap-4 mb-4'):
@@ -2070,7 +2054,9 @@ REQUIRED REPORT STRUCTURE:
                 with result_output_area:
                     ui.markdown('*Click "Run AI Statistical Calculation & Verification" to generate the report.*').classes('text-sm text-[#A9B6D0]')
 
+            # --------------------------------------------------------------
             # TAB 2: AI MULTI-STANDARD AUDITOR (unchanged)
+            # --------------------------------------------------------------
             with ui.tab_panel(t_audit):
                 ui.label('AI Multi-Standard Engineering Auditor').classes('text-2xl font-bold text-white mb-2')
                 ui.markdown('Upload a specification, mix design, or site report to audit against the selected code basis.').classes('markdown-body mb-2')
@@ -2172,7 +2158,9 @@ report with clear ## section headings and real Markdown tables for any comparati
                             ui.notify(f'Error: {str(ex)}', type='negative')
                 ui.button('Execute AI Audit & Compliance Check', on_click=run_ai_audit).classes('primary-btn')
 
+            # --------------------------------------------------------------
             # TAB 3: DEFECT DIAGNOSTIC (unchanged)
+            # --------------------------------------------------------------
             with ui.tab_panel(t_defect):
                 ui.label('AI Engineering Defect Diagnostic & Repair Protocol').classes('text-2xl font-bold text-white mb-2')
                 ui.markdown('Upload site defect photos or PDFs for forensic analysis. Describe the issue below for more precise diagnosis.').classes('markdown-body mb-2')
@@ -2278,7 +2266,9 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                             ui.notify(f'Diagnosis failed: {ex}', type='negative')
                 ui.button('Diagnose Defect & Get Repair Protocol', on_click=run_defect_diagnosis).classes('primary-btn')
 
+            # --------------------------------------------------------------
             # TAB 4: AI CHATBOT (unchanged)
+            # --------------------------------------------------------------
             with ui.tab_panel(t_chat):
                 ui.label('Core-Code Intelligent Assistant Chatbot').classes('text-2xl font-bold text-white mb-2')
                 ui.markdown('Ask any engineering, mix design, geotechnical, or pavement question and get answers based on the Egyptian Codes (ECP 203, ECP 202, ECP 104) and international standards.').classes('markdown-body mb-2')
@@ -2345,7 +2335,9 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                             ui.notify(f'PDF Export Error: {str(ex)}', type='negative')
                     ui.button('Download Chat PDF Transcript', on_click=download_chat_pdf).classes('primary-btn flex-1')
 
+            # --------------------------------------------------------------
             # TAB 5: HANDWRITING OCR (unchanged)
+            # --------------------------------------------------------------
             with ui.tab_panel(t_handwriting):
                 ui.label('Handwriting to Digital Text Transcription').classes('text-2xl font-bold text-white mb-2')
                 ui.markdown('Upload a scanned handwritten note (PNG, JPG) or PDF. The AI will convert it to clean digital text, detecting tables if present.').classes('markdown-body mb-2')
@@ -2455,7 +2447,9 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                 with ocr_output:
                     ui.markdown('*Upload a file and click "Transcribe Handwriting" to start.*').classes('text-sm text-[#A9B6D0]')
 
+            # --------------------------------------------------------------
             # TAB 6: JOB BOARD (unchanged)
+            # --------------------------------------------------------------
             with ui.tab_panel(t_jobs):
                 ui.label('Engineering Job Board - Egypt').classes('text-2xl font-bold text-white mb-4')
                 ui.markdown('Search for the latest engineering jobs in Egypt. Uses **JSearch** (RapidAPI) if the key is set, otherwise falls back to direct Wuzzuf and Bayt scraping with Cloudflare bypass.').classes('markdown-body mb-2')
@@ -2528,7 +2522,6 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                 ui.label('📊 Project Progress Tracker').classes('text-2xl font-bold text-white mb-4')
                 ui.markdown('Upload multiple files (images, PDFs, Excel) from different people to track project progress. The AI will extract data and create a unified summary with charts and an overview.').classes('markdown-body mb-2')
 
-                # File upload (multiple)
                 uploaded_files = []
                 upload_status = ui.label('No files uploaded yet.').classes('text-xs text-amber-400 mb-2')
 
@@ -2547,17 +2540,14 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                 ui.label('Upload files (multiple allowed)').classes('text-white text-sm font-semibold mb-1')
                 ui.upload(auto_upload=True, on_upload=handle_progress_upload, multiple=True).props('flat dark').classes('w-full mb-4')
 
-                # Date range inputs - smaller width
                 with ui.row().classes('w-full gap-4 mb-4'):
                     ui.label('Start Date').classes('text-white text-sm font-semibold')
                     start_date = ui.date(value=datetime.date.today() - datetime.timedelta(days=30)).classes('w-40')
                     ui.label('End Date').classes('text-white text-sm font-semibold')
                     end_date = ui.date(value=datetime.date.today()).classes('w-40')
 
-                # Description input
                 description_input = ui.input(label='Project Phase / Description', placeholder='e.g., Foundation Work', value='Foundation and Structure').classes('w-full mb-4')
 
-                # Output containers
                 progress_output = ui.column().classes('w-full')
                 progress_charts = ui.column().classes('w-full')
                 progress_overview = ui.column().classes('w-full')
@@ -2612,7 +2602,6 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                             return
 
                         combined_df = pd.concat(all_rows, ignore_index=True)
-
                         if 'date' in combined_df.columns:
                             combined_df['date'] = pd.to_datetime(combined_df['date'], errors='coerce')
                         if 'progress_percent' in combined_df.columns:
@@ -2634,7 +2623,6 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                                 columns.append({'name': 'source', 'label': 'Source File', 'field': 'source', 'sortable': True})
                             ui.table(columns=columns, rows=display_df.to_dict('records'), row_key='index').classes('w-full text-white')
 
-                        # Generate charts
                         fig_bar, fig_scatter, fig_pie, fig_line = None, None, None, None
                         if not combined_df.empty:
                             if 'category' in combined_df.columns and 'progress_percent' in combined_df.columns:
@@ -2733,13 +2721,12 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                 ui.button('Run AI Analysis', on_click=run_progress_analysis).classes('primary-btn mt-4')
 
             # ==============================================================
-            # TAB 8: DXF AREA EXTRACTOR (NEW)
+            # TAB 8: DXF AREA EXTRACTOR
             # ==============================================================
             with ui.tab_panel(t_dxf):
                 ui.label('📐 DXF Area Extractor').classes('text-2xl font-bold text-white mb-4')
                 ui.markdown('Upload a DXF file (architectural or structural) to extract areas of closed polylines. The tool auto-detects layers and lets you choose workflow and units.').classes('markdown-body mb-2')
 
-                # File upload (single)
                 dxf_file_data = {'bytes': None, 'name': None}
                 dxf_status_label = ui.label('Status: No file uploaded yet').classes('text-xs text-amber-400 font-semibold mb-2')
 
@@ -2751,7 +2738,6 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                         dxf_status_label.set_text(f'File Ready: {e.file.name} ({(len(data)/1024):.1f} KB)')
                         dxf_status_label.classes(replace='text-xs text-emerald-400 font-semibold mb-2')
                         ui.notify(f'Uploaded: {e.file.name}', type='positive')
-                        # Auto-detect layers
                         try:
                             doc = ezdxf.read(io.BytesIO(data))
                             layers = detect_dxf_layers(doc)
@@ -2769,7 +2755,6 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
 
                 detected_layers_label = ui.label('Detected layers will appear here after upload.').classes('text-xs text-[#A9B6D0] mb-2')
 
-                # Workflow and unit selection
                 with ui.row().classes('w-full gap-4 mb-4'):
                     workflow_select = ui.select(
                         label='Workflow',
@@ -2782,7 +2767,6 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                         value='mm'
                     ).classes('flex-1')
 
-                # Process button and output
                 dxf_output = ui.column().classes('w-full')
                 dxf_export = ui.row().classes('w-full gap-4 mt-4')
                 dxf_data_holder = {'df': None, 'total_area': 0}
@@ -2811,13 +2795,11 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                             return
 
                         df = pd.DataFrame(areas)
-                        # Sort by area descending
                         df = df.sort_values('area_m2', ascending=False)
                         dxf_data_holder['df'] = df
                         total = df['area_m2'].sum()
                         dxf_data_holder['total_area'] = total
 
-                        # Display table
                         dxf_output.clear()
                         with dxf_output:
                             ui.label('📋 Extracted Areas (m²)').classes('text-xl font-bold text-white mb-2')
@@ -2830,7 +2812,6 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                             ui.table(columns=columns, rows=df.to_dict('records'), row_key='index').classes('w-full text-white')
                             ui.label(f'Total Net Area: {total:.4f} m²').classes('text-lg font-bold text-[#FF8C00] mt-2')
 
-                        # Export button
                         dxf_export.clear()
                         with dxf_export:
                             def download_dxf_pdf():
@@ -2877,10 +2858,9 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
 
 
 # =====================================================================================
-# PROGRESS PDF GENERATION (custom function) – unchanged
+# PROGRESS PDF GENERATION
 # =====================================================================================
 def generate_progress_pdf(pdf_data, engineer_name, project_name, logo_bytes, ticket_id):
-    """Generate a custom PDF report for the Progress Tracker."""
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=MARGIN, leftMargin=MARGIN,
                              topMargin=MARGIN, bottomMargin=MARGIN)
@@ -2978,10 +2958,9 @@ def generate_progress_pdf(pdf_data, engineer_name, project_name, logo_bytes, tic
     return buffer.getvalue()
 
 # =====================================================================================
-# DXF PDF GENERATION (NEW)
+# DXF PDF GENERATION
 # =====================================================================================
 def generate_dxf_pdf(df, total_area, filename, workflow, units, engineer_name, project_name, logo_bytes, ticket_id):
-    """Generate PDF report for DXF area extraction."""
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=MARGIN, leftMargin=MARGIN,
                              topMargin=MARGIN, bottomMargin=MARGIN)
@@ -3027,7 +3006,6 @@ def generate_dxf_pdf(df, total_area, filename, workflow, units, engineer_name, p
     story.append(Spacer(1, 5))
     story.append(HRFlowable(width="100%", thickness=1.3, color=colors.HexColor("#FF8C00"), spaceAfter=8))
 
-    # Table
     if not df.empty:
         cols_to_show = ['layer', 'label', 'area_m2', 'vertices']
         table_data = [cols_to_show]
@@ -3050,7 +3028,6 @@ def generate_dxf_pdf(df, total_area, filename, workflow, units, engineer_name, p
         story.append(t)
         story.append(Spacer(1, 10))
 
-        # Total area
         total_para = Paragraph(f"<b>Total Net Area: {total_area:.4f} m²</b>", styles['h2'])
         story.append(total_para)
         story.append(Spacer(1, 6))
