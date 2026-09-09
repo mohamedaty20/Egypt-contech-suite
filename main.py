@@ -14,7 +14,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 import qrcode
 import pypdf
-import fitz  # PyMuPDF
+import pymupdf
 import requests
 import cloudscraper
 from bs4 import BeautifulSoup
