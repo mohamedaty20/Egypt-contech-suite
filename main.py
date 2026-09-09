@@ -1015,10 +1015,13 @@ def scrape_jsearch(query, max_results=20):
     if not RAPIDAPI_KEY:
         log("JSearch: No API key – skipping.")
         return jobs
+
+    # Try multiple parameter combinations
     params_list = [
         {"query": query, "page": "1", "num_pages": "1", "engine": "google_jobs"},
         {"query": f"{query} Egypt", "page": "1", "num_pages": "1", "engine": "google_jobs"},
         {"query": query, "page": "1", "num_pages": "1", "country": "eg", "engine": "google_jobs"},
+        {"query": query, "page": "1", "num_pages": "1"},  # without engine param
     ]
     for params in params_list:
         try:
@@ -1030,9 +1033,23 @@ def scrape_jsearch(query, max_results=20):
             )
             log(f"JSearch {params} -> status={resp.status_code}, len={len(resp.text)}")
             if resp.status_code == 200:
-                data = resp.json().get("data", [])
-                if data:
-                    for item in data[:max_results]:
+                # Log the raw JSON structure to debug
+                try:
+                    data = resp.json()
+                    log(f"JSearch JSON keys: {list(data.keys())}")
+                    if "data" in data:
+                        log(f"JSearch data length: {len(data['data'])}")
+                        if len(data['data']) > 0:
+                            log(f"JSearch first item keys: {list(data['data'][0].keys())}")
+                    else:
+                        log(f"JSearch response no 'data' key. Full response: {resp.text[:500]}")
+                except Exception as e:
+                    log(f"JSearch JSON parsing error: {e}")
+                    log(f"Raw response: {resp.text[:500]}")
+                    continue
+                # If we have data, process it
+                if data.get("data"):
+                    for item in data["data"][:max_results]:
                         title = item.get("job_title")
                         if not title:
                             continue
@@ -1054,6 +1071,8 @@ def scrape_jsearch(query, max_results=20):
                             })
                     if jobs:
                         break
+            else:
+                log(f"JSearch non-200 response: {resp.text[:200]}")
         except Exception as e:
             log(f"JSearch exception: {e}")
     log(f"JSearch parsed {len(jobs)} jobs")
