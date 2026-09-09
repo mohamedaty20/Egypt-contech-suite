@@ -22,6 +22,7 @@ from urllib.parse import quote_plus
 from io import BytesIO
 import ezdxf
 from ezdxf.math import Vec2
+from ezdxf.enums import TextEntityAlignment
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -56,7 +57,7 @@ MARGIN = 32
 USABLE_WIDTH = PAGE_WIDTH - (2 * MARGIN)
 
 # =====================================================================================
-# CODE-COMPLIANCE & TEXT SANITIZATION
+# CODE-COMPLIANCE & TEXT SANITIZATION (unchanged)
 # =====================================================================================
 CODE_BASIS_OPTIONS = [
     "Egyptian Codes: ECP 203 / ECP 202 / ECP 104 (Default Core Basis)",
@@ -1306,7 +1307,7 @@ Data (CSV format):
         return f"Error generating overview: {str(e)}"
 
 # =====================================================================================
-# DXF FUNCTIONS (FIXED)
+# DXF FUNCTIONS (FIXED - now handles bytes properly)
 # =====================================================================================
 def detect_dxf_layers(doc):
     layers = {}
@@ -1383,34 +1384,40 @@ def extract_areas_from_dxf(doc, unit='mm', workflow='architectural'):
     return results
 
 # =====================================================================================
-# AUTOCAD LAYOUT GENERATOR (FIXED)
+# ENHANCED AUTOCAD LAYOUT GENERATOR (FULL ARCHITECTURAL & STRUCTURAL)
 # =====================================================================================
-def generate_autocad_layout(plot_area_m2, street_width_m, location):
+def generate_enhanced_autocad_layout(params):
     """
-    Generate a simple 2D floor plan DXF and BOQ based on Egyptian code.
-    Returns: (dxf_bytes, boq_data, layout_info)
+    params: dict with keys:
+        - plot_area_m2, street_width_m, location, num_floors
+        - wall_thickness_mm, door_width_mm, door_height_mm, window_width_mm, window_height_mm
+        - column_spacing_x, column_spacing_y
+        - beam_width_mm, beam_depth_mm, slab_thickness_mm
+        - footing_width_mm, footing_depth_mm, footing_length_mm
+        - rebar_main_diam_mm, rebar_stirrup_diam_mm, rebar_spacing_mm
+        - project_name, engineer, date
+    Returns: (dxf_bytes, boq_df, layout_info)
     """
     # 1. Determine setbacks and max footprint based on Egyptian code (simplified)
-    # These are approximate; we'll assume a rectangular plot with width = 10m, length = plot_area/10.
-    # But we'll keep it simple: assume square-like footprint.
-    # For urban areas, typical max footprint is 50-60% of plot area.
-    footprint_ratio = 0.6
-    max_footprint = plot_area_m2 * footprint_ratio
-    # Number of floors allowed based on street width (simplified)
-    if street_width_m >= 12:
-        max_floors = 4  # Ground + 3 upper
-    elif street_width_m >= 8:
+    plot_area = params['plot_area_m2']
+    street_width = params['street_width_m']
+    if street_width >= 12:
+        max_floors = 4
+    elif street_width >= 8:
         max_floors = 3
-    elif street_width_m >= 6:
+    elif street_width >= 6:
         max_floors = 2
     else:
         max_floors = 1
+    num_floors = min(params.get('num_floors', max_floors), max_floors)  # user can't exceed max
 
-    # Determine plot dimensions: assume width = 10m, length = plot_area/10
+    footprint_ratio = 0.6
+    max_footprint = plot_area * footprint_ratio
+
+    # Assume width = 10m, length = plot_area/10
     plot_width = 10.0
-    plot_length = plot_area_m2 / plot_width
+    plot_length = plot_area / plot_width
 
-    # Setbacks: front = 3m, rear = 2m, sides = 1.5m (typical)
     front_setback = 3.0
     rear_setback = 2.0
     side_setback = 1.5
@@ -1418,107 +1425,216 @@ def generate_autocad_layout(plot_area_m2, street_width_m, location):
     building_width = plot_width - 2 * side_setback
     building_length = plot_length - front_setback - rear_setback
 
-    # If building area exceeds max footprint, scale down
     building_area = building_width * building_length
     if building_area > max_footprint:
         scale = (max_footprint / building_area) ** 0.5
         building_width *= scale
         building_length *= scale
-        # Recalculate building area
         building_area = building_width * building_length
 
-    # Ensure minimum dimensions
     if building_width < 5: building_width = 5
     if building_length < 5: building_length = 5
 
-    # 2. Create DXF
-    doc = ezdxf.new(dxfversion="R2010")
+    # Extract other params
+    wall_thick = params['wall_thickness_mm']
+    door_w = params['door_width_mm']
+    door_h = params['door_height_mm']
+    win_w = params['window_width_mm']
+    win_h = params['window_height_mm']
+    col_sp_x = params['column_spacing_x'] * 1000  # in mm
+    col_sp_y = params['column_spacing_y'] * 1000
+    beam_w = params['beam_width_mm']
+    beam_d = params['beam_depth_mm']
+    slab_t = params['slab_thickness_mm']
+    footing_w = params['footing_width_mm']
+    footing_d = params['footing_depth_mm']
+    footing_l = params['footing_length_mm']
+    rebar_main_d = params['rebar_main_diam_mm']
+    rebar_stirrup_d = params['rebar_stirrup_diam_mm']
+    rebar_sp = params['rebar_spacing_mm']
+
+    # 2. Create DXF document
+    doc = ezdxf.new(dxfversion='R2010')
     msp = doc.modelspace()
+    doc.header['$INSUNITS'] = 4  # millimeters
 
-    # Draw plot boundary (optional)
-    # msp.add_lwpolyline([(0,0), (plot_width,0), (plot_width,plot_length), (0,plot_length)], close=True)
+    # Convert building dims to mm for drawing
+    L = building_length * 1000
+    W = building_width * 1000
+    x0 = side_setback * 1000
+    y0 = front_setback * 1000
 
-    # Draw building footprint
-    # Origin at (side_setback, front_setback)
-    x0 = side_setback
-    y0 = front_setback
-    msp.add_lwpolyline([(x0, y0), (x0+building_width, y0), (x0+building_width, y0+building_length), (x0, y0+building_length)], close=True, dxfattribs={'layer': 'WALLS'})
+    # ========== ARCHITECTURAL LAYER ==========
+    # Outer walls (as thick polylines)
+    msp.add_lwpolyline(
+        [(x0, y0), (x0+L, y0), (x0+L, y0+W), (x0, y0+W), (x0, y0)],
+        dxfattribs={'layer': 'Walls', 'color': 1, 'lineweight': 40, 'linetype': 'CONTINUOUS'}
+    )
+    # Internal walls (simple grid)
+    # Horizontal corridor
+    h_corridor = y0 + W * 0.4
+    msp.add_line((x0, h_corridor), (x0+L, h_corridor), dxfattribs={'layer': 'Walls', 'color': 1, 'lineweight': 30})
+    h_corridor2 = y0 + W * 0.7
+    msp.add_line((x0, h_corridor2), (x0+L, h_corridor2), dxfattribs={'layer': 'Walls', 'color': 1, 'lineweight': 30})
+    # Vertical partitions
+    v1 = x0 + L * 0.3
+    msp.add_line((v1, y0), (v1, y0+W), dxfattribs={'layer': 'Walls', 'color': 1, 'lineweight': 30})
+    v2 = x0 + L * 0.6
+    msp.add_line((v2, y0), (v2, y0+W), dxfattribs={'layer': 'Walls', 'color': 1, 'lineweight': 30})
 
-    # Simple room partitions: divide into living, kitchen, bedrooms, etc.
-    # We'll create a simple plan: split lengthwise into 3 zones: living (0.4), kitchen (0.3), bedrooms (0.3)
-    # Actually, let's make it more realistic: ground floor: living + kitchen + bathroom; upper floors: bedrooms.
-    # But for simplicity, we'll just create a single floor plan with labels.
-    # We'll add some internal walls and text labels.
-    # For a basic plan:
-    # - Horizontal split at y = y0 + 0.4 * building_length (living area)
-    # - Then split the top part into kitchen and bedroom, etc.
-    # We'll just draw a few lines and add text.
-    # We'll add a center corridor? Not necessary.
+    # Doors (as rectangles with arc)
+    door_positions = [
+        (x0+0.1*L, y0+0.1*W), (x0+0.4*L, y0+0.5*W),
+        (x0+0.7*L, y0+0.2*W), (x0+0.9*L, y0+0.8*W)
+    ]
+    for (dx, dy) in door_positions:
+        msp.add_lwpolyline(
+            [(dx, dy), (dx+door_w, dy), (dx+door_w, dy+door_h), (dx, dy+door_h), (dx, dy)],
+            dxfattribs={'layer': 'Doors', 'color': 3, 'lineweight': 20}
+        )
+        msp.add_arc((dx, dy), radius=door_w, start_angle=0, end_angle=90,
+                    dxfattribs={'layer': 'Doors', 'color': 3})
 
-    # Add some internal walls:
-    # Horizontal wall at 40% length
-    wall_y = y0 + 0.4 * building_length
-    msp.add_line((x0, wall_y), (x0 + building_width, wall_y), dxfattribs={'layer': 'WALLS'})
+    # Windows
+    win_positions = [
+        (x0+0.1*L, y0+0.9*W), (x0+0.5*L, y0+0.9*W),
+        (x0+0.9*L, y0+0.1*W), (x0+0.9*L, y0+0.4*W)
+    ]
+    for (wx, wy) in win_positions:
+        msp.add_lwpolyline(
+            [(wx, wy), (wx+win_w, wy), (wx+win_w, wy+win_h), (wx, wy+win_h), (wx, wy)],
+            dxfattribs={'layer': 'Windows', 'color': 5, 'lineweight': 15}
+        )
 
-    # Vertical wall at 60% width for upper part (living vs kitchen/bedroom)
-    wall_x = x0 + 0.6 * building_width
-    msp.add_line((wall_x, wall_y), (wall_x, y0 + building_length), dxfattribs={'layer': 'WALLS'})
+    # Room labels
+    room_texts = [
+        ("Living Room", x0+0.15*L, y0+0.2*W),
+        ("Kitchen", x0+0.45*L, y0+0.5*W),
+        ("Bedroom 1", x0+0.75*L, y0+0.15*W),
+        ("Bedroom 2", x0+0.75*L, y0+0.6*W),
+        ("Bathroom", x0+0.15*L, y0+0.7*W)
+    ]
+    for (txt, tx, ty) in room_texts:
+        msp.add_text(
+            txt,
+            dxfattribs={'layer': 'Text', 'height': 80, 'color': 4}
+        ).set_pos((tx, ty), align=TextEntityAlignment.MIDDLE_CENTER)
 
-    # Vertical wall at 30% width for lower part (living vs dining?)
-    wall_x2 = x0 + 0.3 * building_width
-    msp.add_line((wall_x2, y0), (wall_x2, wall_y), dxfattribs={'layer': 'WALLS'})
+    # Dimensions
+    msp.add_line((x0, y0-100), (x0+L, y0-100), dxfattribs={'layer': 'Dimensions', 'color': 2})
+    msp.add_text(
+        f"L = {L/1000:.2f} m",
+        dxfattribs={'layer': 'Dimensions', 'height': 50, 'color': 2}
+    ).set_pos((x0+L/2, y0-150), align=TextEntityAlignment.MIDDLE_CENTER)
 
-    # Add text labels (using TEXT entities)
-    msp.add_text("LIVING", dxfattribs={'height': 0.3, 'insert': (x0 + 0.15*building_width, y0 + 0.2*building_length)})
-    msp.add_text("KITCHEN", dxfattribs={'height': 0.3, 'insert': (x0 + 0.45*building_width, wall_y + 0.2*(building_length-wall_y))})
-    msp.add_text("BEDROOM 1", dxfattribs={'height': 0.3, 'insert': (x0 + 0.7*building_width, wall_y + 0.3*(building_length-wall_y))})
-    msp.add_text("BEDROOM 2", dxfattribs={'height': 0.3, 'insert': (x0 + 0.7*building_width, wall_y + 0.6*(building_length-wall_y))})
-    msp.add_text("BATH", dxfattribs={'height': 0.3, 'insert': (x0 + 0.15*building_width, wall_y + 0.6*(building_length-wall_y))})
+    msp.add_line((x0-100, y0), (x0-100, y0+W), dxfattribs={'layer': 'Dimensions', 'color': 2})
+    msp.add_text(
+        f"W = {W/1000:.2f} m",
+        dxfattribs={'layer': 'Dimensions', 'height': 50, 'color': 2}
+    ).set_pos((x0-150, y0+W/2), align=TextEntityAlignment.MIDDLE_CENTER)
 
-    # Add dimensions? Not necessary.
+    # ========== STRUCTURAL LAYER ==========
+    # Column grid
+    cols_x = np.arange(x0, x0+L+col_sp_x, col_sp_x)
+    cols_y = np.arange(y0, y0+W+col_sp_y, col_sp_y)
+    for cx in cols_x:
+        for cy in cols_y:
+            msp.add_circle(
+                (cx, cy), radius=100,
+                dxfattribs={'layer': 'Columns', 'color': 6, 'lineweight': 30}
+            )
+            msp.add_text(
+                f"C{int((cx-x0)/1000)+1}{int((cy-y0)/1000)+1}",
+                dxfattribs={'layer': 'Text', 'height': 40, 'color': 6}
+            ).set_pos((cx+120, cy), align=TextEntityAlignment.MIDDLE_LEFT)
 
-    # Save DXF to bytes – FIX: use text stream and then encode
-    dxf_buffer = io.StringIO()
-    doc.write(dxf_buffer)
-    dxf_bytes = dxf_buffer.getvalue().encode('utf-8')
+    # Beams (lines between columns)
+    for cx in cols_x:
+        for cy in cols_y:
+            if cx < x0+L - col_sp_x:
+                msp.add_line((cx, cy), (cx+col_sp_x, cy),
+                             dxfattribs={'layer': 'Beams', 'color': 7, 'lineweight': 50})
+            if cy < y0+W - col_sp_y:
+                msp.add_line((cx, cy), (cx, cy+col_sp_y),
+                             dxfattribs={'layer': 'Beams', 'color': 7, 'lineweight': 50})
 
-    # 3. BOQ calculations
-    # Concrete volume: foundations, columns, slabs (simplified)
-    # Assume raft foundation thickness 0.3m, slab thickness 0.15m, column size 0.3x0.3, height 3m per floor.
-    # For simplicity, we'll just estimate.
-    floor_height = 3.0
-    # Building volume: footprint area * height per floor * number of floors
-    concrete_volume = building_area * floor_height * 0.1  # rough estimate for columns and shear walls? We'll keep simple.
-    # Use a thumb rule: 0.2 m3 concrete per m2 of built area per floor.
-    concrete_per_floor = building_area * 0.2
-    total_concrete = concrete_per_floor * max_floors
+    # Slab (hatched area – we add a boundary)
+    slab_points = [(x0, y0), (x0+L, y0), (x0+L, y0+W), (x0, y0+W)]
+    msp.add_lwpolyline(slab_points, dxfattribs={'layer': 'Slabs', 'color': 8, 'lineweight': 20})
 
-    # Rebar: 100 kg per m3 of concrete
-    rebar_kg = total_concrete * 100
+    # Footings (under columns)
+    for cx in cols_x:
+        for cy in cols_y:
+            msp.add_lwpolyline(
+                [(cx-footing_l/2, cy-footing_w/2),
+                 (cx+footing_l/2, cy-footing_w/2),
+                 (cx+footing_l/2, cy+footing_w/2),
+                 (cx-footing_l/2, cy+footing_w/2),
+                 (cx-footing_l/2, cy-footing_w/2)],
+                dxfattribs={'layer': 'Footings', 'color': 9, 'lineweight': 40}
+            )
 
-    # Bricks: for walls (assume wall thickness 0.12m, wall length = perimeter + internal walls)
-    # We'll approximate wall length from our partitions.
-    wall_length = 2*(building_width+building_length) + (building_length) + (building_width) + (building_width*0.3)  # external + internal
-    wall_height = floor_height * max_floors
-    wall_area = wall_length * wall_height  # m2
-    # Bricks count: approx 50 bricks per m2 for 12cm wall (with mortar)
-    brick_count = wall_area * 50
+    # Reinforcement (main bars and stirrups)
+    rebar_layer = 'Rebar'
+    for cx in cols_x:
+        for cy in cols_y:
+            # Main bars (vertical) – shown as small circles
+            msp.add_circle((cx, cy), radius=rebar_main_d/2,
+                           dxfattribs={'layer': rebar_layer, 'color': 10})
+            # Stirrups (rectangular around column)
+            stirrup_offset = 20
+            msp.add_lwpolyline(
+                [(cx-100-stirrup_offset, cy-100-stirrup_offset),
+                 (cx+100+stirrup_offset, cy-100-stirrup_offset),
+                 (cx+100+stirrup_offset, cy+100+stirrup_offset),
+                 (cx-100-stirrup_offset, cy+100+stirrup_offset),
+                 (cx-100-stirrup_offset, cy-100-stirrup_offset)],
+                dxfattribs={'layer': rebar_layer, 'color': 10, 'lineweight': 10}
+            )
 
-    # Finishes: flooring (ceramic) area = building_area * max_floors
-    flooring_area = building_area * max_floors
-    # Paint: wall area * 2 (both sides)
-    paint_area = wall_area * 2
+    # ========== BOQ CALCULATIONS ==========
+    # Concrete volumes
+    slab_vol = (L/1000) * (W/1000) * (slab_t/1000) * num_floors
+    col_vol = len(cols_x) * len(cols_y) * (0.2*0.2) * (params['floor_height_m']) * num_floors  # assuming 200x200 columns
+    beam_vol = (len(cols_x)-1) * len(cols_y) * (beam_w/1000) * (beam_d/1000) * (col_sp_x/1000) * num_floors \
+               + (len(cols_y)-1) * len(cols_x) * (beam_w/1000) * (beam_d/1000) * (col_sp_y/1000) * num_floors
+    footing_vol = len(cols_x) * len(cols_y) * (footing_l/1000) * (footing_w/1000) * (footing_d/1000)
+    total_concrete = slab_vol + col_vol + beam_vol + footing_vol
 
-    # Create BOQ dataframe
+    # Rebar weight (approx)
+    floor_height_m = params['floor_height_m']
+    main_bar_len = floor_height_m * 4 * len(cols_x) * len(cols_y) * num_floors
+    main_bar_weight = main_bar_len * (np.pi*(rebar_main_d/1000)**2/4 * 7850) / 1000  # kg
+    stirrup_perim = 2*(0.2+0.2)*1000  # mm
+    num_stirrups = floor_height_m / (rebar_sp/1000) * len(cols_x) * len(cols_y) * num_floors
+    stirrup_len = stirrup_perim * num_stirrups / 1000  # m
+    stirrup_weight = stirrup_len * (np.pi*(rebar_stirrup_d/1000)**2/4 * 7850) / 1000
+    total_rebar = main_bar_weight + stirrup_weight
+
+    # Formwork area
+    formwork = 2*(L/1000 + W/1000) * floor_height_m * num_floors  # walls (simplified)
+
+    # Bricks (for walls)
+    wall_length = 2*(building_width+building_length) + (building_length) + (building_width)  # external + internal
+    wall_area = wall_length * floor_height_m * num_floors
+    brick_count = wall_area * 50  # approx 50 bricks per m2
+
+    # Finishes
+    flooring_area = (L/1000) * (W/1000) * num_floors
+    paint_area = wall_area * 2  # both sides
+
+    # Build BOQ DataFrame
     boq_data = {
-        'Item': ['Concrete (m³)', 'Rebar (kg)', 'Bricks (nos)', 'Flooring (m²)', 'Paint (m²)'],
-        'Quantity': [round(total_concrete, 2), round(rebar_kg, 2), round(brick_count, 0), round(flooring_area, 2), round(paint_area, 2)],
-        'Unit': ['m³', 'kg', 'nos', 'm²', 'm²']
+        'Item': ['Concrete (m³)', 'Rebar (ton)', 'Formwork (m²)', 'Bricks (nos)', 'Flooring (m²)', 'Paint (m²)'],
+        'Quantity': [round(total_concrete, 2), round(total_rebar/1000, 2), round(formwork, 2),
+                     round(brick_count, 0), round(flooring_area, 2), round(paint_area, 2)],
+        'Unit': ['m³', 'ton', 'm²', 'nos', 'm²', 'm²']
     }
-    # Add unit rates (approximate)
+    # Unit rates (approximate)
     rates = {
         'Concrete (m³)': 2500,
-        'Rebar (kg)': 15,
+        'Rebar (ton)': 15000,
+        'Formwork (m²)': 300,
         'Bricks (nos)': 2.5,
         'Flooring (m²)': 150,
         'Paint (m²)': 30
@@ -1526,17 +1642,25 @@ def generate_autocad_layout(plot_area_m2, street_width_m, location):
     boq_data['Unit Rate (EGP)'] = [rates.get(item, 0) for item in boq_data['Item']]
     boq_data['Total Cost (EGP)'] = [round(boq_data['Quantity'][i] * boq_data['Unit Rate (EGP)'][i], 2) for i in range(len(boq_data['Item']))]
 
+    boq_df = pd.DataFrame(boq_data)
+
     layout_info = {
-        'plot_area': plot_area_m2,
-        'street_width': street_width_m,
-        'location': location,
+        'plot_area': plot_area,
+        'street_width': street_width,
+        'location': params['location'],
         'max_floors': max_floors,
+        'num_floors': num_floors,
         'footprint_area': round(building_area, 2),
         'building_width': round(building_width, 2),
         'building_length': round(building_length, 2),
     }
 
-    return dxf_bytes, pd.DataFrame(boq_data), layout_info
+    # Save DXF to bytes
+    dxf_buffer = io.BytesIO()
+    doc.write(dxf_buffer)
+    dxf_bytes = dxf_buffer.getvalue()
+
+    return dxf_bytes, boq_df, layout_info
 
 # =====================================================================================
 # STYLING - MODERN & PROFESSIONAL
@@ -2009,7 +2133,7 @@ def main_page():
             t_jobs = ui.tab('Job Board').classes('text-white font-bold')
             t_progress = ui.tab('Progress Tracker').classes('text-white font-bold')
             t_dxf = ui.tab('DXF Area Extractor').classes('text-white font-bold')
-            t_autocad = ui.tab('AutoCAD Layout Generator').classes('text-white font-bold')  # NEW
+            t_autocad = ui.tab('AutoCAD Layout Generator').classes('text-white font-bold')  # ENHANCED
 
         with ui.tab_panels(tabs, value=t_dash).classes('w-full bg-transparent mt-4'):
 
@@ -2674,7 +2798,7 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                     display_jobs(jobs_data)
 
             # ==============================================================
-            # TAB 7: PROGRESS TRACKER (with smaller date pickers)
+            # TAB 7: PROGRESS TRACKER (unchanged)
             # ==============================================================
             with ui.tab_panel(t_progress):
                 ui.label('📊 Project Progress Tracker').classes('text-2xl font-bold text-white mb-4')
@@ -2879,7 +3003,7 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                 ui.button('Run AI Analysis', on_click=run_progress_analysis).classes('primary-btn mt-4')
 
             # ==============================================================
-            # TAB 8: DXF AREA EXTRACTOR (FIXED - now handles str)
+            # TAB 8: DXF AREA EXTRACTOR (FIXED - now handles bytes)
             # ==============================================================
             with ui.tab_panel(t_dxf):
                 ui.label('📐 DXF Area Extractor').classes('text-2xl font-bold text-white mb-4')
@@ -2891,7 +3015,7 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                 async def handle_dxf_upload(e):
                     try:
                         data = await e.file.read()
-                        # Ensure data is bytes – if it's a str, encode it
+                        # Ensure bytes
                         if isinstance(data, str):
                             data = data.encode('utf-8')
                         dxf_file_data['bytes'] = data
@@ -3013,56 +3137,110 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                     ui.markdown('*Upload a DXF and click "Process DXF" to extract areas.*').classes('text-sm text-[#A9B6D0]')
 
             # ==============================================================
-            # TAB 9: AUTOCAD LAYOUT GENERATOR (FIXED)
+            # TAB 9: AUTOCAD LAYOUT GENERATOR (ENHANCED)
             # ==============================================================
             with ui.tab_panel(t_autocad):
-                ui.label('🏗️ AutoCAD Layout Generator').classes('text-2xl font-bold text-white mb-4')
-                ui.markdown('Enter your plot details and generate a full 2D floor plan DXF with BOQ, based on Egyptian building regulations (simplified).').classes('markdown-body mb-2')
+                ui.label('🏗️ AutoCAD Layout Generator – Full Architectural & Structural').classes('text-2xl font-bold text-white mb-4')
+                ui.markdown('Enter your plot details and generate a comprehensive DXF with architectural plan, structural grid, reinforcement, and BOQ with grand totals.').classes('markdown-body mb-2')
 
-                with ui.row().classes('w-full gap-4 mb-4'):
-                    plot_area_input = ui.number(label='Plot Area (m²)', value=200, min=50, max=1000).classes('flex-1')
-                    street_width_input = ui.number(label='Street Width (m)', value=10, min=4, max=40).classes('flex-1')
-                    location_select = ui.select(
-                        label='Location',
-                        options=['Cairo', 'Giza', 'Alexandria', 'Delta', 'Other'],
-                        value='Cairo'
-                    ).classes('flex-1')
+                with ui.row().classes('w-full gap-4 flex-wrap'):
+                    # Plot & Building
+                    with ui.column().classes('input-card flex-1'):
+                        ui.label('Plot & Building').classes('font-bold text-white')
+                        plot_area_input = ui.number(label='Plot Area (m²)', value=200, min=50, max=1000).classes('w-full')
+                        street_width_input = ui.number(label='Street Width (m)', value=10, min=4, max=40).classes('w-full')
+                        location_select = ui.select(
+                            label='Location',
+                            options=['Cairo', 'Giza', 'Alexandria', 'Delta', 'Other'],
+                            value='Cairo'
+                        ).classes('w-full')
+                        num_floors_input = ui.number(label='Number of Floors', value=2, min=1, max=10).classes('w-full')
+                        floor_height_input = ui.number(label='Floor Height (m)', value=3.0, step=0.1).classes('w-full')
+
+                    # Architectural
+                    with ui.column().classes('input-card flex-1'):
+                        ui.label('Architectural Details').classes('font-bold text-white')
+                        wall_thickness_mm = ui.number(label='Wall Thickness (mm)', value=200, step=10).classes('w-full')
+                        door_width_mm = ui.number(label='Door Width (mm)', value=900, step=50).classes('w-full')
+                        door_height_mm = ui.number(label='Door Height (mm)', value=2100, step=50).classes('w-full')
+                        window_width_mm = ui.number(label='Window Width (mm)', value=1200, step=50).classes('w-full')
+                        window_height_mm = ui.number(label='Window Height (mm)', value=1200, step=50).classes('w-full')
+
+                    # Structural
+                    with ui.column().classes('input-card flex-1'):
+                        ui.label('Structural Grid').classes('font-bold text-white')
+                        column_spacing_x = ui.number(label='Column Spacing X (m)', value=4.0, step=0.5).classes('w-full')
+                        column_spacing_y = ui.number(label='Column Spacing Y (m)', value=4.0, step=0.5).classes('w-full')
+                        beam_width_mm = ui.number(label='Beam Width (mm)', value=300, step=10).classes('w-full')
+                        beam_depth_mm = ui.number(label='Beam Depth (mm)', value=500, step=10).classes('w-full')
+                        slab_thickness_mm = ui.number(label='Slab Thickness (mm)', value=150, step=10).classes('w-full')
+
+                    # Footings & Rebar
+                    with ui.column().classes('input-card flex-1'):
+                        ui.label('Footings & Reinforcement').classes('font-bold text-white')
+                        footing_width_mm = ui.number(label='Footing Width (mm)', value=800, step=50).classes('w-full')
+                        footing_depth_mm = ui.number(label='Footing Depth (mm)', value=400, step=50).classes('w-full')
+                        footing_length_mm = ui.number(label='Footing Length (mm)', value=800, step=50).classes('w-full')
+                        rebar_main_diam_mm = ui.number(label='Main Bar Diameter (mm)', value=16, step=2).classes('w-full')
+                        rebar_stirrup_diam_mm = ui.number(label='Stirrup Diameter (mm)', value=10, step=2).classes('w-full')
+                        rebar_spacing_mm = ui.number(label='Stirrup Spacing (mm)', value=200, step=10).classes('w-full')
 
                 autocad_output = ui.column().classes('w-full')
                 autocad_export = ui.row().classes('w-full gap-4 mt-4')
                 autocad_data_holder = {'dxf': None, 'boq_df': None, 'info': None}
 
-                async def generate_autocad():
+                async def generate_enhanced_autocad():
                     autocad_output.clear()
                     autocad_export.clear()
                     with autocad_output:
                         ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
-                        ui.label('Generating layout and BOQ...').classes('self-center text-sm')
+                        ui.label('Generating full architectural & structural DXF with BOQ...').classes('self-center text-sm')
 
                     try:
-                        plot_area = plot_area_input.value or 200
-                        street_width = street_width_input.value or 10
-                        location = location_select.value or 'Cairo'
+                        params = {
+                            'plot_area_m2': plot_area_input.value or 200,
+                            'street_width_m': street_width_input.value or 10,
+                            'location': location_select.value or 'Cairo',
+                            'num_floors': int(num_floors_input.value or 2),
+                            'floor_height_m': floor_height_input.value or 3.0,
+                            'wall_thickness_mm': int(wall_thickness_mm.value or 200),
+                            'door_width_mm': int(door_width_mm.value or 900),
+                            'door_height_mm': int(door_height_mm.value or 2100),
+                            'window_width_mm': int(window_width_mm.value or 1200),
+                            'window_height_mm': int(window_height_mm.value or 1200),
+                            'column_spacing_x': column_spacing_x.value or 4.0,
+                            'column_spacing_y': column_spacing_y.value or 4.0,
+                            'beam_width_mm': int(beam_width_mm.value or 300),
+                            'beam_depth_mm': int(beam_depth_mm.value or 500),
+                            'slab_thickness_mm': int(slab_thickness_mm.value or 150),
+                            'footing_width_mm': int(footing_width_mm.value or 800),
+                            'footing_depth_mm': int(footing_depth_mm.value or 400),
+                            'footing_length_mm': int(footing_length_mm.value or 800),
+                            'rebar_main_diam_mm': int(rebar_main_diam_mm.value or 16),
+                            'rebar_stirrup_diam_mm': int(rebar_stirrup_diam_mm.value or 10),
+                            'rebar_spacing_mm': int(rebar_spacing_mm.value or 200),
+                            'project_name': project_name_input.value,
+                            'engineer': engineer_input.value,
+                            'date': datetime.date.today().strftime('%Y-%m-%d')
+                        }
 
-                        dxf_bytes, boq_df, info = generate_autocad_layout(plot_area, street_width, location)
+                        dxf_bytes, boq_df, info = generate_enhanced_autocad_layout(params)
                         autocad_data_holder['dxf'] = dxf_bytes
                         autocad_data_holder['boq_df'] = boq_df
                         autocad_data_holder['info'] = info
 
-                        # Display info
                         autocad_output.clear()
                         with autocad_output:
-                            ui.label('✅ Layout Generated Successfully').classes('text-xl font-bold text-green-400 mb-2')
+                            ui.label('✅ Enhanced Layout Generated').classes('text-xl font-bold text-green-400 mb-2')
                             ui.markdown(f"""
                             **Plot Area:** {info['plot_area']} m²  
                             **Street Width:** {info['street_width']} m  
                             **Location:** {info['location']}  
-                            **Max Allowed Floors:** {info['max_floors']}  
+                            **Max Allowed Floors:** {info['max_floors']} (used {info['num_floors']})  
                             **Footprint Area:** {info['footprint_area']} m²  
                             **Building Dimensions:** {info['building_width']:.2f} m x {info['building_length']:.2f} m
                             """).classes('text-white')
-                            ui.label('📋 Bill of Quantities').classes('text-xl font-bold text-white mt-4 mb-2')
-                            # Show BOQ table
+                            ui.label('📋 Bill of Quantities (with Grand Total)').classes('text-xl font-bold text-white mt-4 mb-2')
                             columns = [
                                 {'name': 'Item', 'label': 'Item', 'field': 'Item', 'sortable': True},
                                 {'name': 'Quantity', 'label': 'Quantity', 'field': 'Quantity', 'sortable': True},
@@ -3072,20 +3250,18 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                             ]
                             ui.table(columns=columns, rows=boq_df.to_dict('records'), row_key='index').classes('w-full text-white')
                             total_cost = boq_df['Total Cost (EGP)'].sum()
-                            ui.label(f'Total Estimated Cost: {total_cost:.2f} EGP').classes('text-lg font-bold text-[#FF8C00] mt-2')
+                            ui.label(f'🏷️ Grand Total Cost: {total_cost:,.2f} EGP').classes('text-2xl font-bold text-[#FF8C00] mt-2')
 
-                        # Export buttons
                         autocad_export.clear()
                         with autocad_export:
                             def download_dxf():
                                 if autocad_data_holder['dxf']:
-                                    ui.download(autocad_data_holder['dxf'], filename=f"Layout_{info['plot_area']}m2.dxf")
+                                    ui.download(autocad_data_holder['dxf'], filename=f"Enhanced_Layout_{info['plot_area']}m2.dxf")
                                     ui.notify('DXF downloaded!', type='positive')
                                 else:
                                     ui.notify('No DXF generated.', type='warning')
                             def download_pdf():
                                 try:
-                                    # Generate PDF report
                                     pdf_bytes = generate_autocad_pdf(
                                         info,
                                         boq_df,
@@ -3110,9 +3286,9 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                             ui.label(f'Error: {str(e)}').classes('text-red-400')
                             traceback.print_exc()
 
-                ui.button('Generate Layout & BOQ', on_click=generate_autocad).classes('primary-btn mt-4')
+                ui.button('Generate Enhanced Layout & BOQ', on_click=generate_enhanced_autocad).classes('primary-btn mt-4')
                 with autocad_output:
-                    ui.markdown('*Enter plot details and click "Generate Layout & BOQ".*').classes('text-sm text-[#A9B6D0]')
+                    ui.markdown('*Enter plot details and click to generate a high‑quality DXF with architectural, structural, and reinforcement layers.*').classes('text-sm text-[#A9B6D0]')
 
         # ---------------- FOOTER ----------------
         ui.html('''
@@ -3128,7 +3304,7 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
 
 
 # =====================================================================================
-# PROGRESS PDF GENERATION
+# PROGRESS PDF GENERATION (unchanged)
 # =====================================================================================
 def generate_progress_pdf(pdf_data, engineer_name, project_name, logo_bytes, ticket_id):
     buffer = io.BytesIO()
@@ -3228,7 +3404,7 @@ def generate_progress_pdf(pdf_data, engineer_name, project_name, logo_bytes, tic
     return buffer.getvalue()
 
 # =====================================================================================
-# DXF PDF GENERATION
+# DXF PDF GENERATION (unchanged)
 # =====================================================================================
 def generate_dxf_pdf(df, total_area, filename, workflow, units, engineer_name, project_name, logo_bytes, ticket_id):
     buffer = io.BytesIO()
@@ -3309,7 +3485,7 @@ def generate_dxf_pdf(df, total_area, filename, workflow, units, engineer_name, p
     return buffer.getvalue()
 
 # =====================================================================================
-# AUTOCAD PDF GENERATION (NEW)
+# AUTOCAD PDF GENERATION (unchanged)
 # =====================================================================================
 def generate_autocad_pdf(info, boq_df, engineer_name, project_name, logo_bytes, ticket_id):
     buffer = io.BytesIO()
@@ -3333,7 +3509,7 @@ def generate_autocad_pdf(info, boq_df, engineer_name, project_name, logo_bytes, 
     <b>Company:</b> {company_name} &nbsp;|&nbsp; <b>Project:</b> {project_name}<br/>
     <b>Engineer in Charge:</b> {engineer_name}<br/>
     <b>Plot Area:</b> {info['plot_area']} m² &nbsp;|&nbsp; <b>Street Width:</b> {info['street_width']} m<br/>
-    <b>Location:</b> {info['location']} &nbsp;|&nbsp; <b>Max Floors:</b> {info['max_floors']}<br/>
+    <b>Location:</b> {info['location']} &nbsp;|&nbsp; <b>Max Floors:</b> {info['max_floors']} (used {info['num_floors']})<br/>
     <b>Report UID:</b> <font color="#CC0000"><b>{unique_uid}</b></font>
     """
     right_cell = ReportLabImage(io.BytesIO(logo_bytes), width=70, height=32) if logo_bytes else ""
@@ -3358,12 +3534,10 @@ def generate_autocad_pdf(info, boq_df, engineer_name, project_name, logo_bytes, 
     story.append(Spacer(1, 5))
     story.append(HRFlowable(width="100%", thickness=1.3, color=colors.HexColor("#FF8C00"), spaceAfter=8))
 
-    # Add a short description
     desc = f"Footprint: {info['footprint_area']} m², Building dimensions: {info['building_width']:.2f} x {info['building_length']:.2f} m"
     story.append(Paragraph(desc, styles['body']))
     story.append(Spacer(1, 6))
 
-    # BOQ Table
     if not boq_df.empty:
         cols_to_show = ['Item', 'Quantity', 'Unit', 'Unit Rate (EGP)', 'Total Cost (EGP)']
         table_data = [cols_to_show]
@@ -3385,7 +3559,7 @@ def generate_autocad_pdf(info, boq_df, engineer_name, project_name, logo_bytes, 
         story.append(Spacer(1, 10))
 
         total_cost = boq_df['Total Cost (EGP)'].sum()
-        total_para = Paragraph(f"<b>Total Estimated Cost: {total_cost:.2f} EGP</b>", styles['h2'])
+        total_para = Paragraph(f"<b>Total Estimated Cost: {total_cost:,.2f} EGP</b>", styles['h2'])
         story.append(total_para)
         story.append(Spacer(1, 6))
 
