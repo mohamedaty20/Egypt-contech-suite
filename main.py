@@ -2688,4 +2688,78 @@ def generate_progress_pdf(pdf_data, engineer_name, project_name, logo_bytes, tic
             [Paragraph("Consolidated Progress Summary", sub_style), ""],
             [Paragraph(meta_html, meta_style), ""],
         ]
-        t_head = Table(header_table_data, colWidths=[USABLE_WIDTH
+        t_head = Table(header_table_data, colWidths=[USABLE_WIDTH - 100, 100])
+        t_head.setStyle(TableStyle([
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+        ]))
+        story.append(t_head)
+    except Exception:
+        story.append(Paragraph("PROGRESS TRACKING REPORT", title_style))
+        story.append(Paragraph("Consolidated Progress Summary", sub_style))
+        story.append(Paragraph(meta_html, meta_style))
+
+    story.append(Spacer(1, 5))
+    story.append(HRFlowable(width="100%", thickness=1.3, color=colors.HexColor("#FF8C00"), spaceAfter=8))
+
+    # Table
+    df = pdf_data['df'].copy()
+    if not df.empty:
+        cols_to_show = [col for col in df.columns if col in ['date', 'description', 'progress_percent', 'category', 'location']]
+        if 'source' in df.columns:
+            cols_to_show.append('source')
+        df_display = df[cols_to_show].fillna('')
+        if 'date' in df_display.columns:
+            df_display['date'] = df_display['date'].apply(lambda x: x.strftime('%Y-%m-%d') if hasattr(x, 'strftime') else str(x))
+        table_data = [cols_to_show]
+        for _, row in df_display.iterrows():
+            table_data.append([str(row[col]) for col in cols_to_show])
+        if len(table_data) > 20:
+            table_data = table_data[:20]
+        col_widths = [USABLE_WIDTH / len(cols_to_show)] * len(cols_to_show)
+        t = Table(table_data, colWidths=col_widths, repeatRows=1)
+        t.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1B2A4A')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#94A3B8')),
+            ('FONTSIZE', (0, 0), (-1, -1), 8),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F1F5F9')]),
+            ('TOPPADDING', (0, 0), (-1, -1), 3),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+        ]))
+        story.append(t)
+        story.append(Spacer(1, 10))
+
+    # Charts
+    for fig in [pdf_data['fig_bar'], pdf_data['fig_scatter'], pdf_data['fig_pie'], pdf_data['fig_line']]:
+        if fig:
+            try:
+                img_bytes = fig.to_image(format="png", width=400, height=300, scale=2)
+                img_flowable = ReportLabImage(io.BytesIO(img_bytes), width=USABLE_WIDTH*0.45, height=USABLE_WIDTH*0.45*0.75)
+                story.append(img_flowable)
+                story.append(Spacer(1, 6))
+            except Exception as e:
+                print(f"Could not embed chart: {e}")
+
+    # AI Overview
+    if pdf_data['overview']:
+        story.append(Paragraph("AI Overview", styles['h2']))
+        story.extend(markdown_to_pdf_flowables(pdf_data['overview'], styles))
+        story.append(Spacer(1, 6))
+
+    build_pdf_footer_signature_and_qr(story, styles, qr_buf, engineer_name)
+
+    doc.build(story)
+    buffer.seek(0)
+    return buffer.getvalue()
+
+ui.run(
+    host='0.0.0.0',
+    port=int(os.environ.get('PORT', 8080)),
+    title='Multi-Standard Engineering Auditor',
+    favicon='🏗️',
+    reload=False,
+    reconnect_timeout=30.0,
+)
