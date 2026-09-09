@@ -620,7 +620,7 @@ def markdown_to_pdf_flowables(raw_text: str, styles: dict, avail_width: float = 
 
 
 # =====================================================================================
-# PDF / EXPORT HELPERS (unchanged)
+# PDF / EXPORT HELPERS (modified for OCR)
 # =====================================================================================
 def generate_qr_code(data_str):
     qr = qrcode.QRCode(version=1, box_size=5, border=1)
@@ -633,7 +633,7 @@ def generate_qr_code(data_str):
     return buf
 
 
-def build_pdf_header(story, styles, doc_title, subtitle, logo_bytes, engineer, project, location, rep_date, ticket_id, unique_hash):
+def build_pdf_header(story, styles, doc_title, subtitle, logo_bytes, engineer, project, location, rep_date, ticket_id, unique_hash, show_ticket=True):
     title_style = ParagraphStyle("DocTitle", fontSize=14, textColor=colors.HexColor("#1B2A4A"),
                                   spaceAfter=3, fontName="Helvetica-Bold", leading=17)
     sub_style = ParagraphStyle("DocSub", fontSize=9, textColor=colors.HexColor("#B45309"),
@@ -641,10 +641,11 @@ def build_pdf_header(story, styles, doc_title, subtitle, logo_bytes, engineer, p
     meta_style = ParagraphStyle("MetaStyle", fontSize=8, textColor=colors.HexColor("#334155"),
                                  leading=11.5, fontName="Helvetica")
 
+    ticket_part = f"&nbsp;|&nbsp; <b>Batch Ticket ID:</b> {ticket_id}" if show_ticket else ""
     meta_html = f"""
     <b>Project:</b> {project} &nbsp;|&nbsp; <b>Location:</b> {location}<br/>
-    <b>Engineer in Charge:</b> {engineer} &nbsp;|&nbsp; <b>Date:</b> {rep_date}<br/>
-    <b>Batch Ticket ID:</b> {ticket_id} &nbsp;|&nbsp; <b>Verification UID:</b> <font color="#CC0000"><b>{unique_hash}</b></font>
+    <b>Engineer in Charge:</b> {engineer} &nbsp;|&nbsp; <b>Date:</b> {rep_date}{ticket_part}<br/>
+    <b>Verification UID:</b> <font color="#CC0000"><b>{unique_hash}</b></font>
     """
 
     right_cell = ReportLabImage(io.BytesIO(logo_bytes), width=70, height=32) if logo_bytes else ""
@@ -670,35 +671,28 @@ def build_pdf_header(story, styles, doc_title, subtitle, logo_bytes, engineer, p
     story.append(HRFlowable(width="100%", thickness=1.3, color=colors.HexColor("#FF8C00"), spaceAfter=8))
 
 
-def build_pdf_footer_and_signatures(story, styles, qr_img_buffer):
+def build_pdf_footer_signature_and_qr(story, styles, qr_img_buffer, engineer_name):
+    """Custom footer: only Prepared by Engineer with signature line, QR on the right."""
     body_style = ParagraphStyle("SigBody", fontSize=8, textColor=colors.HexColor("#334155"), leading=11)
-    sec_style = ParagraphStyle("SecTitle", fontSize=9.5, textColor=colors.HexColor("#1B2A4A"),
-                                spaceBefore=8, spaceAfter=4, fontName="Helvetica-Bold")
-
-    story.append(Spacer(1, 6))
-    story.append(Paragraph("Engineering Approvals &amp; Compliance Sign-Off", sec_style))
-
+    # Prepare QR image
     qr_lab_img = ReportLabImage(qr_img_buffer, width=38, height=38)
-    sign_cell_1 = Paragraph("<b>Prepared By</b><br/>QA/QC Engineer<br/><br/>_________________", body_style)
-    sign_cell_2 = Paragraph("<b>Technical Director</b><br/>Chief Engineer<br/><br/>_________________", body_style)
-    sign_cell_3 = Paragraph("<b>Client / Consultant</b><br/>Official Stamp<br/><br/>_________________", body_style)
-    qr_cell = [Paragraph("<b>QR Verify</b>", body_style), qr_lab_img]
+    # Signature cell: "Prepared by Engineer:" and a blank line for signature
+    sign_text = f"<b>Prepared by Engineer:</b><br/>{engineer_name}<br/><br/>_________________<br/>(Signature &amp; Date)"
+    sign_cell = Paragraph(sign_text, body_style)
 
+    # Table with two cells: signature on left, QR on right
     w = USABLE_WIDTH
-    t_sign = Table([[sign_cell_1, sign_cell_2, sign_cell_3, qr_cell]],
-                    colWidths=[w * 0.28, w * 0.28, w * 0.28, w * 0.16])
-    t_sign.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F8FAFC")),
+    t = Table([[sign_cell, qr_lab_img]], colWidths=[w * 0.7, w * 0.3])
+    t.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
-        ("TOPPADDING", (0, 0), (-1, -1), 4),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-        ("ALIGN", (3, 0), (3, 0), "CENTER"),
+        ("ALIGN", (1, 0), (1, 0), "RIGHT"),
+        ("LEFTPADDING", (0, 0), (0, 0), 0),
+        ("RIGHTPADDING", (1, 0), (1, 0), 0),
     ]))
-    story.append(t_sign)
+    story.append(t)
 
 
-def build_report_pdf(doc_title, subtitle, body_markdown, meta, logo_bytes, extra_flowables_before_body=None):
+def build_report_pdf(doc_title, subtitle, body_markdown, meta, logo_bytes, extra_flowables_before_body=None, show_ticket=True):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=MARGIN, leftMargin=MARGIN,
                              topMargin=MARGIN, bottomMargin=MARGIN)
@@ -708,7 +702,7 @@ def build_report_pdf(doc_title, subtitle, body_markdown, meta, logo_bytes, extra
     qr_buf = generate_qr_code(f"UID: {unique_uid} | {doc_title} - {meta['project']}")
 
     build_pdf_header(story, styles, doc_title, subtitle, logo_bytes, meta['engineer'],
-                      meta['project'], meta['location'], meta['date'], meta['ticket'], unique_uid)
+                      meta['project'], meta['location'], meta['date'], meta['ticket'], unique_uid, show_ticket)
 
     if extra_flowables_before_body:
         story.extend(extra_flowables_before_body)
@@ -716,7 +710,9 @@ def build_report_pdf(doc_title, subtitle, body_markdown, meta, logo_bytes, extra
 
     story.extend(markdown_to_pdf_flowables(body_markdown, styles))
     story.append(Spacer(1, 8))
-    build_pdf_footer_and_signatures(story, styles, qr_buf)
+
+    # Custom footer with only one signature + QR
+    build_pdf_footer_signature_and_qr(story, styles, qr_buf, meta['engineer'])
 
     doc.build(story)
     buffer.seek(0)
@@ -2116,11 +2112,11 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                     ui.button('Download Chat PDF Transcript', on_click=download_chat_pdf).classes('primary-btn flex-1')
 
             # =========================================================================
-            # TAB 5: HANDWRITING OCR (replaces BOQ)
+            # TAB 5: HANDWRITING OCR (enhanced with editing and custom PDF)
             # =========================================================================
             with ui.tab_panel(t_handwriting):
                 ui.label('Handwriting to Digital Text Transcription').classes('text-2xl font-bold text-white mb-2')
-                ui.markdown('Upload a scanned handwritten note (PNG, JPG) or PDF. The AI will convert it to clean digital text.').classes('markdown-body mb-2')
+                ui.markdown('Upload a scanned handwritten note (PNG, JPG) or PDF. The AI will convert it to clean digital text, detecting tables if present.').classes('markdown-body mb-2')
 
                 # File upload
                 ocr_file_data = {'bytes': None, 'type': None, 'name': None}
@@ -2139,10 +2135,12 @@ Ensure all tables are proper Markdown tables with header and separator rows.
 
                 ui.upload(label='Upload Handwriting Image or PDF', auto_upload=True, on_upload=handle_ocr_upload).props('flat dark').classes('w-full mb-4')
 
-                # Output area
+                # Output area: editable text and download buttons
                 ocr_output = ui.column().classes('w-full')
                 ocr_export = ui.row().classes('w-full gap-4 mt-4')
                 transcribed_text_holder = {'text': ''}
+                # We'll create a textarea for editing
+                text_editor = None
 
                 async def run_ocr():
                     if not client:
@@ -2159,19 +2157,18 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                         ui.label('Transcribing handwriting...').classes('self-center text-sm')
 
                     try:
-                        # Build contents: prompt + images
+                        # Build contents: prompt with instruction to format tables as Markdown
                         prompt = """
 You are an expert OCR system. Transcribe the handwritten text from the provided image(s).
-Return only the transcribed text, without any additional commentary, headings, or formatting.
-If there are multiple pages, combine them in order.
+- If you detect any tabular data (rows and columns), format it as a proper Markdown table with a header row and a separator line (|---|...|).
+- Return only the transcribed text and tables, without any additional commentary, headings, or formatting.
+- If there are multiple pages, combine them in order.
 """
                         contents = [prompt]
 
                         # Process file – send pages as PNG
                         if ocr_file_data['type'] == 'application/pdf':
                             try:
-                                # Extract text from PDF (if any) – not needed for handwriting
-                                # But we'll send the first few pages as images
                                 doc = fitz.open(stream=ocr_file_data['bytes'], filetype="pdf")
                                 for page_num in range(min(6, len(doc))):
                                     page = doc.load_page(page_num)
@@ -2182,36 +2179,50 @@ If there are multiple pages, combine them in order.
                                     contents.append(img_part)
                                 doc.close()
                             except Exception:
-                                # Fallback: send as binary
                                 contents.append(types.Part.from_bytes(data=ocr_file_data['bytes'], mime_type='application/pdf'))
                         else:
-                            # Image
                             img_part = types.Part.from_bytes(data=ocr_file_data['bytes'], mime_type=ocr_file_data['type'])
                             contents.append(img_part)
 
                         # Call Gemini
                         response_text = await call_gemini(contents, temperature=0, timeout=240)
-                        transcribed = sanitize_ai_markdown(response_text)  # clean any accidental markdown
+                        transcribed = sanitize_ai_markdown(response_text)  # clean
                         transcribed_text_holder['text'] = transcribed
 
-                        # Display the transcribed text
+                        # Display the transcribed text in a textarea for editing
                         ocr_output.clear()
                         with ocr_output:
                             with ui.column().classes('output-card w-full'):
-                                ui.label('Transcribed Text').classes('text-xl font-bold text-white mb-2')
-                                ui.markdown(transcribed).classes('markdown-body')
+                                ui.label('Transcribed Text (editable)').classes('text-xl font-bold text-white mb-2')
+                                # Use a textarea with the content
+                                text_editor = ui.textarea(value=transcribed, placeholder='Edit the transcribed text here...').classes('w-full markdown-body').style('min-height: 300px; background: #0a1a3a; color: white; border: 1px solid #FF8C00;')
+                                # Preview of rendered markdown (optional)
+                                ui.label('Preview:').classes('text-lg font-bold text-white mt-2')
+                                preview_container = ui.column().classes('w-full')
+                                def update_preview():
+                                    preview_container.clear()
+                                    with preview_container:
+                                        ui.markdown(text_editor.value).classes('markdown-body')
+                                text_editor.on('input', update_preview)
+                                # Initial preview
+                                update_preview()
 
-                        # Export buttons
+                        # Export buttons using the current text from the editor
                         with ocr_export:
                             def download_ocr_pdf():
                                 try:
+                                    # Get current text from editor
+                                    current_text = text_editor.value if text_editor else transcribed_text_holder['text']
                                     meta = current_meta('OCR')
+                                    # Use custom PDF with no doc_title/subtitle, and no ticket in header
+                                    # We'll use build_report_pdf with show_ticket=False and empty doc_title/subtitle
                                     pdf_bytes = build_report_pdf(
-                                        "HANDWRITING TRANSCRIPTION REPORT",
-                                        f"Transcribed from {ocr_file_data['name']}",
-                                        transcribed_text_holder['text'],
-                                        meta,
-                                        logo_bytes_holder['bytes'],
+                                        doc_title="",  # empty to hide
+                                        subtitle="",   # empty to hide
+                                        body_markdown=current_text,
+                                        meta=meta,
+                                        logo_bytes=logo_bytes_holder['bytes'],
+                                        show_ticket=False  # hides Batch Ticket ID
                                     )
                                     ui.download(pdf_bytes, filename=f"Handwriting_Transcription_{ticket_input.value}.pdf")
                                     ui.notify('PDF report downloaded!', type='positive')
@@ -2220,7 +2231,8 @@ If there are multiple pages, combine them in order.
 
                             def download_ocr_txt():
                                 try:
-                                    txt_bytes = transcribed_text_holder['text'].encode('utf-8')
+                                    current_text = text_editor.value if text_editor else transcribed_text_holder['text']
+                                    txt_bytes = current_text.encode('utf-8')
                                     ui.download(txt_bytes, filename=f"Handwriting_Transcription_{ticket_input.value}.txt")
                                     ui.notify('TXT file downloaded!', type='positive')
                                 except Exception as ex:
@@ -2261,4 +2273,4 @@ ui.run(
     favicon='🏗️',
     reload=False,
     reconnect_timeout=30.0,
-                    )
+)
