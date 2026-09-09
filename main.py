@@ -5,6 +5,7 @@ import uuid
 import re
 import asyncio
 import json
+import hashlib
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -35,6 +36,9 @@ from reportlab.platypus import (
     TableStyle,
     Image as ReportLabImage,
 )
+
+from PIL import Image
+import io
 
 load_dotenv()
 api_key = os.getenv("GEMINI_API_KEY")
@@ -1483,9 +1487,66 @@ def detect_mime_type(filename: str, data: bytes) -> str:
         return 'application/pdf'
     return 'image/jpeg'
 
+# =====================================================================================
+# IMAGE PREPROCESSING CACHE (makes uploads fast and deterministic)
+# =====================================================================================
+image_cache = {}
+
+def get_processed_image(file_bytes, file_type, crop_percent=0):
+    """
+    Convert PDF to PNG (if needed), resize to a consistent width (2000px),
+    crop the right side by crop_percent, and return the processed PNG bytes.
+    Uses a cache keyed by (hash of original bytes, crop_percent) to avoid reprocessing.
+    """
+    # Generate cache key
+    file_hash = hashlib.md5(file_bytes).hexdigest()
+    cache_key = f"{file_hash}_{crop_percent}_{file_type}"
+    if cache_key in image_cache:
+        return image_cache[cache_key]
+
+    # Step 1: Convert to PIL Image
+    if file_type == 'application/pdf':
+        # Convert PDF to PNG using fitz
+        doc = fitz.open(stream=file_bytes, filetype="pdf")
+        if len(doc) == 0:
+            raise ValueError("PDF has no pages")
+        page = doc.load_page(0)
+        # Render at 150 DPI
+        mat = fitz.Matrix(2.0, 2.0)  # 2x scaling ~150 DPI
+        pix = page.get_pixmap(matrix=mat)
+        img_data = pix.tobytes("png")
+        img = Image.open(io.BytesIO(img_data))
+        doc.close()
+    else:
+        # Assume it's an image
+        img = Image.open(io.BytesIO(file_bytes))
+
+    # Step 2: Resize to consistent width (2000px) preserving aspect ratio
+    target_width = 2000
+    w, h = img.size
+    if w > target_width:
+        ratio = target_width / w
+        new_w = target_width
+        new_h = int(h * ratio)
+        img = img.resize((new_w, new_h), Image.LANCZOS)
+
+    # Step 3: Crop right side if needed
+    if crop_percent > 0:
+        w, h = img.size
+        crop_x = int(w * (1 - crop_percent / 100))
+        img = img.crop((0, 0, crop_x, h))
+
+    # Step 4: Save to bytes
+    buf = io.BytesIO()
+    img.save(buf, format='PNG')
+    processed_bytes = buf.getvalue()
+
+    # Cache
+    image_cache[cache_key] = processed_bytes
+    return processed_bytes
 
 # =====================================================================================
-# MAIN APP LAYOUT (restored other tabs + improved BOQ)
+# MAIN APP LAYOUT
 # =====================================================================================
 @ui.page('/')
 def main_page():
@@ -2116,12 +2177,12 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                     ui.button('Download Chat PDF Transcript', on_click=download_chat_pdf).classes('primary-btn flex-1')
 
             # =========================================================================
-            # TAB 5: PROFESSIONAL BOQ TAKEOFF (SIMPLIFIED & ROBUST)
+            # TAB 5: PROFESSIONAL BOQ TAKEOFF (IMPROVED WITH PREPROCESSING)
             # =========================================================================
             with ui.tab_panel(t_boq):
                 ui.label('Professional AI BOQ Takeoff & Cost Estimation').classes('text-2xl font-bold text-white mb-2')
                 ui.markdown('Upload a structural plan (PDF, JPG, PNG). The AI will extract column data.').classes('markdown-body mb-2')
-                ui.markdown('*For PDFs, up to 6 pages are processed.*').classes('text-xs text-yellow-400 mb-4')
+                ui.markdown('*PDFs are converted to high‑quality PNGs (2000px width) for consistent accuracy.*').classes('text-xs text-yellow-400 mb-4')
 
                 # Global Parameters
                 with ui.column().classes('input-card w-full mb-4'):
@@ -2134,31 +2195,45 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                         rebar_grade_global = ui.input(label='Rebar Grade', value='400/600').classes('w-1/2')
                     wastage_percent_global = ui.number(label='Wastage Allowance (%)', value=5, step=1, min=0, max=20).classes('w-1/2')
 
+                # Crop setting
+                crop_percent = ui.slider(label='Crop right side (%)', min=0, max=50, value=25, step=5).classes('w-full mb-4')
+
                 # File upload
-                boq_file_data = {'bytes': None, 'type': None, 'name': None}
+                boq_file_data = {'raw_bytes': None, 'type': None, 'name': None}
                 boq_status_label = ui.label('Status: No file uploaded yet').classes('text-xs text-amber-400 font-semibold mb-2')
+                processed_preview = ui.image().classes('w-full max-h-[400px] object-contain rounded-lg border border-[#FF8C00] hidden')
                 async def handle_boq_upload(e):
                     try:
                         data = await e.file.read()
-                        boq_file_data['bytes'] = data
+                        boq_file_data['raw_bytes'] = data
                         boq_file_data['type'] = detect_mime_type(e.file.name, data)
                         boq_file_data['name'] = e.file.name
                         boq_status_label.set_text(f'File Ready: {e.file.name} ({(len(data)/1024/1024):.1f} MB)')
                         boq_status_label.classes(replace='text-xs text-emerald-400 font-semibold mb-2')
                         ui.notify(f'File uploaded: {e.file.name}', type='positive')
+
+                        # Generate and show preview of processed image
+                        try:
+                            processed = get_processed_image(data, boq_file_data['type'], crop_percent.value)
+                            processed_preview.set_source(io.BytesIO(processed))
+                            processed_preview.classes(replace='w-full max-h-[400px] object-contain rounded-lg border border-[#FF8C00]')
+                        except Exception as ex:
+                            ui.notify(f'Preview error: {str(ex)}', type='warning')
                     except Exception as ex:
                         ui.notify(f'Error: {str(ex)}', type='negative')
                 ui.upload(label='Upload Drawing', auto_upload=True, on_upload=handle_boq_upload).props('flat dark').classes('w-full mb-4')
+                ui.label('Preview of processed image (crop applied):').classes('text-sm text-[#A9B6D0] mt-2')
+                processed_preview
 
                 # Output areas
                 boq_output = ui.column().classes('w-full')
                 boq_export = ui.row().classes('w-full gap-4 mt-4')
 
                 # --------------------------------------------------------------------
-                # SIMPLE AI EXTRACTION
+                # SIMPLE AI EXTRACTION (uses processed image)
                 # --------------------------------------------------------------------
-                async def extract_columns_simple(file_bytes, file_type):
-                    """Simple AI extraction with a clear prompt."""
+                async def extract_columns_simple(processed_bytes):
+                    """Extract columns using the preprocessed image."""
                     prompt = """
 You are a Quantity Surveyor. Extract the column schedule from this structural drawing.
 
@@ -2176,53 +2251,21 @@ Example output:
 [{"label":"C1","width_mm":300,"depth_mm":300,"count":6},{"label":"C2","width_mm":250,"depth_mm":250,"count":4}]
 """
                     contents = [prompt]
-
-                    # Process file – send up to 6 pages as PNG
-                    if file_type == 'application/pdf':
-                        try:
-                            reader = pypdf.PdfReader(io.BytesIO(file_bytes))
-                            pages_text = []
-                            for i in range(min(3, len(reader.pages))):
-                                try:
-                                    txt = reader.pages[i].extract_text() or ""
-                                    pages_text.append(txt)
-                                except:
-                                    pass
-                            full_text = "".join(pages_text)
-                            if full_text.strip():
-                                contents.append(f"Extracted text from PDF:\n{full_text[:6000]}")
-                            doc = fitz.open(stream=file_bytes, filetype="pdf")
-                            for page_num in range(min(6, len(doc))):
-                                page = doc.load_page(page_num)
-                                mat = fitz.Matrix(2.0, 2.0)
-                                pix = page.get_pixmap(matrix=mat)
-                                img_bytes = pix.tobytes("png")
-                                img_part = types.Part.from_bytes(data=img_bytes, mime_type="image/png")
-                                contents.append(img_part)
-                            doc.close()
-                        except Exception:
-                            contents.append(types.Part.from_bytes(data=file_bytes, mime_type='application/pdf'))
-                    else:
-                        img_part = types.Part.from_bytes(data=file_bytes, mime_type=file_type)
-                        contents.append(img_part)
-
+                    img_part = types.Part.from_bytes(data=processed_bytes, mime_type="image/png")
+                    contents.append(img_part)
                     response_text = await call_gemini_json(contents, temperature=0, timeout=300)
                     return response_text
 
                 def parse_columns_response(response_text):
                     """Parse the AI response to extract a list of columns."""
-                    # Try to find JSON array
                     json_str = response_text.strip()
-                    # Remove markdown code fences
                     json_str = re.sub(r'^```json\s*', '', json_str)
                     json_str = re.sub(r'\s*```$', '', json_str)
-                    # Find the first '[' and last ']'
                     start = json_str.find('[')
                     end = json_str.rfind(']')
                     if start != -1 and end != -1:
                         json_str = json_str[start:end+1]
                     else:
-                        # Try to find a JSON object that might contain a 'data' or 'columns' field
                         start = json_str.find('{')
                         end = json_str.rfind('}')
                         if start != -1 and end != -1:
@@ -2236,7 +2279,6 @@ Example output:
                                         return obj['columns']
                                     if 'extracted_columns' in obj and isinstance(obj['extracted_columns'], list):
                                         return obj['extracted_columns']
-                                    # If it's a single column object, wrap it
                                     if 'label' in obj:
                                         return [obj]
                             except:
@@ -2489,7 +2531,7 @@ Example output:
                     if not client:
                         ui.notify('GEMINI_API_KEY missing!', type='negative')
                         return
-                    if not boq_file_data['bytes']:
+                    if not boq_file_data['raw_bytes']:
                         ui.notify('Please upload a drawing first.', type='warning')
                         return
 
@@ -2508,8 +2550,15 @@ Example output:
                             'rebar_grade': rebar_grade_global.value,
                         }
 
-                        # Call AI
-                        raw_response = await extract_columns_simple(boq_file_data['bytes'], boq_file_data['type'])
+                        # Preprocess image (crop + resize) – cached
+                        processed_bytes = get_processed_image(
+                            boq_file_data['raw_bytes'],
+                            boq_file_data['type'],
+                            crop_percent.value
+                        )
+
+                        # Call AI with processed image
+                        raw_response = await extract_columns_simple(processed_bytes)
                         columns = parse_columns_response(raw_response)
 
                         if not columns:
