@@ -2277,87 +2277,284 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                 with ocr_output:
                     ui.markdown('*Upload a file and click "Transcribe Handwriting" to start.*').classes('text-sm text-[#A9B6D0]')
 
-            # ==============================================================
-            # TAB 6: JOB BOARD (with cloudscraper fix and debug)
-            # ==============================================================
-            with ui.tab_panel(t_jobs):
-                ui.label('Engineering Job Board - Egypt').classes('text-2xl font-bold text-white mb-4')
-                ui.markdown('Search for the latest engineering jobs in Egypt. Uses **JSearch** (RapidAPI) if the key is set, otherwise falls back to direct Wuzzuf and Bayt scraping with Cloudflare bypass.').classes('markdown-body mb-2')
+# =====================================================================================
+# JOB SCRAPING FUNCTIONS (ULTRA-ROBUST + DEBUG LOGGING FOR RENDER)
+# =====================================================================================
+import os
+import re
+import time
+import random
+import requests
+import cloudscraper
+from bs4 import BeautifulSoup
+from urllib.parse import quote_plus
 
-                key_status = ui.label(
-                    '🔑 RapidAPI key: ' + ('✅ Set' if RAPIDAPI_KEY else '❌ Not set – using Wuzzuf/Bayt fallback.')
-                ).classes('text-sm text-[#A9B6D0] mb-2')
+RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY", "").strip()
+JSEARCH_HOST = "jsearch.p.rapidapi.com"
+REQUEST_TIMEOUT = 30
+SCRAPER_DEBUG = os.environ.get("SCRAPER_DEBUG", "false").lower() == "true"
 
-                # Debug info area
-                debug_output = ui.label('Debug: waiting for search...').classes('text-xs text-[#A9B6D0] mb-2')
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+]
 
-                with ui.row().classes('w-full gap-4 mb-4'):
-                    search_input = ui.input(label='Search for jobs', placeholder='e.g., Civil Engineer', value='Civil Engineer').classes('flex-1')
-                    location_input = ui.input(label='Location (optional)', placeholder='e.g., Cairo').classes('flex-1')
-                    search_button = ui.button('Search Jobs', on_click=lambda: search_jobs()).classes('primary-btn')
+def log(msg):
+    print(f"[JOB-SCRAPER] {msg}")
 
-                filter_input = ui.input(label='Filter results', placeholder='Type to filter title, company, description...', on_change=lambda: filter_jobs()).classes('w-full mb-2')
+def get_headers():
+    return {
+        "User-Agent": random.choice(USER_AGENTS),
+        "Accept-Language": "en-US,en;q=0.9,ar;q=0.8",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Referer": "https://wuzzuf.net/",
+        "DNT": "1",
+        "Connection": "keep-alive",
+    }
 
-                results_container = ui.column().classes('w-full')
-                jobs_data = []
+# Create a session with random user-agent
+session = requests.Session()
+session.headers.update(get_headers())
+session.cookies.set("wuzzuf_session", "1")
+session.cookies.set("bayt_session", "1")
 
-                def display_jobs(jobs, filter_text=''):
-                    results_container.clear()
-                    with results_container:
-                        if not jobs:
-                            ui.label('No jobs found. Try a different search.').classes('text-white')
-                            return
-                        filtered = jobs
-                        if filter_text:
-                            f_lower = filter_text.lower()
-                            filtered = [j for j in jobs if f_lower in j['title'].lower() or f_lower in j['company'].lower() or f_lower in j['description'].lower()]
-                        if not filtered:
-                            ui.label('No jobs match the filter.').classes('text-white')
-                            return
-                        for job in filtered:
-                            with ui.card().classes('w-full bg-[#0d1a35] border border-[#2c3f6b] rounded-lg p-3 mb-2'):
-                                with ui.row().classes('w-full justify-between'):
-                                    ui.label(job['title']).classes('text-lg font-bold text-white')
-                                    ui.label(job['company']).classes('text-sm text-[#A9B6D0]')
-                                ui.label(job['location']).classes('text-sm text-[#A9B6D0]')
-                                desc = job['description'][:200] + ('...' if len(job['description']) > 200 else '')
-                                ui.label(desc).classes('text-sm text-white mt-1')
-                                ui.link('View Job', job['url'], new_tab=True).classes('text-[#4FC3F7] hover:text-[#FF8C00]')
+# Cloudscraper with fixed browser (no dict)
+scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False})
+scraper.headers.update(get_headers())
 
-                def filter_jobs():
-                    display_jobs(jobs_data, filter_input.value.strip())
+def fetch_html(url, label, use_cloudscraper=False):
+    """Fetch URL with retries and detailed logging."""
+    for attempt in range(2):
+        try:
+            if use_cloudscraper:
+                resp = scraper.get(url, timeout=REQUEST_TIMEOUT)
+            else:
+                resp = session.get(url, timeout=REQUEST_TIMEOUT)
+            log(f"{label} GET {url} -> status={resp.status_code}, len={len(resp.text)}")
+            if resp.status_code != 200:
+                log(f"{label} non-200 body preview: {resp.text[:200]}")
+                return None
+            # If debug mode, log the title and a snippet
+            soup = BeautifulSoup(resp.text, "html.parser")
+            title = soup.title.string if soup.title else "No title"
+            log(f"{label} page title: {title}")
+            if SCRAPER_DEBUG:
+                snippet = re.sub(r'\s+', ' ', resp.text)[:500]
+                log(f"{label} HTML snippet: {snippet}")
+            return soup
+        except Exception as e:
+            log(f"{label} request failed (attempt {attempt+1}): {e}")
+            time.sleep(2)
+    return None
 
-                async def search_jobs():
-                    query = search_input.value.strip()
-                    if not query:
-                        ui.notify('Please enter a search term.', type='warning')
-                        return
-                    location = location_input.value.strip()
-                    if location:
-                        query += f' {location}'
-                    ui.notify(f'Searching for "{query}"...', type='info')
-                    results_container.clear()
-                    with results_container:
-                        ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
-                        ui.label('Fetching job listings...').classes('self-center text-sm')
+def scrape_jsearch(query, max_results=20):
+    jobs = []
+    if not RAPIDAPI_KEY:
+        log("JSearch: No API key – skipping.")
+        return jobs
 
-                    # Run scraper
-                    jobs = await run.io_bound(scrape_jobs, query)
-                    jobs_data.clear()
-                    jobs_data.extend(jobs)
-
-                    # Update debug info
-                    counts = {}
-                    for j in jobs:
-                        counts[j['source']] = counts.get(j['source'], 0) + 1
-                    debug_info = f"JSearch: {counts.get('JSearch', 0)}, Wuzzuf: {counts.get('Wuzzuf', 0)}, Bayt: {counts.get('Bayt', 0)} | Total: {len(jobs)}"
-                    debug_output.set_text(f'Debug: {debug_info}')
+    params_list = [
+        {"query": query, "page": "1", "num_pages": "1", "engine": "google_jobs"},
+        {"query": f"{query} Egypt", "page": "1", "num_pages": "1", "engine": "google_jobs"},
+        {"query": query, "page": "1", "num_pages": "1", "country": "eg", "engine": "google_jobs"},
+        {"query": query, "page": "1", "num_pages": "1"},
+    ]
+    for params in params_list:
+        try:
+            resp = requests.get(
+                f"https://{JSEARCH_HOST}/search",
+                headers={"X-RapidAPI-Key": RAPIDAPI_KEY, "X-RapidAPI-Host": JSEARCH_HOST},
+                params=params,
+                timeout=REQUEST_TIMEOUT,
+            )
+            log(f"JSearch {params} -> status={resp.status_code}, len={len(resp.text)}")
+            if resp.status_code == 200:
+                data = resp.json().get("data", [])
+                if data:
+                    for item in data[:max_results]:
+                        title = item.get("job_title")
+                        if not title:
+                            continue
+                        company = item.get("employer_name") or "N/A"
+                        city = item.get("job_city") or ""
+                        country = item.get("job_country") or "Egypt"
+                        location = ", ".join(p for p in [city, country] if p) or "Egypt"
+                        desc = (item.get("job_description") or "No description")[:400]
+                        url = item.get("job_apply_link") or item.get("job_google_link") or ""
+                        source = item.get("job_publisher") or "JSearch"
+                        if url:
+                            jobs.append({
+                                "title": title,
+                                "company": company,
+                                "location": location,
+                                "description": desc,
+                                "url": url,
+                                "source": source,
+                            })
                     if jobs:
-                        debug_output.classes(replace='text-xs text-emerald-400 mb-2')
-                    else:
-                        debug_output.classes(replace='text-xs text-red-400 mb-2')
+                        break
+        except Exception as e:
+            log(f"JSearch exception: {e}")
+    log(f"JSearch parsed {len(jobs)} jobs")
+    return jobs
 
-                    display_jobs(jobs_data)
+def scrape_wuzzuf_direct(query, max_results=20):
+    jobs = []
+    url = f"https://wuzzuf.net/search/jobs/?q={quote_plus(query)}&a=hpb"
+
+    # Try with normal session first
+    soup = fetch_html(url, "Wuzzuf", use_cloudscraper=False)
+    if soup is None:
+        # Fallback to cloudscraper
+        soup = fetch_html(url, "Wuzzuf", use_cloudscraper=True)
+    if soup is None:
+        return jobs
+
+    # Primary selector: links with '/jobs/p/'
+    for a in soup.select('a[href*="/jobs/p/"]'):
+        href = a.get("href")
+        title = a.get_text(strip=True)
+        if not href or not title:
+            continue
+        full_url = href if href.startswith("http") else f"https://wuzzuf.net{href}"
+        card = a
+        for _ in range(8):
+            card = card.parent
+            if card is None:
+                break
+            if len(card.find_all("a")) >= 2:
+                break
+        company, location, desc = "", "", ""
+        if card is not None:
+            company_link = card.find("a", href=re.compile(r"/employers/"))
+            company = company_link.get_text(strip=True) if company_link else ""
+            loc_elem = card.find("span", class_=re.compile(r"location", re.I)) or card.find("div", class_=re.compile(r"location", re.I))
+            if loc_elem:
+                location = loc_elem.get_text(strip=True)
+            chunks = [t.get_text(strip=True) for t in card.find_all(["span", "div"]) if t.get_text(strip=True)]
+            chunks = [t for t in chunks if t not in (title, company, location)]
+            desc = " | ".join(dict.fromkeys(chunks))[:400]
+        jobs.append({
+            "title": title,
+            "company": company or "N/A",
+            "location": location or "Egypt",
+            "description": desc or "No description preview.",
+            "url": full_url,
+            "source": "Wuzzuf",
+        })
+        if len(jobs) >= max_results:
+            break
+
+    # Fallback: any link with '/jobs/'
+    if not jobs:
+        for a in soup.select('a[href*="/jobs/"]'):
+            href = a.get("href")
+            title = a.get_text(strip=True)
+            if not href or not title:
+                continue
+            full_url = href if href.startswith("http") else f"https://wuzzuf.net{href}"
+            card = a.find_parent("div")
+            company, location = "", ""
+            if card:
+                company_link = card.find("a", href=re.compile(r"/employers/"))
+                company = company_link.get_text(strip=True) if company_link else ""
+                loc_elem = card.find("span", class_=re.compile(r"location", re.I)) or card.find("div", class_=re.compile(r"location", re.I))
+                if loc_elem:
+                    location = loc_elem.get_text(strip=True)
+            jobs.append({
+                "title": title,
+                "company": company or "N/A",
+                "location": location or "Egypt",
+                "description": "No description.",
+                "url": full_url,
+                "source": "Wuzzuf",
+            })
+            if len(jobs) >= max_results:
+                break
+
+    log(f"Wuzzuf parsed {len(jobs)} jobs")
+    if not jobs:
+        log("Wuzzuf: No job links found. Check the HTML title: " + (soup.title.string if soup.title else "No title"))
+    return jobs
+
+def scrape_bayt_direct(query, max_results=20):
+    jobs = []
+    url = f"https://www.bayt.com/en/egypt/jobs/?search={quote_plus(query)}"
+    soup = fetch_html(url, "Bayt", use_cloudscraper=False)
+    if soup is None:
+        soup = fetch_html(url, "Bayt", use_cloudscraper=True)
+    if soup is None:
+        return jobs
+
+    # Multiple selectors for Bayt
+    cards = soup.select('li.has-pointer') or soup.select('div.job-card') or soup.select('div[data-testid="job-card"]') or soup.select('div[class*="job"]')
+
+    for card in cards[:max_results]:
+        try:
+            a = card.find("h2") and card.find("h2").find("a")
+            if not a:
+                a = card.find("a", href=re.compile(r"/job/"))
+            if not a:
+                continue
+            title = a.get_text(strip=True)
+            href = a.get("href")
+            full_url = href if href.startswith("http") else f"https://www.bayt.com{href}"
+            company_el = card.select_one(".company-name, .jb-company, .company")
+            company = company_el.get_text(strip=True) if company_el else "N/A"
+            loc_el = card.select_one(".location, .t-mute.t-small, .job-location")
+            location = loc_el.get_text(strip=True) if loc_el else "Egypt"
+            desc_el = card.select_one("p")
+            desc = desc_el.get_text(strip=True) if desc_el else "No description."
+            jobs.append({
+                "title": title,
+                "company": company,
+                "location": location,
+                "description": desc,
+                "url": full_url,
+                "source": "Bayt",
+            })
+        except Exception as e:
+            log(f"Bayt card parse error: {e}")
+    if not jobs:
+        log("Bayt: No job cards found. Check the HTML title: " + (soup.title.string if soup.title else "No title"))
+    log(f"Bayt parsed {len(jobs)} jobs")
+    return jobs
+
+def scrape_jobs(query, location=""):
+    full_query = f"{query} {location}".strip() if location else query
+    all_jobs = []
+    # 1. JSearch
+    try:
+        all_jobs.extend(scrape_jsearch(full_query))
+    except Exception as e:
+        log(f"JSearch top-level error: {e}")
+    # 2. Wuzzuf
+    if len(all_jobs) < 3:
+        log("JSearch returned few results – trying Wuzzuf.")
+        try:
+            all_jobs.extend(scrape_wuzzuf_direct(full_query))
+        except Exception as e:
+            log(f"Wuzzuf top-level error: {e}")
+    # 3. Bayt
+    if len(all_jobs) < 3:
+        log("Wuzzuf also returned few results – trying Bayt.")
+        try:
+            all_jobs.extend(scrape_bayt_direct(full_query))
+        except Exception as e:
+            log(f"Bayt top-level error: {e}")
+    # deduplicate
+    seen = set()
+    deduped = []
+    for job in all_jobs:
+        if job["url"] in seen:
+            continue
+        seen.add(job["url"])
+        deduped.append(job)
+    deduped.sort(key=lambda j: 0 if j["source"] == "Wuzzuf" else 1)
+    log(f"TOTAL jobs after dedup: {len(deduped)}")
+    return deduped
 
         # ---------------- FOOTER ----------------
         ui.html('''
