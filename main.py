@@ -1294,7 +1294,8 @@ def process_excel_file(file_bytes, filename):
         print(f"Error reading Excel: {e}")
         return pd.DataFrame()
 
-def generate_progress_overview(df, start_date, end_date, description):
+# ---- FIX: make this function async ----
+async def generate_progress_overview(df, start_date, end_date, description):
     """Ask Gemini for an overview of the progress data."""
     if df.empty or not client:
         return "No data available for overview."
@@ -2459,7 +2460,6 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
 
                 # File upload (multiple)
                 uploaded_files = []
-                files_holder = {'files': []}
                 upload_status = ui.label('No files uploaded yet.').classes('text-xs text-amber-400 mb-2')
 
                 async def handle_progress_upload(e):
@@ -2515,11 +2515,9 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                             if ext in ['.xlsx', '.xls']:
                                 df = process_excel_file(f['bytes'], f['name'])
                                 if not df.empty:
-                                    # Add source filename
                                     df['source'] = f['name']
                                     all_rows.append(df)
                             elif f['type'] in ['image/png', 'image/jpeg', 'application/pdf']:
-                                # Send to Gemini
                                 data = await extract_progress_from_image(f['bytes'], f['type'])
                                 if data:
                                     row = {
@@ -2541,25 +2539,18 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                                 ui.label('No data found in the uploaded files. Please check file contents.').classes('text-white')
                             return
 
-                        # Combine all data
                         combined_df = pd.concat(all_rows, ignore_index=True)
 
-                        # Convert date to datetime if possible
                         if 'date' in combined_df.columns:
                             combined_df['date'] = pd.to_datetime(combined_df['date'], errors='coerce')
-                        # Clean progress_percent
                         if 'progress_percent' in combined_df.columns:
                             combined_df['progress_percent'] = pd.to_numeric(combined_df['progress_percent'], errors='coerce')
 
-                        # Create a summary table: group by category and date?
-                        # For display, we'll show the raw data with some formatting
                         display_df = combined_df.copy()
                         if 'date' in display_df.columns:
                             display_df['date'] = display_df['date'].dt.strftime('%Y-%m-%d')
-                        # Fill NaN with 'N/A'
                         display_df = display_df.fillna('N/A')
 
-                        # Show table using NiceGUI table
                         progress_output.clear()
                         with progress_output:
                             ui.label('📋 Progress Summary Table').classes('text-xl font-bold text-white mb-2')
@@ -2567,7 +2558,6 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                                 {'name': col, 'label': col.replace('_', ' ').title(), 'field': col, 'sortable': True}
                                 for col in display_df.columns if col != 'source'
                             ]
-                            # Add source column if exists
                             if 'source' in display_df.columns:
                                 columns.append({'name': 'source', 'label': 'Source File', 'field': 'source', 'sortable': True})
                             ui.table(columns=columns, rows=display_df.to_dict('records'), row_key='index').classes('w-full text-white')
@@ -2575,7 +2565,6 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                         # Generate charts
                         fig_bar, fig_scatter, fig_pie, fig_line = None, None, None, None
                         if not combined_df.empty:
-                            # Bar chart: average progress by category
                             if 'category' in combined_df.columns and 'progress_percent' in combined_df.columns:
                                 avg_progress = combined_df.groupby('category')['progress_percent'].mean().reset_index()
                                 if not avg_progress.empty:
@@ -2584,7 +2573,6 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                                                      color='category', template='plotly_dark')
                                     fig_bar.update_layout(paper_bgcolor='#0d1a35', plot_bgcolor='#0d1a35', font_color='white')
 
-                            # Scatter: progress over time
                             if 'date' in combined_df.columns and 'progress_percent' in combined_df.columns:
                                 df_time = combined_df.dropna(subset=['date', 'progress_percent'])
                                 if not df_time.empty:
@@ -2593,7 +2581,6 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                                                             template='plotly_dark')
                                     fig_scatter.update_layout(paper_bgcolor='#0d1a35', plot_bgcolor='#0d1a35', font_color='white')
 
-                            # Pie: distribution of categories
                             if 'category' in combined_df.columns:
                                 cat_counts = combined_df['category'].value_counts().reset_index()
                                 cat_counts.columns = ['category', 'count']
@@ -2602,7 +2589,6 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                                                      title='Category Distribution', template='plotly_dark')
                                     fig_pie.update_layout(paper_bgcolor='#0d1a35', plot_bgcolor='#0d1a35', font_color='white')
 
-                            # Line: cumulative progress over time (if dates exist)
                             if 'date' in combined_df.columns and 'progress_percent' in combined_df.columns:
                                 df_time = combined_df.dropna(subset=['date', 'progress_percent']).sort_values('date')
                                 if not df_time.empty:
@@ -2612,7 +2598,6 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                                                        template='plotly_dark')
                                     fig_line.update_layout(paper_bgcolor='#0d1a35', plot_bgcolor='#0d1a35', font_color='white')
 
-                        # Show charts
                         progress_charts.clear()
                         with progress_charts:
                             ui.label('📈 Charts').classes('text-xl font-bold text-white mb-2')
@@ -2627,7 +2612,7 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                                 if fig_line:
                                     ui.plotly(fig_line).classes('w-full md:w-1/2')
 
-                        # Generate overview
+                        # Generate overview (now async)
                         overview_text = await generate_progress_overview(
                             combined_df,
                             start_date.value.strftime('%Y-%m-%d') if start_date.value else 'N/A',
@@ -2640,7 +2625,6 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                             ui.markdown(overview_text).classes('markdown-body')
 
                         # Prepare PDF export
-                        # We'll store the data and figures for PDF generation
                         pdf_data = {
                             'df': combined_df,
                             'fig_bar': fig_bar,
@@ -2702,11 +2686,9 @@ def generate_progress_pdf(pdf_data, engineer_name, project_name, logo_bytes, tic
     styles = build_pdf_styles()
     story = []
 
-    # Custom header
     unique_uid = f"PROGRESS-{uuid.uuid4().hex[:8].upper()}"
     qr_buf = generate_qr_code(f"UID: {unique_uid} | Progress Report - {project_name}")
 
-    # Company name, project, engineer, date range
     title_style = ParagraphStyle("DocTitle", fontSize=14, textColor=colors.HexColor("#1B2A4A"),
                                   spaceAfter=3, fontName="Helvetica-Bold", leading=17)
     sub_style = ParagraphStyle("DocSub", fontSize=9, textColor=colors.HexColor("#B45309"),
@@ -2714,8 +2696,7 @@ def generate_progress_pdf(pdf_data, engineer_name, project_name, logo_bytes, tic
     meta_style = ParagraphStyle("MetaStyle", fontSize=8, textColor=colors.HexColor("#334155"),
                                  leading=11.5, fontName="Helvetica")
 
-    # Use project name as company name (you can modify)
-    company_name = "Smart Egypt Civil AI"  # or use project_name
+    company_name = "Smart Egypt Civil AI"  # you can change this
     start_str = pdf_data['start_date'].strftime('%Y-%m-%d') if pdf_data['start_date'] else 'N/A'
     end_str = pdf_data['end_date'].strftime('%Y-%m-%d') if pdf_data['end_date'] else 'N/A'
     meta_html = f"""
@@ -2749,24 +2730,17 @@ def generate_progress_pdf(pdf_data, engineer_name, project_name, logo_bytes, tic
     # Table
     df = pdf_data['df'].copy()
     if not df.empty:
-        # Convert to list of lists for ReportLab table
-        # Select columns to display
         cols_to_show = [col for col in df.columns if col in ['date', 'description', 'progress_percent', 'category', 'location']]
         if 'source' in df.columns:
             cols_to_show.append('source')
-        # Fill NaN with ''
         df_display = df[cols_to_show].fillna('')
-        # Convert date to string if datetime
         if 'date' in df_display.columns:
             df_display['date'] = df_display['date'].apply(lambda x: x.strftime('%Y-%m-%d') if hasattr(x, 'strftime') else str(x))
-        # Create table data
-        table_data = [cols_to_show]  # header
+        table_data = [cols_to_show]
         for _, row in df_display.iterrows():
             table_data.append([str(row[col]) for col in cols_to_show])
-        # Limit rows to fit page (approx 20 rows)
         if len(table_data) > 20:
-            table_data = table_data[:20]  # truncate
-        # Create table
+            table_data = table_data[:20]
         col_widths = [USABLE_WIDTH / len(cols_to_show)] * len(cols_to_show)
         t = Table(table_data, colWidths=col_widths, repeatRows=1)
         t.setStyle(TableStyle([
@@ -2782,11 +2756,10 @@ def generate_progress_pdf(pdf_data, engineer_name, project_name, logo_bytes, tic
         story.append(t)
         story.append(Spacer(1, 10))
 
-    # Charts - embed as images
+    # Charts
     for fig in [pdf_data['fig_bar'], pdf_data['fig_scatter'], pdf_data['fig_pie'], pdf_data['fig_line']]:
         if fig:
             try:
-                # Convert to PNG bytes
                 img_bytes = fig.to_image(format="png", width=400, height=300, scale=2)
                 img_flowable = ReportLabImage(io.BytesIO(img_bytes), width=USABLE_WIDTH*0.45, height=USABLE_WIDTH*0.45*0.75)
                 story.append(img_flowable)
@@ -2800,7 +2773,6 @@ def generate_progress_pdf(pdf_data, engineer_name, project_name, logo_bytes, tic
         story.extend(markdown_to_pdf_flowables(pdf_data['overview'], styles))
         story.append(Spacer(1, 6))
 
-    # Footer with signature and QR
     build_pdf_footer_signature_and_qr(story, styles, qr_buf, engineer_name)
 
     doc.build(story)
