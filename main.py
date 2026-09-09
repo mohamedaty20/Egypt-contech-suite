@@ -15,6 +15,7 @@ import qrcode
 import pypdf
 import fitz  # PyMuPDF
 import requests
+import cloudscraper  # NEW: bypass Cloudflare
 from bs4 import BeautifulSoup
 from urllib.parse import quote_plus
 
@@ -358,11 +359,11 @@ async def call_gemini_json(contents, temperature=0.1, timeout=240):
 # =====================================================================================
 
 # =====================================================================================
-# JOB SCRAPING FUNCTIONS (ULTRA-ROBUST WITH DEBUGGING)
+# JOB SCRAPING FUNCTIONS (WITH CLOUDSCRAPER + ROBUST SELECTORS)
 # =====================================================================================
 RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY", "").strip()
 JSEARCH_HOST = "jsearch.p.rapidapi.com"
-REQUEST_TIMEOUT = 20
+REQUEST_TIMEOUT = 30
 
 HEADERS = {
     "User-Agent": (
@@ -377,6 +378,16 @@ HEADERS = {
 
 def log(msg):
     print(f"[JOB-SCRAPER] {msg}")
+
+# Initialize cloudscraper session (bypasses Cloudflare)
+scraper = cloudscraper.create_scraper(
+    browser={
+        'browser': 'chrome',
+        'platform': 'windows',
+        'mobile': False,
+        'custom': HEADERS
+    }
+)
 
 def scrape_jsearch(query, max_results=20):
     jobs = []
@@ -430,11 +441,9 @@ def scrape_jsearch(query, max_results=20):
 def scrape_wuzzuf_direct(query, max_results=20):
     jobs = []
     url = f"https://wuzzuf.net/search/jobs/?q={quote_plus(query)}&a=hpb"
-    session = requests.Session()
-    session.headers.update(HEADERS)
-    session.cookies.set("wuzzuf_session", "1")
     try:
-        resp = session.get(url, timeout=REQUEST_TIMEOUT)
+        # Use cloudscraper to bypass Cloudflare
+        resp = scraper.get(url, timeout=REQUEST_TIMEOUT)
         log(f"Wuzzuf GET {url} -> status={resp.status_code}, len={len(resp.text)}")
         if resp.status_code != 200:
             log(f"Wuzzuf non-200 body preview: {resp.text[:200]}")
@@ -444,28 +453,32 @@ def scrape_wuzzuf_direct(query, max_results=20):
         log(f"Wuzzuf request failed: {e}")
         return jobs
 
-    # Debug: save a snippet if no jobs found
-    found = 0
+    # Robust selectors: look for <a> with href containing '/jobs/p/'
     for a in soup.select('a[href*="/jobs/p/"]'):
         href = a.get("href")
         title = a.get_text(strip=True)
         if not href or not title:
             continue
         full_url = href if href.startswith("http") else f"https://wuzzuf.net{href}"
+        # Find the parent card – try multiple approaches
         card = a
         for _ in range(8):
             card = card.parent
             if card is None:
                 break
+            # If we find a parent with multiple links, it's likely the card
             if len(card.find_all("a")) >= 2:
                 break
         company, location, desc = "", "", ""
         if card is not None:
+            # Company: look for a link with /employers/
             company_link = card.find("a", href=re.compile(r"/employers/"))
             company = company_link.get_text(strip=True) if company_link else ""
+            # Location: look for span/div with class containing 'location'
             loc_elem = card.find("span", class_=re.compile(r"location", re.I)) or card.find("div", class_=re.compile(r"location", re.I))
             if loc_elem:
                 location = loc_elem.get_text(strip=True)
+            # Description: collect text from other elements
             chunks = [t.get_text(strip=True) for t in card.find_all(["span", "div"]) if t.get_text(strip=True)]
             chunks = [t for t in chunks if t not in (title, company, location)]
             desc = " | ".join(dict.fromkeys(chunks))[:400]
@@ -477,24 +490,20 @@ def scrape_wuzzuf_direct(query, max_results=20):
             "url": full_url,
             "source": "Wuzzuf",
         })
-        found += 1
-        if found >= max_results:
+        if len(jobs) >= max_results:
             break
-    if found == 0:
-        # log a snippet of the HTML around the first 'job' occurrence
-        snippet = re.sub(r'\s+', ' ', str(soup))[:500]
-        log(f"Wuzzuf: No job links found. HTML snippet: {snippet}")
-    log(f"Wuzzuf parsed {found} jobs")
+
+    if not jobs:
+        log(f"Wuzzuf: No job links found. HTML snippet: {re.sub(r'\s+', ' ', str(soup))[:500]}")
+    else:
+        log(f"Wuzzuf parsed {len(jobs)} jobs")
     return jobs
 
 def scrape_bayt_direct(query, max_results=20):
     jobs = []
     url = f"https://www.bayt.com/en/egypt/jobs/?search={quote_plus(query)}"
-    session = requests.Session()
-    session.headers.update(HEADERS)
-    session.cookies.set("bayt_session", "1")
     try:
-        resp = session.get(url, timeout=REQUEST_TIMEOUT)
+        resp = scraper.get(url, timeout=REQUEST_TIMEOUT)
         log(f"Bayt GET {url} -> status={resp.status_code}, len={len(resp.text)}")
         if resp.status_code != 200:
             log(f"Bayt non-200 body preview: {resp.text[:200]}")
@@ -504,8 +513,8 @@ def scrape_bayt_direct(query, max_results=20):
         log(f"Bayt request failed: {e}")
         return jobs
 
+    # Bayt cards: <li class="has-pointer"> or <div class="job-card">
     cards = soup.select('li.has-pointer') or soup.select('div.job-card')
-    found = 0
     for card in cards[:max_results]:
         try:
             a = card.find("h2") and card.find("h2").find("a")
@@ -530,13 +539,12 @@ def scrape_bayt_direct(query, max_results=20):
                 "url": full_url,
                 "source": "Bayt",
             })
-            found += 1
         except Exception as e:
             log(f"Bayt card parse error: {e}")
-    if found == 0:
-        snippet = re.sub(r'\s+', ' ', str(soup))[:500]
-        log(f"Bayt: No job cards found. HTML snippet: {snippet}")
-    log(f"Bayt parsed {found} jobs")
+    if not jobs:
+        log(f"Bayt: No job cards found. HTML snippet: {re.sub(r'\s+', ' ', str(soup))[:500]}")
+    else:
+        log(f"Bayt parsed {len(jobs)} jobs")
     return jobs
 
 def scrape_jobs(query, location=""):
@@ -1657,11 +1665,11 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                     ui.markdown('*Upload a file and click "Transcribe Handwriting" to start.*').classes('text-sm text-[#A9B6D0]')
 
             # ==============================================================
-            # TAB 6: JOB BOARD (debug-enhanced)
+            # TAB 6: JOB BOARD (debug-enhanced + cloudscraper)
             # ==============================================================
             with ui.tab_panel(t_jobs):
                 ui.label('Engineering Job Board - Egypt').classes('text-2xl font-bold text-white mb-4')
-                ui.markdown('Search for the latest engineering jobs in Egypt. Uses **JSearch** (RapidAPI) if the key is set, otherwise falls back to direct Wuzzuf and Bayt scraping.').classes('markdown-body mb-2')
+                ui.markdown('Search for the latest engineering jobs in Egypt. Uses **JSearch** (RapidAPI) if the key is set, otherwise falls back to direct Wuzzuf and Bayt scraping with Cloudflare bypass.').classes('markdown-body mb-2')
 
                 key_status = ui.label(
                     '🔑 RapidAPI key: ' + ('✅ Set' if RAPIDAPI_KEY else '❌ Not set – using Wuzzuf/Bayt fallback.')
