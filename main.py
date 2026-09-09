@@ -2457,8 +2457,6 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                     jobs_data.extend(jobs)
                     display_jobs(jobs_data)  # initial display without filter
 
-                # Optional: auto‑search on load (disabled; user must click)
-
         # ---------------- FOOTER (unchanged) ----------------
         ui.html('''
         <div class="app-footer">
