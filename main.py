@@ -15,7 +15,7 @@ import qrcode
 import pypdf
 import fitz  # PyMuPDF
 import requests
-import cloudscraper  # NEW: bypass Cloudflare
+import cloudscraper
 from bs4 import BeautifulSoup
 from urllib.parse import quote_plus
 
@@ -50,7 +50,7 @@ MARGIN = 32
 USABLE_WIDTH = PAGE_WIDTH - (2 * MARGIN)
 
 # =====================================================================================
-# CODE-COMPLIANCE & TEXT SANITIZATION (essential definitions)
+# CODE-COMPLIANCE & TEXT SANITIZATION
 # =====================================================================================
 CODE_BASIS_OPTIONS = [
     "Egyptian Codes: ECP 203 / ECP 202 / ECP 104 (Default Core Basis)",
@@ -352,14 +352,641 @@ async def call_gemini_json(contents, temperature=0.1, timeout=240):
         raise Exception(f"AI request failed: {str(e)}")
 
 # =====================================================================================
-# BOQ CALCULATION ENGINE (abbreviated – keep your full version)
+# BOQ CALCULATION ENGINE (full version from original)
 # =====================================================================================
-# ... (your existing BOQ functions – I'm omitting them here for brevity,
-#      but you MUST include them from your previous code. They are unchanged.)
-# =====================================================================================
+boq_results = {
+    'architectural': {},
+    'structural': {}
+}
+
+UNIT_RATES = {
+    "Flooring (Ceramic)": 150,
+    "Flooring (Marble)": 500,
+    "Flooring (Tiles)": 200,
+    "Wall Finishing (Paint)": 30,
+    "Wall Finishing (Plaster)": 80,
+    "Ceiling (Paint)": 25,
+    "Ceiling (Gypsum Board)": 120,
+    "Skirting (Ceramic)": 60,
+    "Skirting (Marble)": 200,
+    "Doors (Wood)": 3000,
+    "Windows (Aluminum)": 2000,
+    "Partitions (Gypsum)": 150,
+    "Concrete (C30/37)": 2500,
+    "Concrete (C25/30)": 2200,
+    "Concrete (C40/50)": 3000,
+    "Rebar (Grade 400)": 15000,
+    "Rebar (Grade 600)": 18000,
+    "Formwork": 300,
+    "Excavation": 200,
+    "Backfill": 150,
+    "Foundation Concrete": 2800,
+}
+
+FIELD_LABELS = {
+    'width_mm': 'Width (mm)',
+    'depth_mm': 'Depth (mm)',
+    'height_mm': 'Height (mm)',
+    'length_mm': 'Length (mm)',
+    'thickness_mm': 'Thickness (mm)',
+    'area_m2': 'Area (m²)',
+    'length_m': 'Length (m)',
+    'height_m': 'Height (m)',
+    'count': 'Count (number of columns/beams)',
+    'main_diameter_mm': 'Main Bar Diameter (mm)',
+    'stirrup_diameter_mm': 'Stirrup Diameter (mm)',
+    'spacing_mm': 'Spacing (mm)',
+    'top_diameter_mm': 'Top Bar Diameter (mm)',
+    'bottom_diameter_mm': 'Bottom Bar Diameter (mm)',
+}
+
+MASS_SCHEMAS = {
+    'columns': {
+        'required': ['label', 'count', 'width_mm', 'depth_mm', 'height_mm'],
+        'field_aliases': {
+            'width': 'width_mm',
+            'depth': 'depth_mm',
+            'height': 'height_mm',
+            'width_mm': 'width_mm',
+            'depth_mm': 'depth_mm',
+            'height_mm': 'height_mm',
+            'count': 'count',
+        }
+    },
+    'beams': {
+        'required': ['label', 'count', 'width_mm', 'depth_mm', 'length_mm'],
+        'field_aliases': {
+            'width': 'width_mm',
+            'depth': 'depth_mm',
+            'length': 'length_mm',
+            'width_mm': 'width_mm',
+            'depth_mm': 'depth_mm',
+            'length_mm': 'length_mm',
+            'count': 'count',
+        }
+    },
+    'slabs': {
+        'required': ['label', 'thickness_mm', 'area_m2'],
+        'field_aliases': {
+            'thickness': 'thickness_mm',
+            'area': 'area_m2',
+            'thickness_mm': 'thickness_mm',
+            'area_m2': 'area_m2',
+        }
+    },
+    'footings': {
+        'required': ['label', 'count', 'width_mm', 'depth_mm', 'length_mm'],
+        'field_aliases': {
+            'width': 'width_mm',
+            'depth': 'depth_mm',
+            'length': 'length_mm',
+            'width_mm': 'width_mm',
+            'depth_mm': 'depth_mm',
+            'length_mm': 'length_mm',
+            'count': 'count',
+        }
+    },
+    'walls': {
+        'required': ['label', 'count', 'length_m', 'height_m', 'thickness_mm'],
+        'field_aliases': {
+            'length': 'length_m',
+            'height': 'height_m',
+            'thickness': 'thickness_mm',
+            'length_m': 'length_m',
+            'height_m': 'height_m',
+            'thickness_mm': 'thickness_mm',
+            'count': 'count',
+        }
+    }
+}
+
+ARCH_SCHEMAS = {
+    'flooring': {
+        'required': ['total_length_m', 'total_width_m', 'area_m2'],
+        'field_aliases': {
+            'length': 'total_length_m',
+            'width': 'total_width_m',
+            'area': 'area_m2',
+            'total_length_m': 'total_length_m',
+            'total_width_m': 'total_width_m',
+            'area_m2': 'area_m2',
+        },
+        'formula': lambda data: data.get('area_m2') if data.get('area_m2') else (data.get('total_length_m', 0) * data.get('total_width_m', 0))
+    },
+    'wall_finishing': {
+        'required': ['total_area_m2'],
+        'field_aliases': {
+            'area': 'total_area_m2',
+            'total_area_m2': 'total_area_m2',
+        },
+        'formula': lambda data: data.get('total_area_m2', 0)
+    },
+    'ceilings': {
+        'required': ['total_area_m2'],
+        'field_aliases': {
+            'area': 'total_area_m2',
+            'total_area_m2': 'total_area_m2',
+        },
+        'formula': lambda data: data.get('total_area_m2', 0)
+    },
+    'doors_windows': {
+        'required': ['door_count', 'window_count'],
+        'field_aliases': {
+            'doors': 'door_count',
+            'windows': 'window_count',
+            'door_count': 'door_count',
+            'window_count': 'window_count',
+        },
+        'formula': lambda data: (data.get('door_count', 0), data.get('window_count', 0))
+    }
+}
+
+def normalize_keys(obj, aliases):
+    new_obj = {}
+    for k, v in obj.items():
+        if k in aliases:
+            new_obj[aliases[k]] = v
+        else:
+            new_obj[k] = v
+    return new_obj
+
+async def extract_architectural_with_ai(element_type, file_bytes, file_type, user_params, code_basis, retry=True):
+    contents = []
+    schema_info = ARCH_SCHEMAS.get(element_type)
+    if not schema_info:
+        raise ValueError(f"Unsupported architectural element: {element_type}")
+
+    if element_type == 'flooring':
+        prompt = f"""
+You are a Quantity Surveyor. Extract the building dimensions from the architectural plan.
+From the drawing, determine:
+- total_length_m: the overall length of the building in meters
+- total_width_m: the overall width of the building in meters
+- area_m2: the total floor area in square meters (if not given, compute from length × width)
+
+If a dimension is not clearly visible, set it to null.
+Return ONLY a JSON object with these fields, no extra text.
+
+Example:
+{{"total_length_m": 20.0, "total_width_m": 15.0, "area_m2": 300.0}}
+"""
+    elif element_type == 'wall_finishing':
+        prompt = f"""
+You are a Quantity Surveyor. Extract the total wall finishing area from the architectural plan.
+Determine the total area of walls that need finishing (paint, plaster, etc.) in square meters.
+This is often given as a total wall area or can be computed from perimeter and height.
+Return ONLY a JSON object with field "total_area_m2", no extra text.
+Example: {{"total_area_m2": 250.0}}
+"""
+    elif element_type == 'ceilings':
+        prompt = f"""
+You are a Quantity Surveyor. Extract the total ceiling area from the architectural plan.
+This is usually the same as the floor area (or given separately).
+Return ONLY a JSON object with field "total_area_m2", no extra text.
+Example: {{"total_area_m2": 300.0}}
+"""
+    elif element_type == 'doors_windows':
+        prompt = f"""
+You are a Quantity Surveyor. Count the number of doors and windows from the architectural plan.
+Return ONLY a JSON object with fields "door_count" and "window_count", no extra text.
+Example: {{"door_count": 10, "window_count": 15}}
+"""
+    else:
+        raise ValueError(f"Unsupported architectural element: {element_type}")
+
+    contents.append(prompt)
+
+    if file_type == 'application/pdf':
+        try:
+            doc = fitz.open(stream=file_bytes, filetype="pdf")
+            if len(doc) > 0:
+                page = doc.load_page(0)
+                mat = fitz.Matrix(2.0, 2.0)
+                pix = page.get_pixmap(matrix=mat)
+                img_bytes = pix.tobytes("png")
+                img_part = types.Part.from_bytes(data=img_bytes, mime_type="image/png")
+                contents.append(img_part)
+            doc.close()
+        except Exception:
+            contents.append(types.Part.from_bytes(data=file_bytes, mime_type='application/pdf'))
+    else:
+        img_part = types.Part.from_bytes(data=file_bytes, mime_type=file_type)
+        contents.append(img_part)
+
+    raw_response = None
+    try:
+        response_text = await call_gemini_json(contents, temperature=0, timeout=240)
+        raw_response = response_text
+        json_str = response_text.strip()
+        json_str = re.sub(r'^```json\s*', '', json_str)
+        json_str = re.sub(r'\s*```$', '', json_str)
+        start = json_str.find('{')
+        end = json_str.rfind('}')
+        if start != -1 and end != -1:
+            json_str = json_str[start:end+1]
+        data = json.loads(json_str)
+        aliases = schema_info.get('field_aliases', {})
+        norm_data = normalize_keys(data, aliases)
+        return norm_data, raw_response
+    except Exception as e:
+        if retry:
+            prompt2 = f"""
+Return a JSON object with the fields: {', '.join(schema_info['required'])}.
+If unclear, set values to null.
+"""
+            contents2 = [prompt2]
+            try:
+                response_text2 = await call_gemini_json(contents2, temperature=0, timeout=240)
+                raw_response = response_text2
+                json_str2 = response_text2.strip()
+                json_str2 = re.sub(r'^```json\s*', '', json_str2)
+                json_str2 = re.sub(r'\s*```$', '', json_str2)
+                start = json_str2.find('{')
+                end = json_str2.rfind('}')
+                if start != -1 and end != -1:
+                    json_str2 = json_str2[start:end+1]
+                data2 = json.loads(json_str2)
+                aliases = schema_info.get('field_aliases', {})
+                norm_data2 = normalize_keys(data2, aliases)
+                return norm_data2, raw_response
+            except:
+                return {}, raw_response
+        else:
+            return {}, raw_response
+
+def compute_architectural_quantities(element_type, data, user_params):
+    schema_info = ARCH_SCHEMAS.get(element_type)
+    if not schema_info:
+        return [], 0, []
+
+    required = schema_info['required']
+    results = []
+    total_quantity = 0
+    missing_fields = []
+
+    for req in required:
+        if req not in data or data[req] is None:
+            missing_fields.append(req)
+
+    if missing_fields:
+        return results, total_quantity, [{'label': 'General', 'idx': 0, 'missing': missing_fields}]
+
+    if element_type in ['flooring', 'wall_finishing', 'ceilings']:
+        qty = schema_info['formula'](data) if callable(schema_info['formula']) else 0
+        total_quantity += qty
+        results.append({
+            'label': element_type.capitalize(),
+            'quantity': qty,
+            'unit': 'm²'
+        })
+    elif element_type == 'doors_windows':
+        door_count, window_count = schema_info['formula'](data)
+        if door_count:
+            results.append({
+                'label': 'Doors',
+                'quantity': door_count,
+                'unit': 'nos'
+            })
+            total_quantity += door_count
+        if window_count:
+            results.append({
+                'label': 'Windows',
+                'quantity': window_count,
+                'unit': 'nos'
+            })
+            total_quantity += window_count
+
+    return results, total_quantity, []
+
+def generate_arch_boq_table(results, element_type, wastage):
+    rows = []
+    for r in results:
+        rows.append({
+            'Item': f"{element_type.capitalize()} - {r['label']}",
+            'Count': 1,
+            'Unit': r['unit'],
+            'Quantity (net)': round(r['quantity'], 2),
+            'Wastage %': wastage,
+            'Quantity (with waste)': round(r['quantity'] * (1 + wastage/100), 2),
+            'Unit Rate (EGP)': round(UNIT_RATES.get(r['label'], 0), 2),
+            'Total Cost (EGP)': round(r['quantity'] * (1 + wastage/100) * UNIT_RATES.get(r['label'], 0), 2)
+        })
+    if rows:
+        total_row = {
+            'Item': 'TOTAL',
+            'Count': '',
+            'Unit': '',
+            'Quantity (net)': round(sum(r['Quantity (net)'] for r in rows), 2),
+            'Wastage %': '',
+            'Quantity (with waste)': round(sum(r['Quantity (with waste)'] for r in rows), 2),
+            'Unit Rate (EGP)': '',
+            'Total Cost (EGP)': round(sum(r['Total Cost (EGP)'] for r in rows), 2)
+        }
+        rows.append(total_row)
+    return pd.DataFrame(rows)
+
+
+async def extract_mass_with_ai(element_type, file_bytes, file_type, user_params, code_basis, retry=True):
+    contents = []
+    schema_info = MASS_SCHEMAS.get(element_type)
+    if not schema_info:
+        raise ValueError(f"Unsupported element type: {element_type}")
+
+    extra_instruction = ""
+    if element_type == 'columns':
+        extra_instruction = " IMPORTANT: Only count columns that are part of the structural grid/plan. Ignore any columns shown in a separate schedule, detail sheet, or table. "
+
+    prompt = f"""
+You are an expert Quantity Surveyor. Your task is to EXTRACT raw data from the provided drawing(s) and return ONLY a JSON array of objects.
+
+Extract the following fields for each group:
+{', '.join(schema_info['required'])}
+
+If a dimension is not clearly visible, set it to null.
+{extra_instruction}
+Return ONLY the JSON array, no extra text, no explanations, no markdown.
+
+Example for columns:
+[{{"label":"C1","count":6,"width_mm":300,"depth_mm":300,"height_mm":3000}}]
+
+Now extract from the drawing.
+"""
+    contents.append(prompt)
+
+    if file_type == 'application/pdf':
+        try:
+            reader = pypdf.PdfReader(io.BytesIO(file_bytes))
+            pages_text = []
+            for i in range(min(3, len(reader.pages))):
+                try:
+                    txt = reader.pages[i].extract_text() or ""
+                    pages_text.append(txt)
+                except:
+                    pass
+            full_text = "".join(pages_text)
+            if full_text.strip():
+                contents.append(f"Extracted text from PDF:\n{full_text[:6000]}")
+            doc = fitz.open(stream=file_bytes, filetype="pdf")
+            if len(doc) > 0:
+                page = doc.load_page(0)
+                mat = fitz.Matrix(2.0, 2.0)
+                pix = page.get_pixmap(matrix=mat)
+                img_bytes = pix.tobytes("png")
+                img_part = types.Part.from_bytes(data=img_bytes, mime_type="image/png")
+                contents.append(img_part)
+            doc.close()
+        except Exception as e:
+            contents.append(types.Part.from_bytes(data=file_bytes, mime_type='application/pdf'))
+    else:
+        img_part = types.Part.from_bytes(data=file_bytes, mime_type=file_type)
+        contents.append(img_part)
+
+    try:
+        response_text = await call_gemini_json(contents, temperature=0, timeout=240)
+        json_str = response_text.strip()
+        json_str = re.sub(r'^```json\s*', '', json_str)
+        json_str = re.sub(r'\s*```$', '', json_str)
+        start = json_str.find('[')
+        end = json_str.rfind(']')
+        if start != -1 and end != -1:
+            json_str = json_str[start:end+1]
+        data = json.loads(json_str)
+        return data
+    except Exception as e:
+        if retry:
+            prompt2 = f"""
+Return a JSON array of objects with fields: {', '.join(schema_info['required'])}.
+{extra_instruction}
+If the drawing is unclear, return an empty array [].
+"""
+            contents2 = [prompt2]
+            if file_type == 'application/pdf':
+                try:
+                    reader = pypdf.PdfReader(io.BytesIO(file_bytes))
+                    txt = "".join([p.extract_text() or "" for p in reader.pages[:3]])
+                    if txt.strip():
+                        contents2.append(f"Extracted text from PDF:\n{txt[:6000]}")
+                except:
+                    pass
+            try:
+                response_text2 = await call_gemini_json(contents2, temperature=0, timeout=240)
+                json_str2 = response_text2.strip()
+                json_str2 = re.sub(r'^```json\s*', '', json_str2)
+                json_str2 = re.sub(r'\s*```$', '', json_str2)
+                start = json_str2.find('[')
+                end = json_str2.rfind(']')
+                if start != -1 and end != -1:
+                    json_str2 = json_str2[start:end+1]
+                data2 = json.loads(json_str2)
+                return data2
+            except:
+                return []
+        else:
+            return []
+
+def compute_mass_from_ai_data(element_type, data, user_params):
+    schema_info = MASS_SCHEMAS.get(element_type)
+    required = schema_info['required']
+    results = []
+    total_concrete = 0
+
+    for group in data:
+        all_present = True
+        for req in required:
+            if req not in group or group[req] is None:
+                all_present = False
+                break
+        if not all_present:
+            continue
+
+        if element_type == 'columns':
+            if group.get('height_mm') is None and user_params.get('use_floor_height', False):
+                group['height_mm'] = user_params.get('floor_height_mm', 3000)
+            if group.get('height_mm') is None:
+                continue
+            vol = (group['width_mm']/1000) * (group['depth_mm']/1000) * (group['height_mm']/1000) * group.get('count', 1)
+        elif element_type == 'beams':
+            vol = (group['width_mm']/1000) * (group['depth_mm']/1000) * (group['length_mm']/1000) * group.get('count', 1)
+        elif element_type == 'slabs':
+            vol = group['area_m2'] * (group['thickness_mm']/1000)
+        elif element_type == 'footings':
+            vol = (group['width_mm']/1000) * (group['depth_mm']/1000) * (group['length_mm']/1000) * group.get('count', 1)
+        elif element_type == 'walls':
+            vol = group['length_m'] * group['height_m'] * (group['thickness_mm']/1000) * group.get('count', 1)
+        else:
+            vol = 0
+
+        total_concrete += vol
+        results.append({
+            'label': group.get('label', 'Unknown'),
+            'count': group.get('count', 1),
+            'concrete_m3': vol,
+            'rebar_ton': 0
+        })
+
+    total_concrete = round(total_concrete, 2)
+    return results, total_concrete, 0
+
+
+def generate_boq_table(results, branch, element_type, wastage, mode):
+    rows = []
+    if mode == 'mass':
+        for r in results:
+            if 'concrete_m3' in r:
+                rows.append({
+                    'Item': f"{element_type.capitalize()} - {r.get('label', '')}",
+                    'Count': r.get('count', 1),
+                    'Unit': 'm³',
+                    'Quantity (net)': round(r['concrete_m3'], 2),
+                    'Wastage %': wastage,
+                    'Quantity (with waste)': round(r['concrete_m3'] * (1 + wastage/100), 2),
+                    'Unit Rate (EGP)': round(UNIT_RATES.get('Concrete (C30/37)', 2500), 2),
+                    'Total Cost (EGP)': round(r['concrete_m3'] * (1 + wastage/100) * UNIT_RATES.get('Concrete (C30/37)', 2500), 2)
+                })
+    else:  # rebar
+        for r in results:
+            if 'rebar_ton' in r:
+                rows.append({
+                    'Item': f"{element_type.capitalize()} - {r.get('label', '')} - Rebar",
+                    'Count': r.get('count', 1),
+                    'Unit': 'ton',
+                    'Quantity (net)': round(r['rebar_ton'], 2),
+                    'Wastage %': wastage,
+                    'Quantity (with waste)': round(r['rebar_ton'] * (1 + wastage/100), 2),
+                    'Unit Rate (EGP)': round(UNIT_RATES.get('Rebar (Grade 400)', 15000), 2),
+                    'Total Cost (EGP)': round(r['rebar_ton'] * (1 + wastage/100) * UNIT_RATES.get('Rebar (Grade 400)', 15000), 2)
+                })
+            if 'concrete_m3' in r:
+                rows.append({
+                    'Item': f"{element_type.capitalize()} - {r.get('label', '')} - Concrete",
+                    'Count': r.get('count', 1),
+                    'Unit': 'm³',
+                    'Quantity (net)': round(r['concrete_m3'], 2),
+                    'Wastage %': wastage,
+                    'Quantity (with waste)': round(r['concrete_m3'] * (1 + wastage/100), 2),
+                    'Unit Rate (EGP)': round(UNIT_RATES.get('Concrete (C30/37)', 2500), 2),
+                    'Total Cost (EGP)': round(r['concrete_m3'] * (1 + wastage/100) * UNIT_RATES.get('Concrete (C30/37)', 2500), 2)
+                })
+    if rows:
+        total_row = {
+            'Item': 'TOTAL',
+            'Count': '',
+            'Unit': '',
+            'Quantity (net)': round(sum(r['Quantity (net)'] for r in rows), 2),
+            'Wastage %': '',
+            'Quantity (with waste)': round(sum(r['Quantity (with waste)'] for r in rows), 2),
+            'Unit Rate (EGP)': '',
+            'Total Cost (EGP)': round(sum(r['Total Cost (EGP)'] for r in rows), 2)
+        }
+        rows.append(total_row)
+    return pd.DataFrame(rows)
+
+
+def generate_charts(df, element_type):
+    df_no_total = df[df['Item'] != 'TOTAL'].copy()
+    if df_no_total.empty:
+        return None, None
+
+    fig_bar = go.Figure()
+    fig_bar.add_trace(go.Bar(
+        x=df_no_total['Item'],
+        y=df_no_total['Quantity (net)'],
+        name='Concrete Volume (m³)',
+        marker_color='#FF8C00',
+        text=df_no_total['Quantity (net)'],
+        textposition='auto',
+    ))
+    fig_bar.update_layout(
+        title=f'{element_type.capitalize()} - Concrete Volume per Group',
+        template='plotly_dark',
+        paper_bgcolor='#0d1a35',
+        plot_bgcolor='#0d1a35',
+        font=dict(color='white'),
+        margin=dict(t=40, b=20, l=40, r=20),
+        height=400,
+        xaxis_tickangle=-45,
+    )
+
+    fig_pie = go.Figure(data=[go.Pie(
+        labels=df_no_total['Item'],
+        values=df_no_total['Total Cost (EGP)'],
+        hole=0.4,
+        marker=dict(colors=px.colors.sequential.Oranges_r),
+        textinfo='label+percent',
+        textposition='auto',
+    )])
+    fig_pie.update_layout(
+        title=f'{element_type.capitalize()} - Cost Distribution',
+        template='plotly_dark',
+        paper_bgcolor='#0d1a35',
+        plot_bgcolor='#0d1a35',
+        font=dict(color='white'),
+        margin=dict(t=40, b=20, l=40, r=20),
+        height=400,
+    )
+    return fig_bar, fig_pie
+
+
+def compute_rebar_quantities(element_type, data, user_params):
+    results = []
+    total_concrete = 0
+    total_rebar = 0
+    for group in data:
+        required = ['label', 'count', 'width_mm', 'depth_mm', 'height_mm', 'rebar']
+        all_present = True
+        for req in required:
+            if req not in group or group[req] is None:
+                all_present = False
+                break
+        if not all_present:
+            continue
+        height = group.get('height_mm') or user_params.get('floor_height_mm', 3000)
+        vol = (group['width_mm']/1000) * (group['depth_mm']/1000) * (height/1000) * group.get('count', 1)
+        total_concrete += vol
+        rebar = group.get('rebar', {})
+        main_d = rebar.get('main_diameter_mm', 0)
+        stirrup_d = rebar.get('stirrup_diameter_mm', 0)
+        spacing = rebar.get('spacing_mm', 200)
+        count = group.get('count', 1)
+        height_m = height / 1000
+        main_length = height_m * 4 * count
+        perimeter = 2 * ((group['width_mm'] + group['depth_mm']) / 1000)
+        num_stirrups = (height_m / (spacing/1000)) + 1
+        stirrup_length = perimeter * num_stirrups * count
+        main_weight = main_length * ( (3.1416 * (main_d/1000)**2 / 4) * 7850 )
+        stirrup_weight = stirrup_length * ( (3.1416 * (stirrup_d/1000)**2 / 4) * 7850 )
+        total_rebar += (main_weight + stirrup_weight)
+        results.append({
+            'label': group.get('label', 'Unknown'),
+            'count': count,
+            'concrete_m3': vol,
+            'rebar_ton': (main_weight + stirrup_weight) / 1000
+        })
+    total_concrete = round(total_concrete, 2)
+    total_rebar = round(total_rebar / 1000, 2)
+    return results, total_concrete, total_rebar
 
 # =====================================================================================
-# JOB SCRAPING FUNCTIONS (WITH CLOUDSCRAPER + ROBUST SELECTORS)
+# MIME TYPE DETECTION
+# =====================================================================================
+def detect_mime_type(filename: str, data: bytes) -> str:
+    ext = os.path.splitext(filename)[1].lower()
+    if ext in ['.png']:
+        return 'image/png'
+    elif ext in ['.jpg', '.jpeg']:
+        return 'image/jpeg'
+    elif ext in ['.pdf']:
+        return 'application/pdf'
+    if data.startswith(b'\x89PNG'):
+        return 'image/png'
+    if data.startswith(b'\xff\xd8'):
+        return 'image/jpeg'
+    if data.startswith(b'%PDF'):
+        return 'application/pdf'
+    return 'image/jpeg'
+
+# =====================================================================================
+# JOB SCRAPING FUNCTIONS (WITH CLOUDSCRAPER - FIXED INITIALIZATION)
 # =====================================================================================
 RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY", "").strip()
 JSEARCH_HOST = "jsearch.p.rapidapi.com"
@@ -379,15 +1006,9 @@ HEADERS = {
 def log(msg):
     print(f"[JOB-SCRAPER] {msg}")
 
-# Initialize cloudscraper session (bypasses Cloudflare)
-scraper = cloudscraper.create_scraper(
-    browser={
-        'browser': 'chrome',
-        'platform': 'windows',
-        'mobile': False,
-        'custom': HEADERS
-    }
-)
+# Create cloudscraper instance WITHOUT the 'browser' argument (fixes TypeError)
+scraper = cloudscraper.create_scraper()
+scraper.headers.update(HEADERS)
 
 def scrape_jsearch(query, max_results=20):
     jobs = []
@@ -442,7 +1063,6 @@ def scrape_wuzzuf_direct(query, max_results=20):
     jobs = []
     url = f"https://wuzzuf.net/search/jobs/?q={quote_plus(query)}&a=hpb"
     try:
-        # Use cloudscraper to bypass Cloudflare
         resp = scraper.get(url, timeout=REQUEST_TIMEOUT)
         log(f"Wuzzuf GET {url} -> status={resp.status_code}, len={len(resp.text)}")
         if resp.status_code != 200:
@@ -453,32 +1073,26 @@ def scrape_wuzzuf_direct(query, max_results=20):
         log(f"Wuzzuf request failed: {e}")
         return jobs
 
-    # Robust selectors: look for <a> with href containing '/jobs/p/'
     for a in soup.select('a[href*="/jobs/p/"]'):
         href = a.get("href")
         title = a.get_text(strip=True)
         if not href or not title:
             continue
         full_url = href if href.startswith("http") else f"https://wuzzuf.net{href}"
-        # Find the parent card – try multiple approaches
         card = a
         for _ in range(8):
             card = card.parent
             if card is None:
                 break
-            # If we find a parent with multiple links, it's likely the card
             if len(card.find_all("a")) >= 2:
                 break
         company, location, desc = "", "", ""
         if card is not None:
-            # Company: look for a link with /employers/
             company_link = card.find("a", href=re.compile(r"/employers/"))
             company = company_link.get_text(strip=True) if company_link else ""
-            # Location: look for span/div with class containing 'location'
             loc_elem = card.find("span", class_=re.compile(r"location", re.I)) or card.find("div", class_=re.compile(r"location", re.I))
             if loc_elem:
                 location = loc_elem.get_text(strip=True)
-            # Description: collect text from other elements
             chunks = [t.get_text(strip=True) for t in card.find_all(["span", "div"]) if t.get_text(strip=True)]
             chunks = [t for t in chunks if t not in (title, company, location)]
             desc = " | ".join(dict.fromkeys(chunks))[:400]
@@ -513,7 +1127,6 @@ def scrape_bayt_direct(query, max_results=20):
         log(f"Bayt request failed: {e}")
         return jobs
 
-    # Bayt cards: <li class="has-pointer"> or <div class="job-card">
     cards = soup.select('li.has-pointer') or soup.select('div.job-card')
     for card in cards[:max_results]:
         try:
@@ -580,25 +1193,6 @@ def scrape_jobs(query, location=""):
     deduped.sort(key=lambda j: 0 if j["source"] == "Wuzzuf" else 1)
     log(f"TOTAL jobs after dedup: {len(deduped)}")
     return deduped
-
-# =====================================================================================
-# MIME TYPE DETECTION
-# =====================================================================================
-def detect_mime_type(filename: str, data: bytes) -> str:
-    ext = os.path.splitext(filename)[1].lower()
-    if ext in ['.png']:
-        return 'image/png'
-    elif ext in ['.jpg', '.jpeg']:
-        return 'image/jpeg'
-    elif ext in ['.pdf']:
-        return 'application/pdf'
-    if data.startswith(b'\x89PNG'):
-        return 'image/png'
-    if data.startswith(b'\xff\xd8'):
-        return 'image/jpeg'
-    if data.startswith(b'%PDF'):
-        return 'application/pdf'
-    return 'image/jpeg'
 
 # =====================================================================================
 # STYLING - MODERN & PROFESSIONAL (unchanged)
@@ -1073,7 +1667,7 @@ def main_page():
         with ui.tab_panels(tabs, value=t_dash).classes('w-full bg-transparent mt-4'):
 
             # --------------------------------------------------------------
-            # TAB 1: CONCRETE CUBE VERIFIER (full – you can copy from previous)
+            # TAB 1: CONCRETE CUBE VERIFIER (full version)
             # --------------------------------------------------------------
             with ui.tab_panel(t_dash):
                 ui.label('Concrete Cube Calculation Sheet & Statistical Verifier').classes('text-2xl font-bold text-white mb-4')
@@ -1272,7 +1866,7 @@ REQUIRED REPORT STRUCTURE:
                     ui.markdown('*Click "Run AI Statistical Calculation & Verification" to generate the report.*').classes('text-sm text-[#A9B6D0]')
 
             # --------------------------------------------------------------
-            # TAB 2: AI MULTI-STANDARD AUDITOR
+            # TAB 2: AI MULTI-STANDARD AUDITOR (full)
             # --------------------------------------------------------------
             with ui.tab_panel(t_audit):
                 ui.label('AI Multi-Standard Engineering Auditor').classes('text-2xl font-bold text-white mb-2')
@@ -1376,7 +1970,7 @@ report with clear ## section headings and real Markdown tables for any comparati
                 ui.button('Execute AI Audit & Compliance Check', on_click=run_ai_audit).classes('primary-btn')
 
             # --------------------------------------------------------------
-            # TAB 3: DEFECT DIAGNOSTIC
+            # TAB 3: DEFECT DIAGNOSTIC (full)
             # --------------------------------------------------------------
             with ui.tab_panel(t_defect):
                 ui.label('AI Engineering Defect Diagnostic & Repair Protocol').classes('text-2xl font-bold text-white mb-2')
@@ -1484,7 +2078,7 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                 ui.button('Diagnose Defect & Get Repair Protocol', on_click=run_defect_diagnosis).classes('primary-btn')
 
             # --------------------------------------------------------------
-            # TAB 4: AI CHATBOT
+            # TAB 4: AI CHATBOT (full)
             # --------------------------------------------------------------
             with ui.tab_panel(t_chat):
                 ui.label('Core-Code Intelligent Assistant Chatbot').classes('text-2xl font-bold text-white mb-2')
@@ -1553,7 +2147,7 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                     ui.button('Download Chat PDF Transcript', on_click=download_chat_pdf).classes('primary-btn flex-1')
 
             # --------------------------------------------------------------
-            # TAB 5: HANDWRITING OCR
+            # TAB 5: HANDWRITING OCR (full)
             # --------------------------------------------------------------
             with ui.tab_panel(t_handwriting):
                 ui.label('Handwriting to Digital Text Transcription').classes('text-2xl font-bold text-white mb-2')
@@ -1665,7 +2259,7 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                     ui.markdown('*Upload a file and click "Transcribe Handwriting" to start.*').classes('text-sm text-[#A9B6D0]')
 
             # ==============================================================
-            # TAB 6: JOB BOARD (debug-enhanced + cloudscraper)
+            # TAB 6: JOB BOARD (with cloudscraper fix and debug)
             # ==============================================================
             with ui.tab_panel(t_jobs):
                 ui.label('Engineering Job Board - Egypt').classes('text-2xl font-bold text-white mb-4')
