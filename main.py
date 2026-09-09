@@ -6,6 +6,7 @@ import re
 import asyncio
 import json
 import time
+import random
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -2387,7 +2388,7 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                     ui.markdown('*Upload a file and click "Transcribe Handwriting" to start.*').classes('text-sm text-[#A9B6D0]')
 
             # =========================================================================
-            # TAB 6: JOB BOARD (FIXED - JSON‑LD)
+            # TAB 6: JOB BOARD (FIXED)
             # =========================================================================
             with ui.tab_panel(t_jobs):
                 ui.label('Engineering Job Board - Egypt').classes('text-2xl font-bold text-white mb-4')
