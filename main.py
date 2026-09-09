@@ -2115,8 +2115,6 @@ Ensure all tables are proper Markdown tables with header and separator rows.
 
                     ui.button('Download Chat PDF Transcript', on_click=download_chat_pdf).classes('primary-btn flex-1')
 
-        
-                       # =========================================================================
             # =========================================================================
             # TAB 5: PROFESSIONAL BOQ TAKEOFF (SIMPLIFIED & ROBUST)
             # =========================================================================
@@ -2544,6 +2542,7 @@ Example output:
                 with ui.row().classes('w-full gap-4 mt-4'):
                     ui.button('Run AI Extraction', on_click=run_boq_extraction).classes('primary-btn flex-1')
                     ui.button('Manual Entry (Fallback)', on_click=show_manual_entry).classes('primary-btn flex-1')
+
         # ---------------- FOOTER (unchanged) ----------------
         ui.html('''
         <div class="app-footer">
