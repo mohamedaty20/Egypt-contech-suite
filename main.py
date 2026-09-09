@@ -13,16 +13,13 @@ import qrcode
 import pypdf
 import fitz  # PyMuPDF
 
-# Dotenv & FastAPI / NiceGUI
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from nicegui import app, ui, run
 
-# Google GenAI SDK
 from google import genai
 from google.genai import types
 
-# ReportLab
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
@@ -47,7 +44,7 @@ MARGIN = 32
 USABLE_WIDTH = PAGE_WIDTH - (2 * MARGIN)
 
 # =====================================================================================
-# STYLING (identical to original)
+# STYLING
 # =====================================================================================
 app.native.window_args = {"resizable": True}
 
@@ -437,7 +434,7 @@ ui.add_head_html('''
 ''', shared=True)
 
 # =====================================================================================
-# HELPERS (unchanged from original)
+# HELPERS
 # =====================================================================================
 
 _LATEX_SIMPLE = {
@@ -773,7 +770,7 @@ def detect_mime_type(filename: str, data: bytes) -> str:
     return 'image/jpeg'
 
 # =====================================================================================
-# MAIN PAGE (all ui.select calls now use only keyword arguments)
+# MAIN PAGE
 # =====================================================================================
 
 @ui.page('/')
@@ -794,9 +791,9 @@ def main_page():
 
         ui.label('Governing Design Code Basis').classes('text-white font-bold text-sm mb-1')
         ui.markdown('By default every AI output in this app is generated strictly per **ECP 203 / ECP 202 / ECP 104**. Change this to switch the primary basis.').classes('text-xs text-[#A9B6D0] mb-2')
-        # === ui.select #1 (keyword-only) ===
+        # ui.select #1 – canonical: label as first positional, options and value as keywords
         code_basis_select = ui.select(
-            label='Code Type (applies app-wide)',
+            'Code Type (applies app-wide)',
             options=CODE_BASIS_OPTIONS,
             value=CODE_BASIS_OPTIONS[0],
         ).classes('w-full mb-4')
@@ -1074,9 +1071,9 @@ REQUIRED REPORT STRUCTURE:
                         with result_output_area:
                             ui.notify(f'Calculation Error: {str(ex)}', type='negative')
 
-                # === ui.select #2 (keyword-only) ===
+                # ui.select #2 – canonical
                 stage_selector = ui.select(
-                    label='Select Stage Display Filter',
+                    'Select Stage Display Filter',
                     options=['All Stages', '7-Day Stage', '14-Day Stage', '28-Day Stage'],
                     value='All Stages',
                     on_change=run_verification,
@@ -1096,9 +1093,9 @@ REQUIRED REPORT STRUCTURE:
                 ui.label('AI Multi-Standard Engineering Auditor').classes('text-2xl font-bold text-white mb-2')
                 ui.markdown('Upload a specification, mix design, or site report to audit against the selected code basis.').classes('markdown-body mb-2')
 
-                # === ui.select #3 (keyword-only) ===
+                # ui.select #3 – canonical
                 audit_focus = ui.select(
-                    label='Audit Focus',
+                    'Audit Focus',
                     options=[
                         "Multi-Standard Structural & Geotechnical Compliance",
                         "Roads, Pavements & Subgrade Materials (ECP 104 & AASHTO)",
@@ -1603,4 +1600,4 @@ ui.run(
     favicon='🏗️',
     reload=False,
     reconnect_timeout=30.0,
-    )
+)
