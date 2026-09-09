@@ -16,6 +16,7 @@ import pypdf
 import fitz  # PyMuPDF
 import requests
 from bs4 import BeautifulSoup
+from urllib.parse import quote_plus
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -23,7 +24,7 @@ from nicegui import app, ui, run
 
 from google import genai
 from google.genai import types
-from urllib.parse import quote_plus
+
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
@@ -37,7 +38,19 @@ from reportlab.platypus import (
     Image as ReportLabImage,
 )
 
-# ----- constants defined FIRST so they're available to all functions -----
+load_dotenv()
+api_key = os.getenv("GEMINI_API_KEY")
+client = genai.Client(api_key=api_key) if api_key else None
+
+GEMINI_MODEL = "gemini-3.5-flash-lite"
+
+PAGE_WIDTH, PAGE_HEIGHT = A4
+MARGIN = 32
+USABLE_WIDTH = PAGE_WIDTH - (2 * MARGIN)
+
+# =====================================================================================
+# JOB SCRAPING FUNCTIONS (using JSearch API + fallback direct scrapers)
+# =====================================================================================
 RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY", "").strip()
 JSEARCH_HOST = "jsearch.p.rapidapi.com"
 REQUEST_TIMEOUT = 15
@@ -51,10 +64,8 @@ HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
 
-# ---------------------------------------------------------------------------
-# PRIMARY SOURCE: JSearch (RapidAPI) – bypasses Cloudflare/WAF.
-# ---------------------------------------------------------------------------
 def scrape_jsearch(query, max_results=20):
+    """Primary source: JSearch (RapidAPI) – bypasses Cloudflare."""
     jobs = []
     if not RAPIDAPI_KEY:
         print("[scraper][JSearch] No RAPIDAPI_KEY set – skipping.")
@@ -71,7 +82,7 @@ def scrape_jsearch(query, max_results=20):
                 "page": "1",
                 "num_pages": "1",
                 "country": "eg",
-                "engine": "google_jobs",   # explicitly request Google Jobs
+                "engine": "google_jobs",
             },
             timeout=REQUEST_TIMEOUT,
         )
@@ -106,9 +117,6 @@ def scrape_jsearch(query, max_results=20):
     print(f"[scraper] JSearch: {len(jobs)} jobs")
     return jobs
 
-# ---------------------------------------------------------------------------
-# FALLBACK: direct scrapers (best effort – often blocked by Cloudflare)
-# ---------------------------------------------------------------------------
 def _get(url, label=""):
     try:
         resp = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
@@ -238,13 +246,13 @@ def scrape_jobs(query, location=""):
     full_query = f"{query} {location}".strip() if location else query
     all_jobs = []
 
-    # 1. Primary: JSearch (requires RAPIDAPI_KEY)
+    # Primary: JSearch
     try:
         all_jobs.extend(scrape_jsearch(full_query))
     except Exception as e:
         print(f"[scraper] JSearch error: {e}")
 
-    # 2. Fallback: direct scrapers (if JSearch returns nothing)
+    # Fallback direct scrapers if JSearch returns nothing
     if not all_jobs:
         print("[scraper] JSearch returned empty – trying direct scrapers.")
         for scraper in (scrape_wuzzuf, scrape_bayt, scrape_forasna, scrape_akhtaboot):
@@ -266,16 +274,6 @@ def scrape_jobs(query, location=""):
     print(f"[scraper] TOTAL jobs: {len(deduped)}")
     return deduped
 
-
-load_dotenv()
-api_key = os.getenv("GEMINI_API_KEY")
-client = genai.Client(api_key=api_key) if api_key else None
-
-GEMINI_MODEL = "gemini-3.5-flash-lite"
-
-PAGE_WIDTH, PAGE_HEIGHT = A4
-MARGIN = 32
-USABLE_WIDTH = PAGE_WIDTH - (2 * MARGIN)
 
 # =====================================================================================
 # STYLING - MODERN & PROFESSIONAL (unchanged)
@@ -905,13 +903,10 @@ def build_pdf_header(story, styles, doc_title, subtitle, logo_bytes, engineer, p
 def build_pdf_footer_signature_and_qr(story, styles, qr_img_buffer, engineer_name):
     """Custom footer: only Prepared by Engineer with signature line, QR on the right."""
     body_style = ParagraphStyle("SigBody", fontSize=8, textColor=colors.HexColor("#334155"), leading=11)
-    # Prepare QR image
     qr_lab_img = ReportLabImage(qr_img_buffer, width=38, height=38)
-    # Signature cell: "Prepared by Engineer:" and a blank line for signature
     sign_text = f"<b>Prepared by Engineer:</b><br/>{engineer_name}<br/><br/>_________________<br/>(Signature &amp; Date)"
     sign_cell = Paragraph(sign_text, body_style)
 
-    # Table with two cells: signature on left, QR on right
     w = USABLE_WIDTH
     t = Table([[sign_cell, qr_lab_img]], colWidths=[w * 0.7, w * 0.3])
     t.setStyle(TableStyle([
@@ -942,7 +937,6 @@ def build_report_pdf(doc_title, subtitle, body_markdown, meta, logo_bytes, extra
     story.extend(markdown_to_pdf_flowables(body_markdown, styles))
     story.append(Spacer(1, 8))
 
-    # Custom footer with only one signature + QR
     build_pdf_footer_signature_and_qr(story, styles, qr_buf, meta['engineer'])
 
     doc.build(story)
@@ -1010,7 +1004,6 @@ async def call_gemini(contents, system_instruction=None, temperature=0.1, timeou
         raise Exception(f"AI request failed: {str(e)}")
 
 async def call_gemini_json(contents, temperature=0.1, timeout=240):
-    """Call Gemini and return raw text without sanitization (for JSON)."""
     cfg_kwargs = {"temperature": temperature}
     config = types.GenerateContentConfig(**cfg_kwargs)
     try:
@@ -1023,143 +1016,11 @@ async def call_gemini_json(contents, temperature=0.1, timeout=240):
             ),
             timeout=timeout
         )
-        return response.text  # raw text, no sanitization
+        return response.text
     except asyncio.TimeoutError:
         raise Exception("AI request timed out after 240 seconds.")
     except Exception as e:
         raise Exception(f"AI request failed: {str(e)}")
-
-
-# =====================================================================================
-# JOB SCRAPING FUNCTIONS (FIXED)
-# =====================================================================================
-def scrape_wuzzuf(query: str) -> list:
-    """Scrape Wuzzuf job search results with fallback selectors."""
-    url = f"https://wuzzuf.net/search/jobs/?q={query}"
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    }
-    try:
-        response = requests.get(url, headers=headers, timeout=10)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.content, 'html.parser')
-        jobs = []
-
-        # Try multiple selectors to find job cards
-        selectors = [
-            'div.job-card',
-            'div[class*="job-card"]',
-            'div[class*="css-"]',  # Wuzzuf uses these
-            'div[data-testid="job-card"]',
-            'div[class*="job"]',
-        ]
-        cards = []
-        for sel in selectors:
-            cards = soup.select(sel)
-            if cards:
-                break
-        if not cards:
-            # Fallback: find all <a> with href containing '/jobs/' and take their parent div
-            job_links = soup.find_all('a', href=re.compile(r'/jobs/'))
-            seen = set()
-            for link in job_links:
-                parent = link.find_parent('div')
-                if parent and parent not in seen:
-                    cards.append(parent)
-                    seen.add(parent)
-
-        for card in cards:
-            try:
-                # Title & link
-                title_elem = card.find('h2') or card.find('a', class_=re.compile(r'job.*title', re.I)) or card.find('a', href=re.compile(r'/jobs/'))
-                if not title_elem:
-                    continue
-                title = title_elem.text.strip()
-                link = title_elem.get('href')
-                if link and not link.startswith('http'):
-                    link = 'https://wuzzuf.net' + link
-
-                # Company
-                company_elem = card.find('div', class_=re.compile(r'company', re.I)) or card.find('a', class_=re.compile(r'company', re.I))
-                company = company_elem.text.strip() if company_elem else ''
-
-                # Location
-                location_elem = card.find('span', class_=re.compile(r'location', re.I)) or card.find('div', class_=re.compile(r'location', re.I))
-                location = location_elem.text.strip() if location_elem else ''
-
-                # Description (excerpt)
-                desc_elem = card.find('div', class_=re.compile(r'description', re.I)) or card.find('p', class_=re.compile(r'description', re.I))
-                description = desc_elem.text.strip() if desc_elem else ''
-
-                if title and link:
-                    jobs.append({
-                        'title': title,
-                        'company': company,
-                        'location': location,
-                        'description': description,
-                        'url': link
-                    })
-            except Exception:
-                continue
-        return jobs
-    except Exception:
-        return []
-
-
-def scrape_bayt(query: str) -> list:
-    """Scrape Bayt job search results as a fallback."""
-    url = f"https://www.bayt.com/en/egypt/jobs/?search={query}"
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    }
-    try:
-        response = requests.get(url, headers=headers, timeout=10)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.content, 'html.parser')
-        jobs = []
-        # Bayt uses <li class="has-pointer"> or <div class="job-card">
-        cards = soup.find_all('li', class_='has-pointer') or soup.find_all('div', class_='job-card')
-        for card in cards:
-            try:
-                title_elem = card.find('h2') or card.find('a', class_='job-title')
-                if not title_elem:
-                    continue
-                title = title_elem.text.strip()
-                link = title_elem.get('href')
-                if link and not link.startswith('http'):
-                    link = 'https://www.bayt.com' + link
-
-                company_elem = card.find('span', class_='company-name') or card.find('a', class_='company')
-                company = company_elem.text.strip() if company_elem else ''
-
-                location_elem = card.find('span', class_='location') or card.find('div', class_='location')
-                location = location_elem.text.strip() if location_elem else ''
-
-                desc_elem = card.find('div', class_='description') or card.find('p', class_='description')
-                description = desc_elem.text.strip() if desc_elem else ''
-
-                if title and link:
-                    jobs.append({
-                        'title': title,
-                        'company': company,
-                        'location': location,
-                        'description': description,
-                        'url': link
-                    })
-            except Exception:
-                continue
-        return jobs
-    except Exception:
-        return []
-
-
-def scrape_jobs(query: str) -> list:
-    """Try Wuzzuf first; if empty, fallback to Bayt."""
-    jobs = scrape_wuzzuf(query)
-    if not jobs:
-        time.sleep(1)  # avoid rapid requests
-        jobs = scrape_bayt(query)
-    return jobs
 
 
 # =====================================================================================
@@ -1196,7 +1057,6 @@ UNIT_RATES = {
     "Foundation Concrete": 2800,
 }
 
-# Field name to user-friendly label mapping
 FIELD_LABELS = {
     'width_mm': 'Width (mm)',
     'depth_mm': 'Depth (mm)',
@@ -1214,7 +1074,6 @@ FIELD_LABELS = {
     'bottom_diameter_mm': 'Bottom Bar Diameter (mm)',
 }
 
-# ---- Element-specific schemas for mass extraction ----
 MASS_SCHEMAS = {
     'columns': {
         'required': ['label', 'count', 'width_mm', 'depth_mm', 'height_mm'],
@@ -1275,7 +1134,6 @@ MASS_SCHEMAS = {
     }
 }
 
-# ---- Architectural schemas (NEW) ----
 ARCH_SCHEMAS = {
     'flooring': {
         'required': ['total_length_m', 'total_width_m', 'area_m2'],
@@ -1318,7 +1176,6 @@ ARCH_SCHEMAS = {
 }
 
 def normalize_keys(obj, aliases):
-    """Convert dictionary keys using alias mapping."""
     new_obj = {}
     for k, v in obj.items():
         if k in aliases:
@@ -1328,13 +1185,11 @@ def normalize_keys(obj, aliases):
     return new_obj
 
 async def extract_architectural_with_ai(element_type, file_bytes, file_type, user_params, code_basis, retry=True):
-    """Extract architectural quantities (area, dimensions, counts) using AI."""
     contents = []
     schema_info = ARCH_SCHEMAS.get(element_type)
     if not schema_info:
         raise ValueError(f"Unsupported architectural element: {element_type}")
 
-    # Build a detailed prompt depending on the element
     if element_type == 'flooring':
         prompt = f"""
 You are a Quantity Surveyor. Extract the building dimensions from the architectural plan.
@@ -1375,7 +1230,6 @@ Example: {{"door_count": 10, "window_count": 15}}
 
     contents.append(prompt)
 
-    # Process file – send first page as PNG
     if file_type == 'application/pdf':
         try:
             doc = fitz.open(stream=file_bytes, filetype="pdf")
@@ -1405,13 +1259,11 @@ Example: {{"door_count": 10, "window_count": 15}}
         if start != -1 and end != -1:
             json_str = json_str[start:end+1]
         data = json.loads(json_str)
-        # Normalize keys
         aliases = schema_info.get('field_aliases', {})
         norm_data = normalize_keys(data, aliases)
         return norm_data, raw_response
     except Exception as e:
         if retry:
-            # Simpler prompt without images
             prompt2 = f"""
 Return a JSON object with the fields: {', '.join(schema_info['required'])}.
 If unclear, set values to null.
@@ -1437,7 +1289,6 @@ If unclear, set values to null.
             return {}, raw_response
 
 def compute_architectural_quantities(element_type, data, user_params):
-    """Compute quantities from architectural AI data."""
     schema_info = ARCH_SCHEMAS.get(element_type)
     if not schema_info:
         return [], 0, []
@@ -1447,7 +1298,6 @@ def compute_architectural_quantities(element_type, data, user_params):
     total_quantity = 0
     missing_fields = []
 
-    # Check for missing required fields
     for req in required:
         if req not in data or data[req] is None:
             missing_fields.append(req)
@@ -1455,7 +1305,6 @@ def compute_architectural_quantities(element_type, data, user_params):
     if missing_fields:
         return results, total_quantity, [{'label': 'General', 'idx': 0, 'missing': missing_fields}]
 
-    # Compute quantity using formula
     if element_type in ['flooring', 'wall_finishing', 'ceilings']:
         qty = schema_info['formula'](data) if callable(schema_info['formula']) else 0
         total_quantity += qty
@@ -1484,12 +1333,11 @@ def compute_architectural_quantities(element_type, data, user_params):
     return results, total_quantity, []
 
 def generate_arch_boq_table(results, element_type, wastage):
-    """Generate BOQ table for architectural items."""
     rows = []
     for r in results:
         rows.append({
             'Item': f"{element_type.capitalize()} - {r['label']}",
-            'Count': 1,  # For architectural, count is the item itself
+            'Count': 1,
             'Unit': r['unit'],
             'Quantity (net)': round(r['quantity'], 2),
             'Wastage %': wastage,
@@ -1497,7 +1345,6 @@ def generate_arch_boq_table(results, element_type, wastage):
             'Unit Rate (EGP)': round(UNIT_RATES.get(r['label'], 0), 2),
             'Total Cost (EGP)': round(r['quantity'] * (1 + wastage/100) * UNIT_RATES.get(r['label'], 0), 2)
         })
-    # Add total row
     if rows:
         total_row = {
             'Item': 'TOTAL',
@@ -1513,17 +1360,12 @@ def generate_arch_boq_table(results, element_type, wastage):
     return pd.DataFrame(rows)
 
 
-# ---- Structural mass extraction (improved) ----
 async def extract_mass_with_ai(element_type, file_bytes, file_type, user_params, code_basis, retry=True):
-    """Extract mass quantities using AI with a simple JSON array.
-       For columns: only count columns inside the structural grid, ignore schedule/detail sheets.
-    """
     contents = []
     schema_info = MASS_SCHEMAS.get(element_type)
     if not schema_info:
         raise ValueError(f"Unsupported element type: {element_type}")
 
-    # Build a prompt with extra instruction for columns
     extra_instruction = ""
     if element_type == 'columns':
         extra_instruction = " IMPORTANT: Only count columns that are part of the structural grid/plan. Ignore any columns shown in a separate schedule, detail sheet, or table. "
@@ -1545,10 +1387,8 @@ Now extract from the drawing.
 """
     contents.append(prompt)
 
-    # Process file – send high-quality image
     if file_type == 'application/pdf':
         try:
-            # Extract text from first 3 pages for context
             reader = pypdf.PdfReader(io.BytesIO(file_bytes))
             pages_text = []
             for i in range(min(3, len(reader.pages))):
@@ -1560,32 +1400,26 @@ Now extract from the drawing.
             full_text = "".join(pages_text)
             if full_text.strip():
                 contents.append(f"Extracted text from PDF:\n{full_text[:6000]}")
-            # Send first page as high-quality PNG
             doc = fitz.open(stream=file_bytes, filetype="pdf")
             if len(doc) > 0:
                 page = doc.load_page(0)
-                mat = fitz.Matrix(2.0, 2.0)  # higher resolution
+                mat = fitz.Matrix(2.0, 2.0)
                 pix = page.get_pixmap(matrix=mat)
                 img_bytes = pix.tobytes("png")
                 img_part = types.Part.from_bytes(data=img_bytes, mime_type="image/png")
                 contents.append(img_part)
             doc.close()
         except Exception as e:
-            # Fallback: send full PDF as binary
             contents.append(types.Part.from_bytes(data=file_bytes, mime_type='application/pdf'))
     else:
-        # Image – we'll send as is (PNG or JPEG)
         img_part = types.Part.from_bytes(data=file_bytes, mime_type=file_type)
         contents.append(img_part)
 
     try:
         response_text = await call_gemini_json(contents, temperature=0, timeout=240)
-        # Try to extract JSON array
         json_str = response_text.strip()
-        # Remove markdown fences if present
         json_str = re.sub(r'^```json\s*', '', json_str)
         json_str = re.sub(r'\s*```$', '', json_str)
-        # Find the first '[' and last ']'
         start = json_str.find('[')
         end = json_str.rfind(']')
         if start != -1 and end != -1:
@@ -1594,14 +1428,12 @@ Now extract from the drawing.
         return data
     except Exception as e:
         if retry:
-            # Simplified retry: prompt without images, only text
             prompt2 = f"""
 Return a JSON array of objects with fields: {', '.join(schema_info['required'])}.
 {extra_instruction}
 If the drawing is unclear, return an empty array [].
 """
             contents2 = [prompt2]
-            # Try to extract text again
             if file_type == 'application/pdf':
                 try:
                     reader = pypdf.PdfReader(io.BytesIO(file_bytes))
@@ -1622,33 +1454,26 @@ If the drawing is unclear, return an empty array [].
                 data2 = json.loads(json_str2)
                 return data2
             except:
-                # If still fails, return empty array to trigger manual fallback
                 return []
         else:
             return []
 
 def compute_mass_from_ai_data(element_type, data, user_params):
-    """Compute quantities from AI-extracted data."""
     schema_info = MASS_SCHEMAS.get(element_type)
     required = schema_info['required']
     results = []
     total_concrete = 0
-    floor_height = user_params.get('floor_height_mm', 3000) / 1000
 
-    # Data is a list of groups
     for group in data:
-        # Check if all required fields are present (not null)
         all_present = True
         for req in required:
             if req not in group or group[req] is None:
                 all_present = False
                 break
         if not all_present:
-            continue  # skip incomplete groups
+            continue
 
-        # Compute volume based on element type
         if element_type == 'columns':
-            # Use floor height if height is None and allowed
             if group.get('height_mm') is None and user_params.get('use_floor_height', False):
                 group['height_mm'] = user_params.get('floor_height_mm', 3000)
             if group.get('height_mm') is None:
@@ -1678,7 +1503,6 @@ def compute_mass_from_ai_data(element_type, data, user_params):
 
 
 def generate_boq_table(results, branch, element_type, wastage, mode):
-    """Create a Pandas DataFrame for display and export."""
     rows = []
     if mode == 'mass':
         for r in results:
@@ -1717,7 +1541,6 @@ def generate_boq_table(results, branch, element_type, wastage, mode):
                     'Unit Rate (EGP)': round(UNIT_RATES.get('Concrete (C30/37)', 2500), 2),
                     'Total Cost (EGP)': round(r['concrete_m3'] * (1 + wastage/100) * UNIT_RATES.get('Concrete (C30/37)', 2500), 2)
                 })
-    # Add total row if rows exist
     if rows:
         total_row = {
             'Item': 'TOTAL',
@@ -1734,7 +1557,6 @@ def generate_boq_table(results, branch, element_type, wastage, mode):
 
 
 def generate_charts(df, element_type):
-    """Generate bar chart for concrete volume and pie chart for cost distribution."""
     df_no_total = df[df['Item'] != 'TOTAL'].copy()
     if df_no_total.empty:
         return None, None
@@ -1779,7 +1601,6 @@ def generate_charts(df, element_type):
     return fig_bar, fig_pie
 
 
-# Helper function for rebar quantities
 def compute_rebar_quantities(element_type, data, user_params):
     results = []
     total_concrete = 0
@@ -1820,12 +1641,7 @@ def compute_rebar_quantities(element_type, data, user_params):
     return results, total_concrete, total_rebar
 
 
-# =====================================================================================
-# MIME TYPE DETECTION (fixes the PNG vs JPEG bug)
-# =====================================================================================
 def detect_mime_type(filename: str, data: bytes) -> str:
-    """Detect MIME type from filename and magic bytes."""
-    # First try by extension
     ext = os.path.splitext(filename)[1].lower()
     if ext in ['.png']:
         return 'image/png'
@@ -1833,7 +1649,6 @@ def detect_mime_type(filename: str, data: bytes) -> str:
         return 'image/jpeg'
     elif ext in ['.pdf']:
         return 'application/pdf'
-    # Fallback to magic bytes
     if data.startswith(b'\x89PNG'):
         return 'image/png'
     if data.startswith(b'\xff\xd8'):
@@ -1850,7 +1665,7 @@ def detect_mime_type(filename: str, data: bytes) -> str:
 def main_page():
     ui.query('body').style('width: 100vw; height: 100vh; overflow-x: hidden;')
 
-    # ---------------- SIDEBAR (unchanged) ----------------
+    # ---------------- SIDEBAR ----------------
     sidebar = ui.left_drawer().classes('sidebar-container').style('width: 380px;')
     with sidebar:
         with ui.row().classes('w-full items-center justify-between mb-4 p-2'):
@@ -1912,7 +1727,7 @@ def main_page():
 
     # ---------------- MAIN COLUMN ----------------
     with ui.column().classes('w-full min-h-screen p-4 bg-[#031338]'):
-        # Title block (unchanged)
+        # Title block
         with ui.column().classes('w-full bg-[#0d1a35] px-6 py-4 rounded-xl border border-[#FF8C00] shadow-lg mb-4'):
             ui.label('SMART EGY-CIVIL AI AUDITOR').classes('main-title text-white')
             ui.label('Intelligent General Civil, Geotechnical & Structural Compliance Engine').classes('sub-title text-lg font-medium mt-1')
@@ -1931,7 +1746,7 @@ def main_page():
         </div>
         ''')
 
-        # Tabs (now with Job Board)
+        # Tabs
         with ui.tabs().classes('w-full text-white bg-[#0d1a35] rounded-lg') as tabs:
             t_dash = ui.tab('Concrete Cube Verifier').classes('text-white font-bold')
             t_audit = ui.tab('AI Multi-Standard Auditor').classes('text-white font-bold')
@@ -1942,9 +1757,7 @@ def main_page():
 
         with ui.tab_panels(tabs, value=t_dash).classes('w-full bg-transparent mt-4'):
 
-            # =========================================================================
             # TAB 1: CONCRETE CUBE VERIFIER (unchanged)
-            # =========================================================================
             with ui.tab_panel(t_dash):
                 ui.label('Concrete Cube Calculation Sheet & Statistical Verifier').classes('text-2xl font-bold text-white mb-4')
 
@@ -2158,9 +1971,7 @@ REQUIRED REPORT STRUCTURE:
                 with result_output_area:
                     ui.markdown('*Click "Run AI Statistical Calculation & Verification" to generate the report.*').classes('text-sm text-[#A9B6D0]')
 
-            # =========================================================================
             # TAB 2: AI MULTI-STANDARD AUDITOR (unchanged)
-            # =========================================================================
             with ui.tab_panel(t_audit):
                 ui.label('AI Multi-Standard Engineering Auditor').classes('text-2xl font-bold text-white mb-2')
                 ui.markdown('Upload a specification, mix design, or site report to audit against the selected code basis.').classes('markdown-body mb-2')
@@ -2277,9 +2088,7 @@ report with clear ## section headings and real Markdown tables for any comparati
 
                 ui.button('Execute AI Audit & Compliance Check', on_click=run_ai_audit).classes('primary-btn')
 
-            # =========================================================================
             # TAB 3: DEFECT DIAGNOSTIC (unchanged)
-            # =========================================================================
             with ui.tab_panel(t_defect):
                 ui.label('AI Engineering Defect Diagnostic & Repair Protocol').classes('text-2xl font-bold text-white mb-2')
                 ui.markdown('Upload site defect photos or PDFs for forensic analysis. Describe the issue below for more precise diagnosis.').classes('markdown-body mb-2')
@@ -2397,9 +2206,7 @@ Ensure all tables are proper Markdown tables with header and separator rows.
 
                 ui.button('Diagnose Defect & Get Repair Protocol', on_click=run_defect_diagnosis).classes('primary-btn')
 
-            # =========================================================================
             # TAB 4: AI CHATBOT (unchanged)
-            # =========================================================================
             with ui.tab_panel(t_chat):
                 ui.label('Core-Code Intelligent Assistant Chatbot').classes('text-2xl font-bold text-white mb-2')
                 ui.markdown('Ask any engineering, mix design, geotechnical, or pavement question and get answers based on the Egyptian Codes (ECP 203, ECP 202, ECP 104) and international standards.').classes('markdown-body mb-2')
@@ -2475,14 +2282,11 @@ Ensure all tables are proper Markdown tables with header and separator rows.
 
                     ui.button('Download Chat PDF Transcript', on_click=download_chat_pdf).classes('primary-btn flex-1')
 
-            # =========================================================================
-            # TAB 5: HANDWRITING OCR (enhanced with editing and custom PDF)
-            # =========================================================================
+            # TAB 5: HANDWRITING OCR (unchanged)
             with ui.tab_panel(t_handwriting):
                 ui.label('Handwriting to Digital Text Transcription').classes('text-2xl font-bold text-white mb-2')
                 ui.markdown('Upload a scanned handwritten note (PNG, JPG) or PDF. The AI will convert it to clean digital text, detecting tables if present.').classes('markdown-body mb-2')
 
-                # File upload
                 ocr_file_data = {'bytes': None, 'type': None, 'name': None}
                 ocr_status_label = ui.label('Status: No file uploaded yet').classes('text-xs text-amber-400 font-semibold mb-2')
                 async def handle_ocr_upload(e):
@@ -2499,11 +2303,9 @@ Ensure all tables are proper Markdown tables with header and separator rows.
 
                 ui.upload(label='Upload Handwriting Image or PDF', auto_upload=True, on_upload=handle_ocr_upload).props('flat dark').classes('w-full mb-4')
 
-                # Output area: editable text and download buttons
                 ocr_output = ui.column().classes('w-full')
                 ocr_export = ui.row().classes('w-full gap-4 mt-4')
                 transcribed_text_holder = {'text': ''}
-                # We'll create a textarea for editing
                 text_editor = None
 
                 async def run_ocr():
@@ -2521,7 +2323,6 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                         ui.label('Transcribing handwriting...').classes('self-center text-sm')
 
                     try:
-                        # Build contents: prompt with instruction to format tables as Markdown
                         prompt = """
 You are an expert OCR system. Transcribe the handwritten text from the provided image(s).
 - If you detect any tabular data (rows and columns), format it as a proper Markdown table with a header row and a separator line (|---|...|).
@@ -2530,7 +2331,6 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
 """
                         contents = [prompt]
 
-                        # Process file – send pages as PNG
                         if ocr_file_data['type'] == 'application/pdf':
                             try:
                                 doc = fitz.open(stream=ocr_file_data['bytes'], filetype="pdf")
@@ -2548,19 +2348,15 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                             img_part = types.Part.from_bytes(data=ocr_file_data['bytes'], mime_type=ocr_file_data['type'])
                             contents.append(img_part)
 
-                        # Call Gemini
                         response_text = await call_gemini(contents, temperature=0, timeout=240)
-                        transcribed = sanitize_ai_markdown(response_text)  # clean
+                        transcribed = sanitize_ai_markdown(response_text)
                         transcribed_text_holder['text'] = transcribed
 
-                        # Display the transcribed text in a textarea for editing
                         ocr_output.clear()
                         with ocr_output:
                             with ui.column().classes('output-card w-full'):
                                 ui.label('Transcribed Text (editable)').classes('text-xl font-bold text-white mb-2')
-                                # Use a textarea with the content
                                 text_editor = ui.textarea(value=transcribed, placeholder='Edit the transcribed text here...').classes('w-full markdown-body').style('min-height: 300px; background: #0a1a3a; color: white; border: 1px solid #FF8C00;')
-                                # Preview of rendered markdown (optional)
                                 ui.label('Preview:').classes('text-lg font-bold text-white mt-2')
                                 preview_container = ui.column().classes('w-full')
                                 def update_preview():
@@ -2568,25 +2364,20 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                                     with preview_container:
                                         ui.markdown(text_editor.value).classes('markdown-body')
                                 text_editor.on('input', update_preview)
-                                # Initial preview
                                 update_preview()
 
-                        # Export buttons using the current text from the editor
                         with ocr_export:
                             def download_ocr_pdf():
                                 try:
-                                    # Get current text from editor
                                     current_text = text_editor.value if text_editor else transcribed_text_holder['text']
                                     meta = current_meta('OCR')
-                                    # Use custom PDF with no doc_title/subtitle, and no ticket in header
-                                    # We'll use build_report_pdf with show_ticket=False and empty doc_title/subtitle
                                     pdf_bytes = build_report_pdf(
-                                        doc_title="",  # empty to hide
-                                        subtitle="",   # empty to hide
+                                        doc_title="",
+                                        subtitle="",
                                         body_markdown=current_text,
                                         meta=meta,
                                         logo_bytes=logo_bytes_holder['bytes'],
-                                        show_ticket=False  # hides Batch Ticket ID
+                                        show_ticket=False
                                     )
                                     ui.download(pdf_bytes, filename=f"Handwriting_Transcription_{ticket_input.value}.pdf")
                                     ui.notify('PDF report downloaded!', type='positive')
@@ -2612,83 +2403,27 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                             ui.label('Error occurred. Please try again with a clearer image.').classes('text-red-400')
 
                 ui.button('Transcribe Handwriting', on_click=run_ocr).classes('primary-btn')
-
-                # Initial placeholder
                 with ocr_output:
                     ui.markdown('*Upload a file and click "Transcribe Handwriting" to start.*').classes('text-sm text-[#A9B6D0]')
 
-"""
-job_scraper.py
-==============
-Drop-in replacement for `scrape_jobs()` used by the NiceGUI Job Board tab.
-
-Sources (in priority order — Wuzzuf results are always listed first):
-    1. Wuzzuf   (primary)
-    2. Bayt     (fallback)
-    3. Forasna  (extra)
-    4. Akhtaboot (extra)
-
-Design notes / why the old version likely returned nothing:
---------------------------------------------------------------
-- Wuzzuf's frontend is built with a CSS-in-JS library (emotion/styled-
-  components), so class names like `css-1gatmva` are randomly hashed and
-  change on every deploy. Any scraper that hardcodes those class names
-  breaks the moment Wuzzuf ships a new build. This version instead anchors
-  on STABLE structural signals — the `<a href="...">` patterns each site
-  uses for job postings (e.g. `/jobs/p/` on Wuzzuf) — which survive CSS
-  rebuilds.
-- Cloud hosts (Render, Heroku, etc.) use shared/datacenter IPs. Some sites
-  are stricter with non-browser-looking traffic, so a realistic
-  `User-Agent` + `Accept-Language` header is included on every request.
-- Each source is wrapped in its own try/except so one site failing (layout
-  change, timeout, block) doesn't wipe out the other sources' results.
-- Debug logging (`print(...)`) is included so you can see exactly what
-  happened in your Render logs (status code, HTML length, cards found)
-  instead of silently getting an empty list.
-
-IMPORTANT CAVEAT
------------------
-I could not test this against the live sites (this environment has no
-outbound network access), so selectors are based on each site's typical
-HTML structure. Websites change their markup over time. If a source stops
-returning results:
-  1. Check the printed debug line for that source — status code 200 with
-     0 cards found means the SELECTOR is stale, not the network.
-  2. A non-200 status (403/429) usually means you're being rate-limited or
-     blocked — try adding a delay between requests, or rotating the
-     User-Agent.
-  3. Open the search URL in an incognito browser tab, view-source, and
-     search for a snippet of a job title to see the current wrapping tags.
-"""
-
-import os
-import re
-import requests
-from bs4 import BeautifulSoup
-from urllib.parse import quote_plus
-
             # =========================================================================
-            # TAB 6: JOB BOARD (FIXED)
+            # TAB 6: JOB BOARD (FIXED - proper indentation)
             # =========================================================================
             with ui.tab_panel(t_jobs):
                 ui.label('Engineering Job Board - Egypt').classes('text-2xl font-bold text-white mb-4')
                 ui.markdown('Search for the latest engineering jobs in Egypt. Results are powered by **JSearch** (RapidAPI) – no Cloudflare blocking. Fallback to direct scrapers if the API key is not set.').classes('markdown-body mb-2')
 
-                # Search & location inputs
                 with ui.row().classes('w-full gap-4 mb-4'):
                     search_input = ui.input(label='Search for jobs', placeholder='e.g., Civil Engineer', value='Civil Engineer').classes('flex-1')
                     location_input = ui.input(label='Location (optional)', placeholder='e.g., Cairo').classes('flex-1')
                     search_button = ui.button('Search Jobs', on_click=lambda: search_jobs()).classes('primary-btn')
 
-                # Filter input
                 filter_input = ui.input(label='Filter results', placeholder='Type to filter title, company, description...', on_change=lambda: filter_jobs()).classes('w-full mb-2')
 
-                # Container for results
                 results_container = ui.column().classes('w-full')
-                jobs_data = []  # current job list
+                jobs_data = []
 
                 def display_jobs(jobs, filter_text=''):
-                    """Render job cards with client‑side filtering."""
                     results_container.clear()
                     with results_container:
                         if not jobs:
@@ -2728,13 +2463,12 @@ from urllib.parse import quote_plus
                         ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
                         ui.label('Fetching job listings...').classes('self-center text-sm')
 
-                    # Run the scraper in a separate thread (io_bound)
                     jobs = await run.io_bound(scrape_jobs, query)
                     jobs_data.clear()
                     jobs_data.extend(jobs)
                     display_jobs(jobs_data)
 
-        # ---------------- FOOTER (unchanged) ----------------
+        # ---------------- FOOTER ----------------
         ui.html('''
         <div class="app-footer">
             <b>Multi-Standard Engineering Quality Assurance Portal</b> &nbsp;|&nbsp; Automated compliance verification across ECP 203, ECP 202, ECP 104, ASTM, AASHTO, BS, EN, and ISO standards.<br>
