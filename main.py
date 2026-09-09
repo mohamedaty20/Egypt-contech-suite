@@ -2638,4 +2638,434 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                         fig_bar, fig_scatter, fig_pie, fig_line = None, None, None, None
                         if not combined_df.empty:
                             if 'category' in combined_df.columns and 'progress_percent' in combined_df.columns:
-                               
+                                avg_progress = combined_df.groupby('category')['progress_percent'].mean().reset_index()
+                                if not avg_progress.empty:
+                                    fig_bar = px.bar(avg_progress, x='category', y='progress_percent',
+                                                     title='Average Progress by Category',
+                                                     color='category', template='plotly_dark')
+                                    fig_bar.update_layout(paper_bgcolor='#0d1a35', plot_bgcolor='#0d1a35', font_color='white')
+
+                            if 'date' in combined_df.columns and 'progress_percent' in combined_df.columns:
+                                df_time = combined_df.dropna(subset=['date', 'progress_percent'])
+                                if not df_time.empty:
+                                    fig_scatter = px.scatter(df_time, x='date', y='progress_percent',
+                                                            color='category', title='Progress Over Time',
+                                                            template='plotly_dark')
+                                    fig_scatter.update_layout(paper_bgcolor='#0d1a35', plot_bgcolor='#0d1a35', font_color='white')
+
+                            if 'category' in combined_df.columns:
+                                cat_counts = combined_df['category'].value_counts().reset_index()
+                                cat_counts.columns = ['category', 'count']
+                                if not cat_counts.empty:
+                                    fig_pie = px.pie(cat_counts, names='category', values='count',
+                                                     title='Category Distribution', template='plotly_dark')
+                                    fig_pie.update_layout(paper_bgcolor='#0d1a35', plot_bgcolor='#0d1a35', font_color='white')
+
+                            if 'date' in combined_df.columns and 'progress_percent' in combined_df.columns:
+                                df_time = combined_df.dropna(subset=['date', 'progress_percent']).sort_values('date')
+                                if not df_time.empty:
+                                    df_time['cumulative'] = df_time['progress_percent'].cumsum()
+                                    fig_line = px.line(df_time, x='date', y='cumulative',
+                                                       title='Cumulative Progress Over Time',
+                                                       template='plotly_dark')
+                                    fig_line.update_layout(paper_bgcolor='#0d1a35', plot_bgcolor='#0d1a35', font_color='white')
+
+                        progress_charts.clear()
+                        with progress_charts:
+                            ui.label('📈 Charts').classes('text-xl font-bold text-white mb-2')
+                            chart_grid = ui.row().classes('w-full gap-4')
+                            with chart_grid:
+                                if fig_bar:
+                                    ui.plotly(fig_bar).classes('w-full md:w-1/2')
+                                if fig_scatter:
+                                    ui.plotly(fig_scatter).classes('w-full md:w-1/2')
+                                if fig_pie:
+                                    ui.plotly(fig_pie).classes('w-full md:w-1/2')
+                                if fig_line:
+                                    ui.plotly(fig_line).classes('w-full md:w-1/2')
+
+                        overview_text = await generate_progress_overview(
+                            combined_df,
+                            start_date.value.strftime('%Y-%m-%d') if start_date.value else 'N/A',
+                            end_date.value.strftime('%Y-%m-%d') if end_date.value else 'N/A',
+                            description_input.value
+                        )
+                        progress_overview.clear()
+                        with progress_overview:
+                            ui.label('📝 AI Overview').classes('text-xl font-bold text-white mb-2')
+                            ui.markdown(overview_text).classes('markdown-body')
+
+                        pdf_data = {
+                            'df': combined_df,
+                            'fig_bar': fig_bar,
+                            'fig_scatter': fig_scatter,
+                            'fig_pie': fig_pie,
+                            'fig_line': fig_line,
+                            'overview': overview_text,
+                            'start_date': start_date.value,
+                            'end_date': end_date.value,
+                            'description': description_input.value
+                        }
+                        progress_export.clear()
+                        with progress_export:
+                            def download_progress_pdf():
+                                try:
+                                    pdf_bytes = generate_progress_pdf(
+                                        pdf_data,
+                                        engineer_input.value,
+                                        project_name_input.value,
+                                        logo_bytes_holder['bytes'],
+                                        ticket_input.value
+                                    )
+                                    ui.download(pdf_bytes, filename=f"Progress_Report_{ticket_input.value}.pdf")
+                                    ui.notify('PDF downloaded!', type='positive')
+                                except Exception as e:
+                                    ui.notify(f'PDF generation error: {str(e)}', type='negative')
+
+                            ui.button('Download Progress PDF', on_click=download_progress_pdf).classes('primary-btn')
+
+                    except Exception as e:
+                        progress_output.clear()
+                        with progress_output:
+                            ui.notify(f'Analysis failed: {str(e)}', type='negative')
+                            ui.label(f'Error: {str(e)}').classes('text-red-400')
+
+                ui.button('Run AI Analysis', on_click=run_progress_analysis).classes('primary-btn mt-4')
+
+            # ==============================================================
+            # TAB 8: DXF AREA EXTRACTOR (NEW)
+            # ==============================================================
+            with ui.tab_panel(t_dxf):
+                ui.label('📐 DXF Area Extractor').classes('text-2xl font-bold text-white mb-4')
+                ui.markdown('Upload a DXF file (architectural or structural) to extract areas of closed polylines. The tool auto-detects layers and lets you choose workflow and units.').classes('markdown-body mb-2')
+
+                # File upload (single)
+                dxf_file_data = {'bytes': None, 'name': None}
+                dxf_status_label = ui.label('Status: No file uploaded yet').classes('text-xs text-amber-400 font-semibold mb-2')
+
+                async def handle_dxf_upload(e):
+                    try:
+                        data = await e.file.read()
+                        dxf_file_data['bytes'] = data
+                        dxf_file_data['name'] = e.file.name
+                        dxf_status_label.set_text(f'File Ready: {e.file.name} ({(len(data)/1024):.1f} KB)')
+                        dxf_status_label.classes(replace='text-xs text-emerald-400 font-semibold mb-2')
+                        ui.notify(f'Uploaded: {e.file.name}', type='positive')
+                        # Auto-detect layers
+                        try:
+                            doc = ezdxf.read(io.BytesIO(data))
+                            layers = detect_dxf_layers(doc)
+                            layer_info = "\n".join([f"{layer}: {info['count']} entities, keywords: {', '.join(info['keywords'])}" for layer, info in layers.items()])
+                            detected_layers_label.set_text(f"Detected layers:\n{layer_info}")
+                            detected_layers_label.classes(replace='text-xs text-white')
+                        except Exception as ex:
+                            detected_layers_label.set_text(f"Error reading DXF: {str(ex)}")
+                            detected_layers_label.classes(replace='text-xs text-red-400')
+                    except Exception as ex:
+                        ui.notify(f'Upload error: {str(ex)}', type='negative')
+
+                ui.label('Upload DXF File').classes('text-white text-sm font-semibold mb-1')
+                ui.upload(auto_upload=True, on_upload=handle_dxf_upload, multiple=False).props('flat dark').classes('w-full mb-4')
+
+                detected_layers_label = ui.label('Detected layers will appear here after upload.').classes('text-xs text-[#A9B6D0] mb-2')
+
+                # Workflow and unit selection
+                with ui.row().classes('w-full gap-4 mb-4'):
+                    workflow_select = ui.select(
+                        label='Workflow',
+                        options=['Architectural BOQ', 'Structural Mass', 'Site Layout'],
+                        value='Architectural BOQ'
+                    ).classes('flex-1')
+                    unit_select = ui.select(
+                        label='Drawing Units',
+                        options=['mm', 'cm', 'm'],
+                        value='mm'
+                    ).classes('flex-1')
+
+                # Process button and output
+                dxf_output = ui.column().classes('w-full')
+                dxf_export = ui.row().classes('w-full gap-4 mt-4')
+                dxf_data_holder = {'df': None, 'total_area': 0}
+
+                async def process_dxf():
+                    if dxf_file_data['bytes'] is None:
+                        ui.notify('Please upload a DXF file first.', type='warning')
+                        return
+                    dxf_output.clear()
+                    dxf_export.clear()
+                    with dxf_output:
+                        ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
+                        ui.label('Processing DXF file...').classes('self-center text-sm')
+
+                    try:
+                        doc = ezdxf.read(io.BytesIO(dxf_file_data['bytes']))
+                        workflow = workflow_select.value
+                        unit = unit_select.value
+                        areas = extract_areas_from_dxf(doc, unit=unit, workflow=workflow.lower().split()[0])
+
+                        if not areas:
+                            ui.notify('No closed polylines found in the DXF.', type='warning')
+                            dxf_output.clear()
+                            with dxf_output:
+                                ui.label('No closed polylines found. Please check the DXF file.').classes('text-white')
+                            return
+
+                        df = pd.DataFrame(areas)
+                        # Sort by area descending
+                        df = df.sort_values('area_m2', ascending=False)
+                        dxf_data_holder['df'] = df
+                        total = df['area_m2'].sum()
+                        dxf_data_holder['total_area'] = total
+
+                        # Display table
+                        dxf_output.clear()
+                        with dxf_output:
+                            ui.label('📋 Extracted Areas (m²)').classes('text-xl font-bold text-white mb-2')
+                            columns = [
+                                {'name': 'layer', 'label': 'Layer', 'field': 'layer', 'sortable': True},
+                                {'name': 'label', 'label': 'Label', 'field': 'label', 'sortable': True},
+                                {'name': 'area_m2', 'label': 'Area (m²)', 'field': 'area_m2', 'sortable': True},
+                                {'name': 'vertices', 'label': 'Vertices', 'field': 'vertices', 'sortable': True},
+                            ]
+                            ui.table(columns=columns, rows=df.to_dict('records'), row_key='index').classes('w-full text-white')
+                            ui.label(f'Total Net Area: {total:.4f} m²').classes('text-lg font-bold text-[#FF8C00] mt-2')
+
+                        # Export button
+                        dxf_export.clear()
+                        with dxf_export:
+                            def download_dxf_pdf():
+                                try:
+                                    pdf_bytes = generate_dxf_pdf(
+                                        df,
+                                        total,
+                                        dxf_file_data['name'],
+                                        workflow_select.value,
+                                        unit_select.value,
+                                        engineer_input.value,
+                                        project_name_input.value,
+                                        logo_bytes_holder['bytes'],
+                                        ticket_input.value
+                                    )
+                                    ui.download(pdf_bytes, filename=f"DXF_Area_Report_{ticket_input.value}.pdf")
+                                    ui.notify('PDF downloaded!', type='positive')
+                                except Exception as e:
+                                    ui.notify(f'PDF generation error: {str(e)}', type='negative')
+
+                            ui.button('Download DXF Report PDF', on_click=download_dxf_pdf).classes('primary-btn')
+
+                    except Exception as e:
+                        dxf_output.clear()
+                        with dxf_output:
+                            ui.notify(f'Processing error: {str(e)}', type='negative')
+                            ui.label(f'Error: {str(e)}').classes('text-red-400')
+
+                ui.button('Process DXF', on_click=process_dxf).classes('primary-btn mt-4')
+                with dxf_output:
+                    ui.markdown('*Upload a DXF and click "Process DXF" to extract areas.*').classes('text-sm text-[#A9B6D0]')
+
+        # ---------------- FOOTER ----------------
+        ui.html('''
+        <div class="app-footer">
+            <b>Multi-Standard Engineering Quality Assurance Portal</b> &nbsp;|&nbsp; Automated compliance verification across ECP 203, ECP 202, ECP 104, ASTM, AASHTO, BS, EN, and ISO standards.<br>
+            <b>Official Direct Contacts:</b>
+            LinkedIn: <a href="https://www.linkedin.com/in/mohamed-abd-al-aty-a326a1214/" target="_blank">Mohamed Abd Al Aty</a> &nbsp;|&nbsp;
+            Email: <a href="mailto:mohamedabdalaty63@gmail.com">mohamedabdalaty63@gmail.com</a><br>
+            <i>Specialized in QA/QC, Civil Engineering Standards &amp; Automated Compliance.</i> &copy; 2026 Eng. Mohamed Abd Al Aty. All rights reserved.<br>
+            <span style="color: #FFFFFF; font-weight: 600;">Disclaimer:</span> These AI modules have high accuracy and are specified for the Egyptian codes, but results should be rechecked by a qualified engineer before any decision-making.
+        </div>
+        ''')
+
+
+# =====================================================================================
+# PROGRESS PDF GENERATION (custom function) – unchanged
+# =====================================================================================
+def generate_progress_pdf(pdf_data, engineer_name, project_name, logo_bytes, ticket_id):
+    """Generate a custom PDF report for the Progress Tracker."""
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=MARGIN, leftMargin=MARGIN,
+                             topMargin=MARGIN, bottomMargin=MARGIN)
+    styles = build_pdf_styles()
+    story = []
+
+    unique_uid = f"PROGRESS-{uuid.uuid4().hex[:8].upper()}"
+    qr_buf = generate_qr_code(f"UID: {unique_uid} | Progress Report - {project_name}")
+
+    title_style = ParagraphStyle("DocTitle", fontSize=14, textColor=colors.HexColor("#1B2A4A"),
+                                  spaceAfter=3, fontName="Helvetica-Bold", leading=17)
+    sub_style = ParagraphStyle("DocSub", fontSize=9, textColor=colors.HexColor("#B45309"),
+                                spaceAfter=6, fontName="Helvetica-Bold")
+    meta_style = ParagraphStyle("MetaStyle", fontSize=8, textColor=colors.HexColor("#334155"),
+                                 leading=11.5, fontName="Helvetica")
+
+    company_name = "Smart Egypt Civil AI"
+    start_str = pdf_data['start_date'].strftime('%Y-%m-%d') if pdf_data['start_date'] else 'N/A'
+    end_str = pdf_data['end_date'].strftime('%Y-%m-%d') if pdf_data['end_date'] else 'N/A'
+    meta_html = f"""
+    <b>Company:</b> {company_name} &nbsp;|&nbsp; <b>Project:</b> {project_name}<br/>
+    <b>Engineer in Charge:</b> {engineer_name} &nbsp;|&nbsp; <b>Date Range:</b> {start_str} to {end_str}<br/>
+    <b>Phase:</b> {pdf_data['description']}<br/>
+    <b>Report UID:</b> <font color="#CC0000"><b>{unique_uid}</b></font>
+    """
+    right_cell = ReportLabImage(io.BytesIO(logo_bytes), width=70, height=32) if logo_bytes else ""
+    try:
+        header_table_data = [
+            [Paragraph(f"<b>PROGRESS TRACKING REPORT</b>", title_style), right_cell],
+            [Paragraph("Consolidated Progress Summary", sub_style), ""],
+            [Paragraph(meta_html, meta_style), ""],
+        ]
+        t_head = Table(header_table_data, colWidths=[USABLE_WIDTH - 100, 100])
+        t_head.setStyle(TableStyle([
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+        ]))
+        story.append(t_head)
+    except Exception:
+        story.append(Paragraph("PROGRESS TRACKING REPORT", title_style))
+        story.append(Paragraph("Consolidated Progress Summary", sub_style))
+        story.append(Paragraph(meta_html, meta_style))
+
+    story.append(Spacer(1, 5))
+    story.append(HRFlowable(width="100%", thickness=1.3, color=colors.HexColor("#FF8C00"), spaceAfter=8))
+
+    df = pdf_data['df'].copy()
+    if not df.empty:
+        cols_to_show = [col for col in df.columns if col in ['date', 'description', 'progress_percent', 'category', 'location']]
+        if 'source' in df.columns:
+            cols_to_show.append('source')
+        df_display = df[cols_to_show].fillna('')
+        if 'date' in df_display.columns:
+            df_display['date'] = df_display['date'].apply(lambda x: x.strftime('%Y-%m-%d') if hasattr(x, 'strftime') else str(x))
+        table_data = [cols_to_show]
+        for _, row in df_display.iterrows():
+            table_data.append([str(row[col]) for col in cols_to_show])
+        if len(table_data) > 20:
+            table_data = table_data[:20]
+        col_widths = [USABLE_WIDTH / len(cols_to_show)] * len(cols_to_show)
+        t = Table(table_data, colWidths=col_widths, repeatRows=1)
+        t.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1B2A4A')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#94A3B8')),
+            ('FONTSIZE', (0, 0), (-1, -1), 8),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F1F5F9')]),
+            ('TOPPADDING', (0, 0), (-1, -1), 3),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+        ]))
+        story.append(t)
+        story.append(Spacer(1, 10))
+
+    for fig in [pdf_data['fig_bar'], pdf_data['fig_scatter'], pdf_data['fig_pie'], pdf_data['fig_line']]:
+        if fig:
+            try:
+                img_bytes = fig.to_image(format="png", width=400, height=300, scale=2)
+                img_flowable = ReportLabImage(io.BytesIO(img_bytes), width=USABLE_WIDTH*0.45, height=USABLE_WIDTH*0.45*0.75)
+                story.append(img_flowable)
+                story.append(Spacer(1, 6))
+            except Exception as e:
+                print(f"Could not embed chart: {e}")
+
+    if pdf_data['overview']:
+        story.append(Paragraph("AI Overview", styles['h2']))
+        story.extend(markdown_to_pdf_flowables(pdf_data['overview'], styles))
+        story.append(Spacer(1, 6))
+
+    build_pdf_footer_signature_and_qr(story, styles, qr_buf, engineer_name)
+
+    doc.build(story)
+    buffer.seek(0)
+    return buffer.getvalue()
+
+# =====================================================================================
+# DXF PDF GENERATION (NEW)
+# =====================================================================================
+def generate_dxf_pdf(df, total_area, filename, workflow, units, engineer_name, project_name, logo_bytes, ticket_id):
+    """Generate PDF report for DXF area extraction."""
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=MARGIN, leftMargin=MARGIN,
+                             topMargin=MARGIN, bottomMargin=MARGIN)
+    styles = build_pdf_styles()
+    story = []
+
+    unique_uid = f"DXF-{uuid.uuid4().hex[:8].upper()}"
+    qr_buf = generate_qr_code(f"UID: {unique_uid} | DXF Area Report - {project_name}")
+
+    title_style = ParagraphStyle("DocTitle", fontSize=14, textColor=colors.HexColor("#1B2A4A"),
+                                  spaceAfter=3, fontName="Helvetica-Bold", leading=17)
+    sub_style = ParagraphStyle("DocSub", fontSize=9, textColor=colors.HexColor("#B45309"),
+                                spaceAfter=6, fontName="Helvetica-Bold")
+    meta_style = ParagraphStyle("MetaStyle", fontSize=8, textColor=colors.HexColor("#334155"),
+                                 leading=11.5, fontName="Helvetica")
+
+    company_name = "Smart Egypt Civil AI"
+    meta_html = f"""
+    <b>Company:</b> {company_name} &nbsp;|&nbsp; <b>Project:</b> {project_name}<br/>
+    <b>Engineer in Charge:</b> {engineer_name} &nbsp;|&nbsp; <b>File:</b> {filename}<br/>
+    <b>Workflow:</b> {workflow} &nbsp;|&nbsp; <b>Units:</b> {units}<br/>
+    <b>Report UID:</b> <font color="#CC0000"><b>{unique_uid}</b></font>
+    """
+    right_cell = ReportLabImage(io.BytesIO(logo_bytes), width=70, height=32) if logo_bytes else ""
+    try:
+        header_table_data = [
+            [Paragraph(f"<b>DXF AREA EXTRACTION REPORT</b>", title_style), right_cell],
+            [Paragraph("Area Takeoff from DXF Drawing", sub_style), ""],
+            [Paragraph(meta_html, meta_style), ""],
+        ]
+        t_head = Table(header_table_data, colWidths=[USABLE_WIDTH - 100, 100])
+        t_head.setStyle(TableStyle([
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+        ]))
+        story.append(t_head)
+    except Exception:
+        story.append(Paragraph("DXF AREA EXTRACTION REPORT", title_style))
+        story.append(Paragraph("Area Takeoff from DXF Drawing", sub_style))
+        story.append(Paragraph(meta_html, meta_style))
+
+    story.append(Spacer(1, 5))
+    story.append(HRFlowable(width="100%", thickness=1.3, color=colors.HexColor("#FF8C00"), spaceAfter=8))
+
+    # Table
+    if not df.empty:
+        cols_to_show = ['layer', 'label', 'area_m2', 'vertices']
+        table_data = [cols_to_show]
+        for _, row in df.iterrows():
+            table_data.append([str(row[col]) for col in cols_to_show])
+        if len(table_data) > 20:
+            table_data = table_data[:20]
+        col_widths = [USABLE_WIDTH / len(cols_to_show)] * len(cols_to_show)
+        t = Table(table_data, colWidths=col_widths, repeatRows=1)
+        t.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1B2A4A')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#94A3B8')),
+            ('FONTSIZE', (0, 0), (-1, -1), 8),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F1F5F9')]),
+            ('TOPPADDING', (0, 0), (-1, -1), 3),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+        ]))
+        story.append(t)
+        story.append(Spacer(1, 10))
+
+        # Total area
+        total_para = Paragraph(f"<b>Total Net Area: {total_area:.4f} m²</b>", styles['h2'])
+        story.append(total_para)
+        story.append(Spacer(1, 6))
+
+    build_pdf_footer_signature_and_qr(story, styles, qr_buf, engineer_name)
+
+    doc.build(story)
+    buffer.seek(0)
+    return buffer.getvalue()
+
+ui.run(
+    host='0.0.0.0',
+    port=int(os.environ.get('PORT', 8080)),
+    title='Multi-Standard Engineering Auditor',
+    favicon='🏗️',
+    reload=False,
+    reconnect_timeout=30.0,
+)
