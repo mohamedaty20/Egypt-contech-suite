@@ -591,7 +591,7 @@ def markdown_to_pdf_flowables(raw_text: str, styles: dict, avail_width: float = 
     return flowables
 
 # =====================================================================================
-# PDF GENERATORS (with customisable headers and footers)
+# PDF GENERATORS
 # =====================================================================================
 
 def generate_qr_code(data_str):
@@ -794,6 +794,7 @@ def main_page():
 
         ui.label('Governing Design Code Basis').classes('text-white font-bold text-sm mb-1')
         ui.markdown('By default every AI output in this app is generated strictly per **ECP 203 / ECP 202 / ECP 104**. Change this to switch the primary basis.').classes('text-xs text-[#A9B6D0] mb-2')
+        # --- The single ui.select for code basis ---
         code_basis_select = ui.select(
             'Code Type (applies app-wide)',
             options=CODE_BASIS_OPTIONS,
@@ -820,7 +821,6 @@ def main_page():
     ).style('font-size: 20px; min-width: 48px; min-height: 48px;')
 
     def current_meta(uid_prefix):
-        # Get ticket from storage if available, else default
         ticket = app.storage.user.get('ticket_id', 'N/A')
         return {
             'uid': f"{uid_prefix}-{uuid.uuid4().hex[:8].upper()}",
@@ -861,11 +861,11 @@ def main_page():
             t_handwriting = ui.tab('Handwriting OCR').classes('text-white font-bold')
 
         with ui.tab_panels(tabs, value=t_dash).classes('w-full bg-transparent mt-4'):
-            # ===== TAB 1: Cube Verifier (with concrete fields) =====
+            # ===== TAB 1: Cube Verifier =====
             with ui.tab_panel(t_dash):
                 ui.label('Concrete Cube Calculation Sheet & Statistical Verifier').classes('text-2xl font-bold text-white mb-4')
 
-                # Concrete‑specific inputs (now inside the tab)
+                # Concrete-specific inputs (only here)
                 with ui.column().classes('input-card w-full mb-4'):
                     ui.label('Concrete Mix & Site Data').classes('text-lg font-bold text-white')
                     with ui.row().classes('w-full gap-4'):
@@ -875,8 +875,6 @@ def main_page():
                         truck_input = ui.input('Mixer Truck No.', value='TRK-104').classes('w-1/2')
                         cement_input = ui.input('Cement Content (kg/m3)', value='350.0').classes('w-1/2')
                     water_input = ui.input('Free Water Content (kg/m3)', value='150.0').classes('w-full')
-
-                    # Store ticket in user storage for meta
                     ticket_input.on('change', lambda e: app.storage.user.update({'ticket_id': ticket_input.value}))
 
                 with ui.row().classes('w-full gap-4 mb-4'):
@@ -932,7 +930,6 @@ def main_page():
                         ui.notify('GEMINI_API_KEY missing in .env!', type='negative')
                         return
 
-                    # Show progress bar
                     with result_output_area:
                         ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
                         ui.label('Running AI statistical evaluation & code compliance verification...').classes('self-center text-sm')
@@ -1078,6 +1075,7 @@ REQUIRED REPORT STRUCTURE:
                         with result_output_area:
                             ui.notify(f'Calculation Error: {str(ex)}', type='negative')
 
+                # --- The ui.select for stage filter (only one) ---
                 stage_selector = ui.select(
                     'Select Stage Display Filter',
                     options=['All Stages', '7-Day Stage', '14-Day Stage', '28-Day Stage'],
@@ -1094,11 +1092,12 @@ REQUIRED REPORT STRUCTURE:
                 with result_output_area:
                     ui.markdown('*Click "Run AI Statistical Calculation & Verification" to generate the report.*').classes('text-sm text-[#A9B6D0]')
 
-            # ===== TAB 2: AI Multi‑Standard Auditor (unchanged) =====
+            # ===== TAB 2: AI Multi-Standard Auditor =====
             with ui.tab_panel(t_audit):
                 ui.label('AI Multi-Standard Engineering Auditor').classes('text-2xl font-bold text-white mb-2')
                 ui.markdown('Upload a specification, mix design, or site report to audit against the selected code basis.').classes('markdown-body mb-2')
 
+                # --- The only ui.select for audit focus ---
                 audit_focus = ui.select(
                     'Audit Focus',
                     options=[
@@ -1215,7 +1214,7 @@ report with clear ## section headings and real Markdown tables for any comparati
 
                 ui.button('Execute AI Audit & Compliance Check', on_click=run_ai_audit).classes('primary-btn')
 
-            # ===== TAB 3: Defect Diagnostic (unchanged) =====
+            # ===== TAB 3: Defect Diagnostic =====
             with ui.tab_panel(t_defect):
                 ui.label('AI Engineering Defect Diagnostic & Repair Protocol').classes('text-2xl font-bold text-white mb-2')
                 ui.markdown('Upload site defect photos or PDFs for forensic analysis. Describe the issue below for more precise diagnosis.').classes('markdown-body mb-2')
@@ -1337,7 +1336,7 @@ Ensure all tables are proper Markdown tables with header and separator rows.
 
                 ui.button('Diagnose Defect & Get Repair Protocol', on_click=run_defect_diagnosis).classes('primary-btn')
 
-            # ===== TAB 4: AI Chatbot (unchanged) =====
+            # ===== TAB 4: AI Chatbot =====
             with ui.tab_panel(t_chat):
                 ui.label('Core-Code Intelligent Assistant Chatbot').classes('text-2xl font-bold text-white mb-2')
                 ui.markdown('Ask any engineering, mix design, geotechnical, or pavement question and get answers based on the Egyptian Codes (ECP 203, ECP 202, ECP 104) and international standards.').classes('markdown-body mb-2')
@@ -1413,7 +1412,7 @@ Ensure all tables are proper Markdown tables with header and separator rows.
 
                     ui.button('Download Chat PDF Transcript', on_click=download_chat_pdf).classes('primary-btn flex-1')
 
-            # ===== TAB 5: Handwriting OCR (enhanced with session storage and progress) =====
+            # ===== TAB 5: Handwriting OCR =====
             with ui.tab_panel(t_handwriting):
                 ui.label('Handwriting to Digital Text Transcription').classes('text-2xl font-bold text-white mb-2')
                 ui.markdown('Upload a scanned handwritten note (PNG, JPG) or PDF. The AI will convert it to clean digital text, detecting tables if present.').classes('markdown-body mb-2')
@@ -1439,7 +1438,6 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                 transcribed_text_holder = {'text': ''}
                 text_editor = None
 
-                # Restore from session storage
                 def restore_ocr_state():
                     stored = app.storage.user.get('ocr_text', '')
                     if stored:
@@ -1457,7 +1455,6 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                                         ui.markdown(text_editor.value).classes('markdown-body')
                                 text_editor.on('input', update_preview)
                                 update_preview()
-                        # Export buttons
                         with ocr_export:
                             def download_ocr_pdf():
                                 try:
