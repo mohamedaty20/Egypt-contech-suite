@@ -2079,4 +2079,4 @@ def main_page():
     </div>
     ''')
 
-app.run(port=8080, host='0.0.0.0', title='Smart Egy-Civil AI Auditor', favicon='👷‍♂️')
+ui.run(port=8080, host='0.0.0.0', title='Smart Egy-Civil AI Auditor', favicon='👷‍♂️')
