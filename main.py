@@ -2879,7 +2879,7 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                 ui.button('Run AI Analysis', on_click=run_progress_analysis).classes('primary-btn mt-4')
 
             # ==============================================================
-            # TAB 8: DXF AREA EXTRACTOR (FIXED - no changes needed here)
+            # TAB 8: DXF AREA EXTRACTOR (FIXED - now handles str)
             # ==============================================================
             with ui.tab_panel(t_dxf):
                 ui.label('📐 DXF Area Extractor').classes('text-2xl font-bold text-white mb-4')
@@ -2891,25 +2891,23 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                 async def handle_dxf_upload(e):
                     try:
                         data = await e.file.read()
+                        # Ensure data is bytes – if it's a str, encode it
+                        if isinstance(data, str):
+                            data = data.encode('utf-8')
                         dxf_file_data['bytes'] = data
                         dxf_file_data['name'] = e.file.name
                         dxf_status_label.set_text(f'File Ready: {e.file.name} ({(len(data)/1024):.1f} KB)')
                         dxf_status_label.classes(replace='text-xs text-emerald-400 font-semibold mb-2')
                         ui.notify(f'Uploaded: {e.file.name}', type='positive')
-                       try:
-                           if isinstance(data, str):
-                                  data = data.encode('utf-8')
-                           doc = ezdxf.read(io.BytesIO(data))
-                           layers = detect_dxf_layers(doc)
-                           # ... rest of the code inside the try block
-
+                        try:
+                            doc = ezdxf.read(io.BytesIO(data))
+                            layers = detect_dxf_layers(doc)
                             layer_info = "\n".join([f"{layer}: {info['count']} entities, keywords: {', '.join(info['keywords'])}" for layer, info in layers.items()])
                             detected_layers_label.set_text(f"Detected layers:\n{layer_info}")
                             detected_layers_label.classes(replace='text-xs text-white')
                         except Exception as ex:
                             detected_layers_label.set_text(f"Error reading DXF: {str(ex)}")
                             detected_layers_label.classes(replace='text-xs text-red-400')
-                            # Print full traceback to console for debugging
                             traceback.print_exc()
                     except Exception as ex:
                         ui.notify(f'Upload error: {str(ex)}', type='negative')
@@ -2947,7 +2945,10 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                         ui.label('Processing DXF file...').classes('self-center text-sm')
 
                     try:
-                        doc = ezdxf.read(io.BytesIO(dxf_file_data['bytes']))
+                        data = dxf_file_data['bytes']
+                        if isinstance(data, str):
+                            data = data.encode('utf-8')
+                        doc = ezdxf.read(io.BytesIO(data))
                         workflow = workflow_select.value
                         unit = unit_select.value
                         areas = extract_areas_from_dxf(doc, unit=unit, workflow=workflow.lower().split()[0])
