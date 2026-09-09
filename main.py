@@ -7,6 +7,7 @@ import asyncio
 import json
 import time
 import random
+import traceback
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -357,7 +358,7 @@ async def call_gemini_json(contents, temperature=0.1, timeout=240):
         raise Exception(f"AI request failed: {str(e)}")
 
 # =====================================================================================
-# BOQ CALCULATION ENGINE
+# BOQ CALCULATION ENGINE (unchanged)
 # =====================================================================================
 boq_results = {
     'architectural': {},
@@ -1195,7 +1196,7 @@ def scrape_jobs(query, location=""):
     return deduped
 
 # =====================================================================================
-# PROGRESS TRACKER FUNCTIONS
+# PROGRESS TRACKER FUNCTIONS (unchanged)
 # =====================================================================================
 def parse_progress_from_gemini_response(raw_text):
     raw_text = raw_text.strip()
@@ -1305,7 +1306,7 @@ Data (CSV format):
         return f"Error generating overview: {str(e)}"
 
 # =====================================================================================
-# DXF FUNCTIONS (FIXED: no 'errors' argument)
+# DXF FUNCTIONS (FIXED)
 # =====================================================================================
 def detect_dxf_layers(doc):
     layers = {}
@@ -1380,6 +1381,162 @@ def extract_areas_from_dxf(doc, unit='mm', workflow='architectural'):
                     print(f"Skipping entity: {e}")
                     continue
     return results
+
+# =====================================================================================
+# AUTOCAD LAYOUT GENERATOR (NEW TOOL)
+# =====================================================================================
+def generate_autocad_layout(plot_area_m2, street_width_m, location):
+    """
+    Generate a simple 2D floor plan DXF and BOQ based on Egyptian code.
+    Returns: (dxf_bytes, boq_data, layout_info)
+    """
+    # 1. Determine setbacks and max footprint based on Egyptian code (simplified)
+    # These are approximate; we'll assume a rectangular plot with width = 10m, length = plot_area/10.
+    # But we'll keep it simple: assume square-like footprint.
+    # For urban areas, typical max footprint is 50-60% of plot area.
+    footprint_ratio = 0.6
+    max_footprint = plot_area_m2 * footprint_ratio
+    # Number of floors allowed based on street width (simplified)
+    if street_width_m >= 12:
+        max_floors = 4  # Ground + 3 upper
+    elif street_width_m >= 8:
+        max_floors = 3
+    elif street_width_m >= 6:
+        max_floors = 2
+    else:
+        max_floors = 1
+
+    # Determine plot dimensions: assume width = 10m, length = plot_area/10
+    plot_width = 10.0
+    plot_length = plot_area_m2 / plot_width
+
+    # Setbacks: front = 3m, rear = 2m, sides = 1.5m (typical)
+    front_setback = 3.0
+    rear_setback = 2.0
+    side_setback = 1.5
+
+    building_width = plot_width - 2 * side_setback
+    building_length = plot_length - front_setback - rear_setback
+
+    # If building area exceeds max footprint, scale down
+    building_area = building_width * building_length
+    if building_area > max_footprint:
+        scale = (max_footprint / building_area) ** 0.5
+        building_width *= scale
+        building_length *= scale
+        # Recalculate building area
+        building_area = building_width * building_length
+
+    # Ensure minimum dimensions
+    if building_width < 5: building_width = 5
+    if building_length < 5: building_length = 5
+
+    # 2. Create DXF
+    doc = ezdxf.new(dxfversion="R2010")
+    msp = doc.modelspace()
+
+    # Draw plot boundary (optional)
+    # msp.add_lwpolyline([(0,0), (plot_width,0), (plot_width,plot_length), (0,plot_length)], close=True)
+
+    # Draw building footprint
+    # Origin at (side_setback, front_setback)
+    x0 = side_setback
+    y0 = front_setback
+    msp.add_lwpolyline([(x0, y0), (x0+building_width, y0), (x0+building_width, y0+building_length), (x0, y0+building_length)], close=True, dxfattribs={'layer': 'WALLS'})
+
+    # Simple room partitions: divide into living, kitchen, bedrooms, etc.
+    # We'll create a simple plan: split lengthwise into 3 zones: living (0.4), kitchen (0.3), bedrooms (0.3)
+    # Actually, let's make it more realistic: ground floor: living + kitchen + bathroom; upper floors: bedrooms.
+    # But for simplicity, we'll just create a single floor plan with labels.
+    # We'll add some internal walls and text labels.
+    # For a basic plan:
+    # - Horizontal split at y = y0 + 0.4 * building_length (living area)
+    # - Then split the top part into kitchen and bedroom, etc.
+    # We'll just draw a few lines and add text.
+    # We'll add a center corridor? Not necessary.
+
+    # Add some internal walls:
+    # Horizontal wall at 40% length
+    wall_y = y0 + 0.4 * building_length
+    msp.add_line((x0, wall_y), (x0 + building_width, wall_y), dxfattribs={'layer': 'WALLS'})
+
+    # Vertical wall at 60% width for upper part (living vs kitchen/bedroom)
+    wall_x = x0 + 0.6 * building_width
+    msp.add_line((wall_x, wall_y), (wall_x, y0 + building_length), dxfattribs={'layer': 'WALLS'})
+
+    # Vertical wall at 30% width for lower part (living vs dining?)
+    wall_x2 = x0 + 0.3 * building_width
+    msp.add_line((wall_x2, y0), (wall_x2, wall_y), dxfattribs={'layer': 'WALLS'})
+
+    # Add text labels (using TEXT entities)
+    msp.add_text("LIVING", dxfattribs={'height': 0.3, 'insert': (x0 + 0.15*building_width, y0 + 0.2*building_length)})
+    msp.add_text("KITCHEN", dxfattribs={'height': 0.3, 'insert': (x0 + 0.45*building_width, wall_y + 0.2*(building_length-wall_y))})
+    msp.add_text("BEDROOM 1", dxfattribs={'height': 0.3, 'insert': (x0 + 0.7*building_width, wall_y + 0.3*(building_length-wall_y))})
+    msp.add_text("BEDROOM 2", dxfattribs={'height': 0.3, 'insert': (x0 + 0.7*building_width, wall_y + 0.6*(building_length-wall_y))})
+    msp.add_text("BATH", dxfattribs={'height': 0.3, 'insert': (x0 + 0.15*building_width, wall_y + 0.6*(building_length-wall_y))})
+
+    # Add dimensions? Not necessary.
+
+    # Save DXF to bytes
+    dxf_buffer = io.BytesIO()
+    doc.write(dxf_buffer)
+    dxf_bytes = dxf_buffer.getvalue()
+
+    # 3. BOQ calculations
+    # Concrete volume: foundations, columns, slabs (simplified)
+    # Assume raft foundation thickness 0.3m, slab thickness 0.15m, column size 0.3x0.3, height 3m per floor.
+    # For simplicity, we'll just estimate.
+    floor_height = 3.0
+    # Building volume: footprint area * height per floor * number of floors
+    concrete_volume = building_area * floor_height * 0.1  # rough estimate for columns and shear walls? We'll keep simple.
+    # Use a thumb rule: 0.2 m3 concrete per m2 of built area per floor.
+    concrete_per_floor = building_area * 0.2
+    total_concrete = concrete_per_floor * max_floors
+
+    # Rebar: 100 kg per m3 of concrete
+    rebar_kg = total_concrete * 100
+
+    # Bricks: for walls (assume wall thickness 0.12m, wall length = perimeter + internal walls)
+    # We'll approximate wall length from our partitions.
+    wall_length = 2*(building_width+building_length) + (building_length) + (building_width) + (building_width*0.3)  # external + internal
+    wall_height = floor_height * max_floors
+    wall_area = wall_length * wall_height  # m2
+    # Bricks count: approx 50 bricks per m2 for 12cm wall (with mortar)
+    brick_count = wall_area * 50
+
+    # Finishes: flooring (ceramic) area = building_area * max_floors
+    flooring_area = building_area * max_floors
+    # Paint: wall area * 2 (both sides)
+    paint_area = wall_area * 2
+
+    # Create BOQ dataframe
+    boq_data = {
+        'Item': ['Concrete (m³)', 'Rebar (kg)', 'Bricks (nos)', 'Flooring (m²)', 'Paint (m²)'],
+        'Quantity': [round(total_concrete, 2), round(rebar_kg, 2), round(brick_count, 0), round(flooring_area, 2), round(paint_area, 2)],
+        'Unit': ['m³', 'kg', 'nos', 'm²', 'm²']
+    }
+    # Add unit rates (approximate)
+    rates = {
+        'Concrete (m³)': 2500,
+        'Rebar (kg)': 15,
+        'Bricks (nos)': 2.5,
+        'Flooring (m²)': 150,
+        'Paint (m²)': 30
+    }
+    boq_data['Unit Rate (EGP)'] = [rates.get(item, 0) for item in boq_data['Item']]
+    boq_data['Total Cost (EGP)'] = [round(boq_data['Quantity'][i] * boq_data['Unit Rate (EGP)'][i], 2) for i in range(len(boq_data['Item']))]
+
+    layout_info = {
+        'plot_area': plot_area_m2,
+        'street_width': street_width_m,
+        'location': location,
+        'max_floors': max_floors,
+        'footprint_area': round(building_area, 2),
+        'building_width': round(building_width, 2),
+        'building_length': round(building_length, 2),
+    }
+
+    return dxf_bytes, pd.DataFrame(boq_data), layout_info
 
 # =====================================================================================
 # STYLING - MODERN & PROFESSIONAL
@@ -1852,6 +2009,7 @@ def main_page():
             t_jobs = ui.tab('Job Board').classes('text-white font-bold')
             t_progress = ui.tab('Progress Tracker').classes('text-white font-bold')
             t_dxf = ui.tab('DXF Area Extractor').classes('text-white font-bold')
+            t_autocad = ui.tab('AutoCAD Layout Generator').classes('text-white font-bold')  # NEW
 
         with ui.tab_panels(tabs, value=t_dash).classes('w-full bg-transparent mt-4'):
 
@@ -2739,7 +2897,6 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                         dxf_status_label.classes(replace='text-xs text-emerald-400 font-semibold mb-2')
                         ui.notify(f'Uploaded: {e.file.name}', type='positive')
                         try:
-                            # No 'errors' argument
                             doc = ezdxf.read(io.BytesIO(data))
                             layers = detect_dxf_layers(doc)
                             layer_info = "\n".join([f"{layer}: {info['count']} entities, keywords: {', '.join(info['keywords'])}" for layer, info in layers.items()])
@@ -2748,8 +2905,11 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                         except Exception as ex:
                             detected_layers_label.set_text(f"Error reading DXF: {str(ex)}")
                             detected_layers_label.classes(replace='text-xs text-red-400')
+                            # Print full traceback to console for debugging
+                            traceback.print_exc()
                     except Exception as ex:
                         ui.notify(f'Upload error: {str(ex)}', type='negative')
+                        traceback.print_exc()
 
                 ui.label('Upload DXF File').classes('text-white text-sm font-semibold mb-1')
                 ui.upload(auto_upload=True, on_upload=handle_dxf_upload, multiple=False).props('flat dark').classes('w-full mb-4')
@@ -2832,6 +2992,7 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                                     ui.notify('PDF downloaded!', type='positive')
                                 except Exception as e:
                                     ui.notify(f'PDF generation error: {str(e)}', type='negative')
+                                    traceback.print_exc()
 
                             ui.button('Download DXF Report PDF', on_click=download_dxf_pdf).classes('primary-btn')
 
@@ -2840,10 +3001,113 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                         with dxf_output:
                             ui.notify(f'Processing error: {str(e)}', type='negative')
                             ui.label(f'Error: {str(e)}').classes('text-red-400')
+                            traceback.print_exc()
 
                 ui.button('Process DXF', on_click=process_dxf).classes('primary-btn mt-4')
                 with dxf_output:
                     ui.markdown('*Upload a DXF and click "Process DXF" to extract areas.*').classes('text-sm text-[#A9B6D0]')
+
+            # ==============================================================
+            # TAB 9: AUTOCAD LAYOUT GENERATOR (NEW)
+            # ==============================================================
+            with ui.tab_panel(t_autocad):
+                ui.label('🏗️ AutoCAD Layout Generator').classes('text-2xl font-bold text-white mb-4')
+                ui.markdown('Enter your plot details and generate a full 2D floor plan DXF with BOQ, based on Egyptian building regulations (simplified).').classes('markdown-body mb-2')
+
+                with ui.row().classes('w-full gap-4 mb-4'):
+                    plot_area_input = ui.number(label='Plot Area (m²)', value=200, min=50, max=1000).classes('flex-1')
+                    street_width_input = ui.number(label='Street Width (m)', value=10, min=4, max=40).classes('flex-1')
+                    location_select = ui.select(
+                        label='Location',
+                        options=['Cairo', 'Giza', 'Alexandria', 'Delta', 'Other'],
+                        value='Cairo'
+                    ).classes('flex-1')
+
+                autocad_output = ui.column().classes('w-full')
+                autocad_export = ui.row().classes('w-full gap-4 mt-4')
+                autocad_data_holder = {'dxf': None, 'boq_df': None, 'info': None}
+
+                async def generate_autocad():
+                    autocad_output.clear()
+                    autocad_export.clear()
+                    with autocad_output:
+                        ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
+                        ui.label('Generating layout and BOQ...').classes('self-center text-sm')
+
+                    try:
+                        plot_area = plot_area_input.value or 200
+                        street_width = street_width_input.value or 10
+                        location = location_select.value or 'Cairo'
+
+                        dxf_bytes, boq_df, info = generate_autocad_layout(plot_area, street_width, location)
+                        autocad_data_holder['dxf'] = dxf_bytes
+                        autocad_data_holder['boq_df'] = boq_df
+                        autocad_data_holder['info'] = info
+
+                        # Display info
+                        autocad_output.clear()
+                        with autocad_output:
+                            ui.label('✅ Layout Generated Successfully').classes('text-xl font-bold text-green-400 mb-2')
+                            ui.markdown(f"""
+                            **Plot Area:** {info['plot_area']} m²  
+                            **Street Width:** {info['street_width']} m  
+                            **Location:** {info['location']}  
+                            **Max Allowed Floors:** {info['max_floors']}  
+                            **Footprint Area:** {info['footprint_area']} m²  
+                            **Building Dimensions:** {info['building_width']:.2f} m x {info['building_length']:.2f} m
+                            """).classes('text-white')
+                            ui.label('📋 Bill of Quantities').classes('text-xl font-bold text-white mt-4 mb-2')
+                            # Show BOQ table
+                            columns = [
+                                {'name': 'Item', 'label': 'Item', 'field': 'Item', 'sortable': True},
+                                {'name': 'Quantity', 'label': 'Quantity', 'field': 'Quantity', 'sortable': True},
+                                {'name': 'Unit', 'label': 'Unit', 'field': 'Unit', 'sortable': True},
+                                {'name': 'Unit Rate (EGP)', 'label': 'Unit Rate (EGP)', 'field': 'Unit Rate (EGP)', 'sortable': True},
+                                {'name': 'Total Cost (EGP)', 'label': 'Total Cost (EGP)', 'field': 'Total Cost (EGP)', 'sortable': True},
+                            ]
+                            ui.table(columns=columns, rows=boq_df.to_dict('records'), row_key='index').classes('w-full text-white')
+                            total_cost = boq_df['Total Cost (EGP)'].sum()
+                            ui.label(f'Total Estimated Cost: {total_cost:.2f} EGP').classes('text-lg font-bold text-[#FF8C00] mt-2')
+
+                        # Export buttons
+                        autocad_export.clear()
+                        with autocad_export:
+                            def download_dxf():
+                                if autocad_data_holder['dxf']:
+                                    ui.download(autocad_data_holder['dxf'], filename=f"Layout_{info['plot_area']}m2.dxf")
+                                    ui.notify('DXF downloaded!', type='positive')
+                                else:
+                                    ui.notify('No DXF generated.', type='warning')
+                            def download_pdf():
+                                try:
+                                    # Generate PDF report
+                                    pdf_bytes = generate_autocad_pdf(
+                                        info,
+                                        boq_df,
+                                        engineer_input.value,
+                                        project_name_input.value,
+                                        logo_bytes_holder['bytes'],
+                                        ticket_input.value
+                                    )
+                                    ui.download(pdf_bytes, filename=f"Layout_Report_{info['plot_area']}m2.pdf")
+                                    ui.notify('PDF downloaded!', type='positive')
+                                except Exception as e:
+                                    ui.notify(f'PDF error: {str(e)}', type='negative')
+                                    traceback.print_exc()
+
+                            ui.button('Download DXF', on_click=download_dxf).classes('primary-btn')
+                            ui.button('Download PDF Report', on_click=download_pdf).classes('primary-btn')
+
+                    except Exception as e:
+                        autocad_output.clear()
+                        with autocad_output:
+                            ui.notify(f'Generation failed: {str(e)}', type='negative')
+                            ui.label(f'Error: {str(e)}').classes('text-red-400')
+                            traceback.print_exc()
+
+                ui.button('Generate Layout & BOQ', on_click=generate_autocad).classes('primary-btn mt-4')
+                with autocad_output:
+                    ui.markdown('*Enter plot details and click "Generate Layout & BOQ".*').classes('text-sm text-[#A9B6D0]')
 
         # ---------------- FOOTER ----------------
         ui.html('''
@@ -3030,6 +3294,93 @@ def generate_dxf_pdf(df, total_area, filename, workflow, units, engineer_name, p
         story.append(Spacer(1, 10))
 
         total_para = Paragraph(f"<b>Total Net Area: {total_area:.4f} m²</b>", styles['h2'])
+        story.append(total_para)
+        story.append(Spacer(1, 6))
+
+    build_pdf_footer_signature_and_qr(story, styles, qr_buf, engineer_name)
+
+    doc.build(story)
+    buffer.seek(0)
+    return buffer.getvalue()
+
+# =====================================================================================
+# AUTOCAD PDF GENERATION (NEW)
+# =====================================================================================
+def generate_autocad_pdf(info, boq_df, engineer_name, project_name, logo_bytes, ticket_id):
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=MARGIN, leftMargin=MARGIN,
+                             topMargin=MARGIN, bottomMargin=MARGIN)
+    styles = build_pdf_styles()
+    story = []
+
+    unique_uid = f"LAYOUT-{uuid.uuid4().hex[:8].upper()}"
+    qr_buf = generate_qr_code(f"UID: {unique_uid} | Layout Report - {project_name}")
+
+    title_style = ParagraphStyle("DocTitle", fontSize=14, textColor=colors.HexColor("#1B2A4A"),
+                                  spaceAfter=3, fontName="Helvetica-Bold", leading=17)
+    sub_style = ParagraphStyle("DocSub", fontSize=9, textColor=colors.HexColor("#B45309"),
+                                spaceAfter=6, fontName="Helvetica-Bold")
+    meta_style = ParagraphStyle("MetaStyle", fontSize=8, textColor=colors.HexColor("#334155"),
+                                 leading=11.5, fontName="Helvetica")
+
+    company_name = "Smart Egypt Civil AI"
+    meta_html = f"""
+    <b>Company:</b> {company_name} &nbsp;|&nbsp; <b>Project:</b> {project_name}<br/>
+    <b>Engineer in Charge:</b> {engineer_name}<br/>
+    <b>Plot Area:</b> {info['plot_area']} m² &nbsp;|&nbsp; <b>Street Width:</b> {info['street_width']} m<br/>
+    <b>Location:</b> {info['location']} &nbsp;|&nbsp; <b>Max Floors:</b> {info['max_floors']}<br/>
+    <b>Report UID:</b> <font color="#CC0000"><b>{unique_uid}</b></font>
+    """
+    right_cell = ReportLabImage(io.BytesIO(logo_bytes), width=70, height=32) if logo_bytes else ""
+    try:
+        header_table_data = [
+            [Paragraph(f"<b>AUTOCAD LAYOUT REPORT</b>", title_style), right_cell],
+            [Paragraph("Generated Floor Plan & BOQ", sub_style), ""],
+            [Paragraph(meta_html, meta_style), ""],
+        ]
+        t_head = Table(header_table_data, colWidths=[USABLE_WIDTH - 100, 100])
+        t_head.setStyle(TableStyle([
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+        ]))
+        story.append(t_head)
+    except Exception:
+        story.append(Paragraph("AUTOCAD LAYOUT REPORT", title_style))
+        story.append(Paragraph("Generated Floor Plan & BOQ", sub_style))
+        story.append(Paragraph(meta_html, meta_style))
+
+    story.append(Spacer(1, 5))
+    story.append(HRFlowable(width="100%", thickness=1.3, color=colors.HexColor("#FF8C00"), spaceAfter=8))
+
+    # Add a short description
+    desc = f"Footprint: {info['footprint_area']} m², Building dimensions: {info['building_width']:.2f} x {info['building_length']:.2f} m"
+    story.append(Paragraph(desc, styles['body']))
+    story.append(Spacer(1, 6))
+
+    # BOQ Table
+    if not boq_df.empty:
+        cols_to_show = ['Item', 'Quantity', 'Unit', 'Unit Rate (EGP)', 'Total Cost (EGP)']
+        table_data = [cols_to_show]
+        for _, row in boq_df.iterrows():
+            table_data.append([str(row[col]) for col in cols_to_show])
+        col_widths = [USABLE_WIDTH / len(cols_to_show)] * len(cols_to_show)
+        t = Table(table_data, colWidths=col_widths, repeatRows=1)
+        t.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1B2A4A')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#94A3B8')),
+            ('FONTSIZE', (0, 0), (-1, -1), 8),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F1F5F9')]),
+            ('TOPPADDING', (0, 0), (-1, -1), 3),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+        ]))
+        story.append(t)
+        story.append(Spacer(1, 10))
+
+        total_cost = boq_df['Total Cost (EGP)'].sum()
+        total_para = Paragraph(f"<b>Total Estimated Cost: {total_cost:.2f} EGP</b>", styles['h2'])
         story.append(total_para)
         story.append(Spacer(1, 6))
 
