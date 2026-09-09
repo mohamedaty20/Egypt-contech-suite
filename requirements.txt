@@ -1,6 +1,7 @@
 # Data & Math
 numpy>=1.26.0
 pandas>=2.1.0
+shapely>=2.0.0          # Added for geometric operations, polygon repair & setbacks
 
 # Visualization & Reporting
 plotly>=5.18.0
