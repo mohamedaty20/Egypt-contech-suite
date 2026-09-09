@@ -1,19 +1,30 @@
-numpy
-pandas
-plotly
-qrcode
-pypdf
-PyMuPDF
-python-dotenv
-fastapi
-nicegui
-google-genai
-reportlab
-xlsxwriter
-Pillow
-requests
-beautifulsoup4
-cloudscraper
-openpyxl
-kaleido
-ezdxf
+# Data & Math
+numpy>=1.26.0
+pandas>=2.1.0
+
+# Visualization & Reporting
+plotly>=5.18.0
+kaleido>=0.2.1
+reportlab>=4.0.0
+xlsxwriter>=3.1.0
+qrcode>=7.4.2
+
+# Document & CAD Processing
+pypdf>=3.17.0
+PyMuPDF>=1.23.0
+ezdxf>=1.1.0
+
+# Web Scraping & Requests
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+cloudscraper>=1.2.7
+
+# Utilities & Configuration
+python-dotenv>=1.0.0
+Pillow>=10.1.0
+openpyxl>=3.1.2
+
+# Web Frameworks & AI
+fastapi>=0.109.0
+nicegui>=1.4.0
+google-genai>=0.1.0
