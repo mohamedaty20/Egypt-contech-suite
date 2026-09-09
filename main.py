@@ -49,7 +49,7 @@ MARGIN = 32
 USABLE_WIDTH = PAGE_WIDTH - (2 * MARGIN)
 
 # =====================================================================================
-# CODE-COMPLIANCE & TEXT SANITIZATION (must be defined before use)
+# CODE-COMPLIANCE & TEXT SANITIZATION (essential definitions)
 # =====================================================================================
 CODE_BASIS_OPTIONS = [
     "Egyptian Codes: ECP 203 / ECP 202 / ECP 104 (Default Core Basis)",
@@ -147,8 +147,6 @@ def build_pdf_styles():
     }
 
 def markdown_to_pdf_flowables(raw_text: str, styles: dict, avail_width: float = USABLE_WIDTH):
-    # ... (full function as in your previous code, omitted for brevity but must be included)
-    # I'll include the full version to avoid any missing definitions.
     text = sanitize_ai_markdown(raw_text)
     lines = text.split('\n')
     flowables = []
@@ -360,7 +358,7 @@ async def call_gemini_json(contents, temperature=0.1, timeout=240):
 # =====================================================================================
 
 # =====================================================================================
-# JOB SCRAPING FUNCTIONS (ULTRA-ROBUST)
+# JOB SCRAPING FUNCTIONS (ULTRA-ROBUST WITH DEBUGGING)
 # =====================================================================================
 RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY", "").strip()
 JSEARCH_HOST = "jsearch.p.rapidapi.com"
@@ -446,6 +444,8 @@ def scrape_wuzzuf_direct(query, max_results=20):
         log(f"Wuzzuf request failed: {e}")
         return jobs
 
+    # Debug: save a snippet if no jobs found
+    found = 0
     for a in soup.select('a[href*="/jobs/p/"]'):
         href = a.get("href")
         title = a.get_text(strip=True)
@@ -477,9 +477,14 @@ def scrape_wuzzuf_direct(query, max_results=20):
             "url": full_url,
             "source": "Wuzzuf",
         })
-        if len(jobs) >= max_results:
+        found += 1
+        if found >= max_results:
             break
-    log(f"Wuzzuf parsed {len(jobs)} jobs")
+    if found == 0:
+        # log a snippet of the HTML around the first 'job' occurrence
+        snippet = re.sub(r'\s+', ' ', str(soup))[:500]
+        log(f"Wuzzuf: No job links found. HTML snippet: {snippet}")
+    log(f"Wuzzuf parsed {found} jobs")
     return jobs
 
 def scrape_bayt_direct(query, max_results=20):
@@ -500,6 +505,7 @@ def scrape_bayt_direct(query, max_results=20):
         return jobs
 
     cards = soup.select('li.has-pointer') or soup.select('div.job-card')
+    found = 0
     for card in cards[:max_results]:
         try:
             a = card.find("h2") and card.find("h2").find("a")
@@ -524,30 +530,38 @@ def scrape_bayt_direct(query, max_results=20):
                 "url": full_url,
                 "source": "Bayt",
             })
+            found += 1
         except Exception as e:
             log(f"Bayt card parse error: {e}")
-    log(f"Bayt parsed {len(jobs)} jobs")
+    if found == 0:
+        snippet = re.sub(r'\s+', ' ', str(soup))[:500]
+        log(f"Bayt: No job cards found. HTML snippet: {snippet}")
+    log(f"Bayt parsed {found} jobs")
     return jobs
 
 def scrape_jobs(query, location=""):
     full_query = f"{query} {location}".strip() if location else query
     all_jobs = []
+    # 1. JSearch
     try:
         all_jobs.extend(scrape_jsearch(full_query))
     except Exception as e:
         log(f"JSearch top-level error: {e}")
+    # 2. Wuzzuf
     if len(all_jobs) < 3:
         log("JSearch returned few results – trying Wuzzuf.")
         try:
             all_jobs.extend(scrape_wuzzuf_direct(full_query))
         except Exception as e:
             log(f"Wuzzuf top-level error: {e}")
+    # 3. Bayt
     if len(all_jobs) < 3:
         log("Wuzzuf also returned few results – trying Bayt.")
         try:
             all_jobs.extend(scrape_bayt_direct(full_query))
         except Exception as e:
             log(f"Bayt top-level error: {e}")
+    # deduplicate
     seen = set()
     deduped = []
     for job in all_jobs:
@@ -558,6 +572,25 @@ def scrape_jobs(query, location=""):
     deduped.sort(key=lambda j: 0 if j["source"] == "Wuzzuf" else 1)
     log(f"TOTAL jobs after dedup: {len(deduped)}")
     return deduped
+
+# =====================================================================================
+# MIME TYPE DETECTION
+# =====================================================================================
+def detect_mime_type(filename: str, data: bytes) -> str:
+    ext = os.path.splitext(filename)[1].lower()
+    if ext in ['.png']:
+        return 'image/png'
+    elif ext in ['.jpg', '.jpeg']:
+        return 'image/jpeg'
+    elif ext in ['.pdf']:
+        return 'application/pdf'
+    if data.startswith(b'\x89PNG'):
+        return 'image/png'
+    if data.startswith(b'\xff\xd8'):
+        return 'image/jpeg'
+    if data.startswith(b'%PDF'):
+        return 'application/pdf'
+    return 'image/jpeg'
 
 # =====================================================================================
 # STYLING - MODERN & PROFESSIONAL (unchanged)
@@ -931,25 +964,6 @@ ui.add_head_html('''
     }
 </style>
 ''', shared=True)
-
-# =====================================================================================
-# MIME TYPE DETECTION
-# =====================================================================================
-def detect_mime_type(filename: str, data: bytes) -> str:
-    ext = os.path.splitext(filename)[1].lower()
-    if ext in ['.png']:
-        return 'image/png'
-    elif ext in ['.jpg', '.jpeg']:
-        return 'image/jpeg'
-    elif ext in ['.pdf']:
-        return 'application/pdf'
-    if data.startswith(b'\x89PNG'):
-        return 'image/png'
-    if data.startswith(b'\xff\xd8'):
-        return 'image/jpeg'
-    if data.startswith(b'%PDF'):
-        return 'application/pdf'
-    return 'image/jpeg'
 
 # =====================================================================================
 # MAIN APP LAYOUT
@@ -1643,7 +1657,7 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                     ui.markdown('*Upload a file and click "Transcribe Handwriting" to start.*').classes('text-sm text-[#A9B6D0]')
 
             # ==============================================================
-            # TAB 6: JOB BOARD (improved)
+            # TAB 6: JOB BOARD (debug-enhanced)
             # ==============================================================
             with ui.tab_panel(t_jobs):
                 ui.label('Engineering Job Board - Egypt').classes('text-2xl font-bold text-white mb-4')
@@ -1652,6 +1666,9 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                 key_status = ui.label(
                     '🔑 RapidAPI key: ' + ('✅ Set' if RAPIDAPI_KEY else '❌ Not set – using Wuzzuf/Bayt fallback.')
                 ).classes('text-sm text-[#A9B6D0] mb-2')
+
+                # Debug info area
+                debug_output = ui.label('Debug: waiting for search...').classes('text-xs text-[#A9B6D0] mb-2')
 
                 with ui.row().classes('w-full gap-4 mb-4'):
                     search_input = ui.input(label='Search for jobs', placeholder='e.g., Civil Engineer', value='Civil Engineer').classes('flex-1')
@@ -1703,9 +1720,22 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                         ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
                         ui.label('Fetching job listings...').classes('self-center text-sm')
 
+                    # Run scraper
                     jobs = await run.io_bound(scrape_jobs, query)
                     jobs_data.clear()
                     jobs_data.extend(jobs)
+
+                    # Update debug info
+                    counts = {}
+                    for j in jobs:
+                        counts[j['source']] = counts.get(j['source'], 0) + 1
+                    debug_info = f"JSearch: {counts.get('JSearch', 0)}, Wuzzuf: {counts.get('Wuzzuf', 0)}, Bayt: {counts.get('Bayt', 0)} | Total: {len(jobs)}"
+                    debug_output.set_text(f'Debug: {debug_info}')
+                    if jobs:
+                        debug_output.classes(replace='text-xs text-emerald-400 mb-2')
+                    else:
+                        debug_output.classes(replace='text-xs text-red-400 mb-2')
+
                     display_jobs(jobs_data)
 
         # ---------------- FOOTER ----------------
