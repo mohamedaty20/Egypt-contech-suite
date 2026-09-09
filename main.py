@@ -2448,23 +2448,40 @@ HEADERS = {
 REQUEST_TIMEOUT = 15
 
 
-def _get(url):
+def _get(url, debug_label=""):
     """Shared GET with logging. Returns BeautifulSoup or None."""
     try:
         resp = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
         print(f"[scraper] GET {url} -> status={resp.status_code}, len={len(resp.text)}")
         if resp.status_code != 200:
+            # Print a short preview so we can tell a WAF/challenge page apart
+            # from a genuine (but selector-mismatched) response.
+            preview = re.sub(r"\s+", " ", resp.text)[:300]
+            print(f"[scraper][{debug_label}] non-200 body preview: {preview!r}")
             return None
-        return BeautifulSoup(resp.text, "html.parser")
+        soup = BeautifulSoup(resp.text, "html.parser")
+        return soup
     except Exception as e:
         print(f"[scraper] request failed for {url}: {e}")
         return None
 
 
+def _debug_dump_if_empty(soup, label, count, keyword=None):
+    """When a 200 response parses to 0 jobs, dump a snippet around a
+    likely keyword (e.g. 'job') so we can see the real markup structure
+    and fix the selector, instead of guessing blind."""
+    if count > 0 or soup is None:
+        return
+    text = str(soup)
+    idx = text.lower().find((keyword or "job").lower())
+    snippet = text[max(0, idx - 200):idx + 500] if idx != -1 else text[:700]
+    print(f"[scraper][{label}] 0 jobs parsed from a 200 response. HTML snippet:\n{snippet}")
+
+
 def scrape_wuzzuf(query, max_results=20):
     jobs = []
     url = f"https://wuzzuf.net/search/jobs/?q={quote_plus(query)}&a=hpb"
-    soup = _get(url)
+    soup = _get(url, debug_label="Wuzzuf")
     if soup is None:
         return jobs
 
@@ -2516,6 +2533,7 @@ def scrape_wuzzuf(query, max_results=20):
         if len(jobs) >= max_results:
             break
 
+    _debug_dump_if_empty(soup, "Wuzzuf", len(jobs), keyword="job")
     print(f"[scraper] Wuzzuf: {len(jobs)} jobs parsed")
     return jobs
 
@@ -2524,7 +2542,7 @@ def scrape_bayt(query, max_results=20):
     jobs = []
     slug = quote_plus(query.replace(" ", "-"))
     url = f"https://www.bayt.com/en/egypt/jobs/{slug}-jobs/"
-    soup = _get(url)
+    soup = _get(url, debug_label="Bayt")
     if soup is None:
         return jobs
 
@@ -2559,6 +2577,7 @@ def scrape_bayt(query, max_results=20):
             "source": "Bayt",
         })
 
+    _debug_dump_if_empty(soup, "Bayt", len(jobs), keyword="job_")
     print(f"[scraper] Bayt: {len(jobs)} jobs parsed")
     return jobs
 
@@ -2566,7 +2585,7 @@ def scrape_bayt(query, max_results=20):
 def scrape_forasna(query, max_results=15):
     jobs = []
     url = f"https://forasna.com/jobs-in-egypt/?s={quote_plus(query)}"
-    soup = _get(url)
+    soup = _get(url, debug_label="Forasna")
     if soup is None:
         return jobs
 
@@ -2592,6 +2611,7 @@ def scrape_forasna(query, max_results=15):
             "source": "Forasna",
         })
 
+    _debug_dump_if_empty(soup, "Forasna", len(jobs), keyword="job")
     print(f"[scraper] Forasna: {len(jobs)} jobs parsed")
     return jobs
 
@@ -2599,7 +2619,7 @@ def scrape_forasna(query, max_results=15):
 def scrape_akhtaboot(query, max_results=15):
     jobs = []
     url = f"https://www.akhtaboot.com/en/jobs-in-egypt?keywords={quote_plus(query)}"
-    soup = _get(url)
+    soup = _get(url, debug_label="Akhtaboot")
     if soup is None:
         return jobs
 
@@ -2629,6 +2649,7 @@ def scrape_akhtaboot(query, max_results=15):
             "source": "Akhtaboot",
         })
 
+    _debug_dump_if_empty(soup, "Akhtaboot", len(jobs), keyword="job")
     print(f"[scraper] Akhtaboot: {len(jobs)} jobs parsed")
     return jobs
 
