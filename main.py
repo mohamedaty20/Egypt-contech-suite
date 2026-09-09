@@ -18,11 +18,11 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from nicegui import app, ui, run
 
-# Google GenAI SDK (using google-genai package)
+# Google GenAI SDK
 from google import genai
 from google.genai import types
 
-# ReportLab for Professional PDF Generation
+# ReportLab
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
@@ -47,7 +47,7 @@ MARGIN = 32
 USABLE_WIDTH = PAGE_WIDTH - (2 * MARGIN)
 
 # =====================================================================================
-# STYLING - MODERN & PROFESSIONAL (unchanged)
+# STYLING (identical to original)
 # =====================================================================================
 app.native.window_args = {"resizable": True}
 
@@ -437,7 +437,7 @@ ui.add_head_html('''
 ''', shared=True)
 
 # =====================================================================================
-# HELPERS: TEXT SANITIZATION, MARKDOWN → PDF, ETC.
+# HELPERS (unchanged from original)
 # =====================================================================================
 
 _LATEX_SIMPLE = {
@@ -794,7 +794,7 @@ def main_page():
 
         ui.label('Governing Design Code Basis').classes('text-white font-bold text-sm mb-1')
         ui.markdown('By default every AI output in this app is generated strictly per **ECP 203 / ECP 202 / ECP 104**. Change this to switch the primary basis.').classes('text-xs text-[#A9B6D0] mb-2')
-        # --- The single ui.select for code basis ---
+        # === ui.select #1 ===
         code_basis_select = ui.select(
             'Code Type (applies app-wide)',
             options=CODE_BASIS_OPTIONS,
@@ -815,7 +815,6 @@ def main_page():
                 ui.notify(f'Error reading logo: {str(ex)}', type='negative')
         ui.upload('Upload Company Logo', auto_upload=True, on_upload=handle_logo_upload).props('flat dark').classes('w-full mb-2')
 
-    # Sidebar toggle button
     ui.button('☰', on_click=sidebar.toggle).classes(
         'fixed top-4 left-4 z-50 bg-[#10203f] text-white border border-[#FF8C00] p-3 rounded-full shadow-lg hover:bg-[#1a2a4a]'
     ).style('font-size: 20px; min-width: 48px; min-height: 48px;')
@@ -865,7 +864,7 @@ def main_page():
             with ui.tab_panel(t_dash):
                 ui.label('Concrete Cube Calculation Sheet & Statistical Verifier').classes('text-2xl font-bold text-white mb-4')
 
-                # Concrete-specific inputs (only here)
+                # Concrete-specific inputs
                 with ui.column().classes('input-card w-full mb-4'):
                     ui.label('Concrete Mix & Site Data').classes('text-lg font-bold text-white')
                     with ui.row().classes('w-full gap-4'):
@@ -1075,7 +1074,7 @@ REQUIRED REPORT STRUCTURE:
                         with result_output_area:
                             ui.notify(f'Calculation Error: {str(ex)}', type='negative')
 
-                # --- The ui.select for stage filter (only one) ---
+                # === ui.select #2 ===
                 stage_selector = ui.select(
                     'Select Stage Display Filter',
                     options=['All Stages', '7-Day Stage', '14-Day Stage', '28-Day Stage'],
@@ -1097,7 +1096,7 @@ REQUIRED REPORT STRUCTURE:
                 ui.label('AI Multi-Standard Engineering Auditor').classes('text-2xl font-bold text-white mb-2')
                 ui.markdown('Upload a specification, mix design, or site report to audit against the selected code basis.').classes('markdown-body mb-2')
 
-                # --- The only ui.select for audit focus ---
+                # === ui.select #3 ===
                 audit_focus = ui.select(
                     'Audit Focus',
                     options=[
