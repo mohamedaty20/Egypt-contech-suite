@@ -53,7 +53,7 @@ MARGIN = 32
 USABLE_WIDTH = PAGE_WIDTH - (2 * MARGIN)
 
 # =====================================================================================
-# CODE-COMPLIANCE & TEXT SANITIZATION (unchanged)
+# CODE-COMPLIANCE & TEXT SANITIZATION
 # =====================================================================================
 CODE_BASIS_OPTIONS = [
     "Egyptian Codes: ECP 203 / ECP 202 / ECP 104 (Default Core Basis)",
@@ -246,7 +246,6 @@ def generate_qr_code(data_str):
     return buf
 
 def build_pdf_header(story, styles, doc_title, subtitle, logo_bytes, engineer, project, location, rep_date, ticket_id, unique_hash, show_ticket=True):
-    # This function is kept for compatibility; we'll use a custom header for the Progress Tracker PDF
     title_style = ParagraphStyle("DocTitle", fontSize=14, textColor=colors.HexColor("#1B2A4A"),
                                   spaceAfter=3, fontName="Helvetica-Bold", leading=17)
     sub_style = ParagraphStyle("DocSub", fontSize=9, textColor=colors.HexColor("#B45309"),
@@ -356,7 +355,7 @@ async def call_gemini_json(contents, temperature=0.1, timeout=240):
         raise Exception(f"AI request failed: {str(e)}")
 
 # =====================================================================================
-# BOQ CALCULATION ENGINE (full version from original) – unchanged
+# BOQ CALCULATION ENGINE (full version from original)
 # =====================================================================================
 boq_results = {
     'architectural': {},
@@ -1194,7 +1193,7 @@ def scrape_jobs(query, location=""):
     return deduped
 
 # =====================================================================================
-# PROGRESS TRACKER FUNCTIONS (NEW)
+# PROGRESS TRACKER FUNCTIONS
 # =====================================================================================
 def parse_progress_from_gemini_response(raw_text):
     """Extract JSON from Gemini response for progress data."""
@@ -1229,7 +1228,6 @@ Example: {"date": "2026-03-15", "description": "Formwork installation for slab",
 """
     contents = [prompt]
     if file_type == 'application/pdf':
-        # Send first page as image
         try:
             doc = fitz.open(stream=file_bytes, filetype="pdf")
             if len(doc) > 0:
@@ -1251,22 +1249,17 @@ def process_excel_file(file_bytes, filename):
     """Read Excel file and return DataFrame with expected columns."""
     try:
         df = pd.read_excel(io.BytesIO(file_bytes), engine='openpyxl')
-        # Normalize column names: lower case, strip spaces
         df.columns = df.columns.str.lower().str.strip()
-        # Map expected columns: date, description, progress, category, location
-        # If progress column is named differently, try to guess
         progress_cols = [c for c in df.columns if 'progress' in c or 'percent' in c]
         date_cols = [c for c in df.columns if 'date' in c]
         desc_cols = [c for c in df.columns if 'desc' in c or 'note' in c]
         cat_cols = [c for c in df.columns if 'cat' in c or 'type' in c]
         loc_cols = [c for c in df.columns if 'loc' in c or 'area' in c]
-        # Use first match
         date_col = date_cols[0] if date_cols else None
         desc_col = desc_cols[0] if desc_cols else None
         progress_col = progress_cols[0] if progress_cols else None
         cat_col = cat_cols[0] if cat_cols else None
         loc_col = loc_cols[0] if loc_cols else None
-        # Select only relevant columns
         keep_cols = []
         if date_col: keep_cols.append(date_col)
         if desc_col: keep_cols.append(desc_col)
@@ -1275,7 +1268,6 @@ def process_excel_file(file_bytes, filename):
         if loc_col: keep_cols.append(loc_col)
         if keep_cols:
             df = df[keep_cols]
-        # Rename to standard names
         rename_map = {}
         if date_col: rename_map[date_col] = 'date'
         if desc_col: rename_map[desc_col] = 'description'
@@ -1283,23 +1275,19 @@ def process_excel_file(file_bytes, filename):
         if cat_col: rename_map[cat_col] = 'category'
         if loc_col: rename_map[loc_col] = 'location'
         df = df.rename(columns=rename_map)
-        # Ensure date is string
         if 'date' in df.columns:
             df['date'] = df['date'].astype(str)
         if 'progress_percent' in df.columns:
-            # Convert to numeric
             df['progress_percent'] = pd.to_numeric(df['progress_percent'], errors='coerce')
         return df
     except Exception as e:
         print(f"Error reading Excel: {e}")
         return pd.DataFrame()
 
-# ---- FIX: make this function async ----
 async def generate_progress_overview(df, start_date, end_date, description):
     """Ask Gemini for an overview of the progress data."""
     if df.empty or not client:
         return "No data available for overview."
-    # Convert DataFrame to CSV string for context
     csv_data = df.to_csv(index=False)
     prompt = f"""
 You are a project management analyst. Given the following progress data for a construction project from {start_date} to {end_date}, 
@@ -1319,7 +1307,7 @@ Data (CSV format):
         return f"Error generating overview: {str(e)}"
 
 # =====================================================================================
-# STYLING - MODERN & PROFESSIONAL (unchanged)
+# STYLING - MODERN & PROFESSIONAL
 # =====================================================================================
 app.native.window_args = {"resizable": True}
 ui.add_head_html('''
@@ -1787,13 +1775,11 @@ def main_page():
             t_chat = ui.tab('AI Chatbot').classes('text-white font-bold')
             t_handwriting = ui.tab('Handwriting OCR').classes('text-white font-bold')
             t_jobs = ui.tab('Job Board').classes('text-white font-bold')
-            t_progress = ui.tab('Progress Tracker').classes('text-white font-bold')  # NEW
+            t_progress = ui.tab('Progress Tracker').classes('text-white font-bold')
 
         with ui.tab_panels(tabs, value=t_dash).classes('w-full bg-transparent mt-4'):
 
-            # --------------------------------------------------------------
-            # TAB 1: CONCRETE CUBE VERIFIER (unchanged)
-            # --------------------------------------------------------------
+            # TAB 1: CONCRETE CUBE VERIFIER
             with ui.tab_panel(t_dash):
                 ui.label('Concrete Cube Calculation Sheet & Statistical Verifier').classes('text-2xl font-bold text-white mb-4')
                 with ui.row().classes('w-full gap-4 mb-4'):
@@ -1990,9 +1976,7 @@ REQUIRED REPORT STRUCTURE:
                 with result_output_area:
                     ui.markdown('*Click "Run AI Statistical Calculation & Verification" to generate the report.*').classes('text-sm text-[#A9B6D0]')
 
-            # --------------------------------------------------------------
-            # TAB 2: AI MULTI-STANDARD AUDITOR (unchanged)
-            # --------------------------------------------------------------
+            # TAB 2: AI MULTI-STANDARD AUDITOR
             with ui.tab_panel(t_audit):
                 ui.label('AI Multi-Standard Engineering Auditor').classes('text-2xl font-bold text-white mb-2')
                 ui.markdown('Upload a specification, mix design, or site report to audit against the selected code basis.').classes('markdown-body mb-2')
@@ -2094,9 +2078,7 @@ report with clear ## section headings and real Markdown tables for any comparati
                             ui.notify(f'Error: {str(ex)}', type='negative')
                 ui.button('Execute AI Audit & Compliance Check', on_click=run_ai_audit).classes('primary-btn')
 
-            # --------------------------------------------------------------
-            # TAB 3: DEFECT DIAGNOSTIC (unchanged)
-            # --------------------------------------------------------------
+            # TAB 3: DEFECT DIAGNOSTIC
             with ui.tab_panel(t_defect):
                 ui.label('AI Engineering Defect Diagnostic & Repair Protocol').classes('text-2xl font-bold text-white mb-2')
                 ui.markdown('Upload site defect photos or PDFs for forensic analysis. Describe the issue below for more precise diagnosis.').classes('markdown-body mb-2')
@@ -2202,9 +2184,7 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                             ui.notify(f'Diagnosis failed: {ex}', type='negative')
                 ui.button('Diagnose Defect & Get Repair Protocol', on_click=run_defect_diagnosis).classes('primary-btn')
 
-            # --------------------------------------------------------------
-            # TAB 4: AI CHATBOT (unchanged)
-            # --------------------------------------------------------------
+            # TAB 4: AI CHATBOT
             with ui.tab_panel(t_chat):
                 ui.label('Core-Code Intelligent Assistant Chatbot').classes('text-2xl font-bold text-white mb-2')
                 ui.markdown('Ask any engineering, mix design, geotechnical, or pavement question and get answers based on the Egyptian Codes (ECP 203, ECP 202, ECP 104) and international standards.').classes('markdown-body mb-2')
@@ -2271,9 +2251,7 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                             ui.notify(f'PDF Export Error: {str(ex)}', type='negative')
                     ui.button('Download Chat PDF Transcript', on_click=download_chat_pdf).classes('primary-btn flex-1')
 
-            # --------------------------------------------------------------
-            # TAB 5: HANDWRITING OCR (unchanged)
-            # --------------------------------------------------------------
+            # TAB 5: HANDWRITING OCR
             with ui.tab_panel(t_handwriting):
                 ui.label('Handwriting to Digital Text Transcription').classes('text-2xl font-bold text-white mb-2')
                 ui.markdown('Upload a scanned handwritten note (PNG, JPG) or PDF. The AI will convert it to clean digital text, detecting tables if present.').classes('markdown-body mb-2')
@@ -2383,9 +2361,7 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                 with ocr_output:
                     ui.markdown('*Upload a file and click "Transcribe Handwriting" to start.*').classes('text-sm text-[#A9B6D0]')
 
-            # --------------------------------------------------------------
-            # TAB 6: JOB BOARD (unchanged)
-            # --------------------------------------------------------------
+            # TAB 6: JOB BOARD
             with ui.tab_panel(t_jobs):
                 ui.label('Engineering Job Board - Egypt').classes('text-2xl font-bold text-white mb-4')
                 ui.markdown('Search for the latest engineering jobs in Egypt. Uses **JSearch** (RapidAPI) if the key is set, otherwise falls back to direct Wuzzuf and Bayt scraping with Cloudflare bypass.').classes('markdown-body mb-2')
@@ -2452,231 +2428,7 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                     display_jobs(jobs_data)
 
             # ==============================================================
-            # TAB 7: PROGRESS TRACKER (NEW)
-            # ==============================================================
-            with ui.tab_panel(t_progress):
-                ui.label('📊 Project Progress Tracker').classes('text-2xl font-bold text-white mb-4')
-                ui.markdown('Upload multiple files (images, PDFs, Excel) from different people to track project progress. The AI will extract data and create a unified summary with charts and an overview.').classes('markdown-body mb-2')
-
-                # File upload (multiple)
-                uploaded_files = []
-                upload_status = ui.label('No files uploaded yet.').classes('text-xs text-amber-400 mb-2')
-
-                async def handle_progress_upload(e):
-                    try:
-                        data = await e.file.read()
-                        fname = e.file.name
-                        ftype = detect_mime_type(fname, data)
-                        uploaded_files.append({'bytes': data, 'name': fname, 'type': ftype})
-                        upload_status.set_text(f'{len(uploaded_files)} file(s) uploaded.')
-                        upload_status.classes(replace='text-xs text-emerald-400 mb-2')
-                        ui.notify(f'Uploaded: {fname}', type='positive')
-                    except Exception as ex:
-                        ui.notify(f'Upload error: {str(ex)}', type='negative')
-
-                ui.upload(label='Upload files (multiple allowed)', auto_upload=True, on_upload=handle_progress_upload, multiple=True).props('flat dark').classes('w-full mb-4')
-
-                # Date range inputs
-                with ui.row().classes('w-full gap-4 mb-4'):
-                    start_date = ui.date(label='Start Date', value=datetime.date.today() - datetime.timedelta(days=30)).classes('flex-1')
-                    end_date = ui.date(label='End Date', value=datetime.date.today()).classes('flex-1')
-
-                # Description input
-                description_input = ui.input(label='Project Phase / Description', placeholder='e.g., Foundation Work', value='Foundation and Structure').classes('w-full mb-4')
-
-                # Output containers
-                progress_output = ui.column().classes('w-full')
-                progress_charts = ui.column().classes('w-full')
-                progress_overview = ui.column().classes('w-full')
-                progress_export = ui.row().classes('w-full gap-4 mt-4')
-
-                async def run_progress_analysis():
-                    if not client:
-                        ui.notify('GEMINI_API_KEY missing!', type='negative')
-                        return
-                    if not uploaded_files:
-                        ui.notify('Please upload at least one file.', type='warning')
-                        return
-
-                    progress_output.clear()
-                    progress_charts.clear()
-                    progress_overview.clear()
-                    progress_export.clear()
-
-                    with progress_output:
-                        ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
-                        ui.label('Processing files and extracting progress data...').classes('self-center text-sm')
-
-                    try:
-                        # Collect data from all files
-                        all_rows = []
-                        for f in uploaded_files:
-                            ext = os.path.splitext(f['name'])[1].lower()
-                            if ext in ['.xlsx', '.xls']:
-                                df = process_excel_file(f['bytes'], f['name'])
-                                if not df.empty:
-                                    df['source'] = f['name']
-                                    all_rows.append(df)
-                            elif f['type'] in ['image/png', 'image/jpeg', 'application/pdf']:
-                                data = await extract_progress_from_image(f['bytes'], f['type'])
-                                if data:
-                                    row = {
-                                        'date': data.get('date'),
-                                        'description': data.get('description'),
-                                        'progress_percent': data.get('progress_percent'),
-                                        'category': data.get('category'),
-                                        'location': data.get('location'),
-                                        'source': f['name']
-                                    }
-                                    all_rows.append(pd.DataFrame([row]))
-                            else:
-                                ui.notify(f'Skipping unsupported file: {f["name"]}', type='warning')
-
-                        if not all_rows:
-                            ui.notify('No data could be extracted from the uploaded files.', type='warning')
-                            progress_output.clear()
-                            with progress_output:
-                                ui.label('No data found in the uploaded files. Please check file contents.').classes('text-white')
-                            return
-
-                        combined_df = pd.concat(all_rows, ignore_index=True)
-
-                        if 'date' in combined_df.columns:
-                            combined_df['date'] = pd.to_datetime(combined_df['date'], errors='coerce')
-                        if 'progress_percent' in combined_df.columns:
-                            combined_df['progress_percent'] = pd.to_numeric(combined_df['progress_percent'], errors='coerce')
-
-                        display_df = combined_df.copy()
-                        if 'date' in display_df.columns:
-                            display_df['date'] = display_df['date'].dt.strftime('%Y-%m-%d')
-                        display_df = display_df.fillna('N/A')
-
-                        progress_output.clear()
-                        with progress_output:
-                            ui.label('📋 Progress Summary Table').classes('text-xl font-bold text-white mb-2')
-                            columns = [
-                                {'name': col, 'label': col.replace('_', ' ').title(), 'field': col, 'sortable': True}
-                                for col in display_df.columns if col != 'source'
-                            ]
-                            if 'source' in display_df.columns:
-                                columns.append({'name': 'source', 'label': 'Source File', 'field': 'source', 'sortable': True})
-                            ui.table(columns=columns, rows=display_df.to_dict('records'), row_key='index').classes('w-full text-white')
-
-                        # Generate charts
-                        fig_bar, fig_scatter, fig_pie, fig_line = None, None, None, None
-                        if not combined_df.empty:
-                            if 'category' in combined_df.columns and 'progress_percent' in combined_df.columns:
-                                avg_progress = combined_df.groupby('category')['progress_percent'].mean().reset_index()
-                                if not avg_progress.empty:
-                                    fig_bar = px.bar(avg_progress, x='category', y='progress_percent',
-                                                     title='Average Progress by Category',
-                                                     color='category', template='plotly_dark')
-                                    fig_bar.update_layout(paper_bgcolor='#0d1a35', plot_bgcolor='#0d1a35', font_color='white')
-
-                            if 'date' in combined_df.columns and 'progress_percent' in combined_df.columns:
-                                df_time = combined_df.dropna(subset=['date', 'progress_percent'])
-                                if not df_time.empty:
-                                    fig_scatter = px.scatter(df_time, x='date', y='progress_percent',
-                                                            color='category', title='Progress Over Time',
-                                                            template='plotly_dark')
-                                    fig_scatter.update_layout(paper_bgcolor='#0d1a35', plot_bgcolor='#0d1a35', font_color='white')
-
-                            if 'category' in combined_df.columns:
-                                cat_counts = combined_df['category'].value_counts().reset_index()
-                                cat_counts.columns = ['category', 'count']
-                                if not cat_counts.empty:
-                                    fig_pie = px.pie(cat_counts, names='category', values='count',
-                                                     title='Category Distribution', template='plotly_dark')
-                                    fig_pie.update_layout(paper_bgcolor='#0d1a35', plot_bgcolor='#0d1a35', font_color='white')
-
-                            if 'date' in combined_df.columns and 'progress_percent' in combined_df.columns:
-                                df_time = combined_df.dropna(subset=['date', 'progress_percent']).sort_values('date')
-                                if not df_time.empty:
-                                    df_time['cumulative'] = df_time['progress_percent'].cumsum()
-                                    fig_line = px.line(df_time, x='date', y='cumulative',
-                                                       title='Cumulative Progress Over Time',
-                                                       template='plotly_dark')
-                                    fig_line.update_layout(paper_bgcolor='#0d1a35', plot_bgcolor='#0d1a35', font_color='white')
-
-                        progress_charts.clear()
-                        with progress_charts:
-                            ui.label('📈 Charts').classes('text-xl font-bold text-white mb-2')
-                            chart_grid = ui.row().classes('w-full gap-4')
-                            with chart_grid:
-                                if fig_bar:
-                                    ui.plotly(fig_bar).classes('w-full md:w-1/2')
-                                if fig_scatter:
-                                    ui.plotly(fig_scatter).classes('w-full md:w-1/2')
-                                if fig_pie:
-                                    ui.plotly(fig_pie).classes('w-full md:w-1/2')
-                                if fig_line:
-                                    ui.plotly(fig_line).classes('w-full md:w-1/2')
-
-                        # Generate overview (now async)
-                        overview_text = await generate_progress_overview(
-                            combined_df,
-                            start_date.value.strftime('%Y-%m-%d') if start_date.value else 'N/A',
-                            end_date.value.strftime('%Y-%m-%d') if end_date.value else 'N/A',
-                            description_input.value
-                        )
-                        progress_overview.clear()
-                        with progress_overview:
-                            ui.label('📝 AI Overview').classes('text-xl font-bold text-white mb-2')
-                            ui.markdown(overview_text).classes('markdown-body')
-
-                        # Prepare PDF export
-                        pdf_data = {
-                            'df': combined_df,
-                            'fig_bar': fig_bar,
-                            'fig_scatter': fig_scatter,
-                            'fig_pie': fig_pie,
-                            'fig_line': fig_line,
-                            'overview': overview_text,
-                            'start_date': start_date.value,
-                            'end_date': end_date.value,
-                            'description': description_input.value
-                        }
-                        progress_export.clear()
-                        with progress_export:
-                            def download_progress_pdf():
-                                try:
-                                    pdf_bytes = generate_progress_pdf(
-                                        pdf_data,
-                                        engineer_input.value,
-                                        project_name_input.value,
-                                        logo_bytes_holder['bytes'],
-                                        ticket_input.value
-                                    )
-                                    ui.download(pdf_bytes, filename=f"Progress_Report_{ticket_input.value}.pdf")
-                                    ui.notify('PDF downloaded!', type='positive')
-                                except Exception as e:
-                                    ui.notify(f'PDF generation error: {str(e)}', type='negative')
-
-                            ui.button('Download Progress PDF', on_click=download_progress_pdf).classes('primary-btn')
-
-                    except Exception as e:
-                        progress_output.clear()
-                        with progress_output:
-                            ui.notify(f'Analysis failed: {str(e)}', type='negative')
-                            ui.label(f'Error: {str(e)}').classes('text-red-400')
-
-                ui.button('Run AI Analysis', on_click=run_progress_analysis).classes('primary-btn mt-4')
-
-        # ---------------- FOOTER ----------------
-        ui.html('''
-        <div class="app-footer">
-            <b>Multi-Standard Engineering Quality Assurance Portal</b> &nbsp;|&nbsp; Automated compliance verification across ECP 203, ECP 202, ECP 104, ASTM, AASHTO, BS, EN, and ISO standards.<br>
-            <b>Official Direct Contacts:</b>
-            LinkedIn: <a href="https://www.linkedin.com/in/mohamed-abd-al-aty-a326a1214/" target="_blank">Mohamed Abd Al Aty</a> &nbsp;|&nbsp;
-            Email: <a href="mailto:mohamedabdalaty63@gmail.com">mohamedabdalaty63@gmail.com</a><br>
-            <i>Specialized in QA/QC, Civil Engineering Standards &amp; Automated Compliance.</i> &copy; 2026 Eng. Mohamed Abd Al Aty. All rights reserved.<br>
-            <span style="color: #FFFFFF; font-weight: 600;">Disclaimer:</span> These AI modules have high accuracy and are specified for the Egyptian codes, but results should be rechecked by a qualified engineer before any decision-making.
-        </div>
-        ''')
-
-
-            # ==============================================================
-            # TAB 7: PROGRESS TRACKER (FIXED – no label on upload/date)
+            # TAB 7: PROGRESS TRACKER (FIXED)
             # ==============================================================
             with ui.tab_panel(t_progress):
                 ui.label('📊 Project Progress Tracker').classes('text-2xl font-bold text-white mb-4')
@@ -2886,11 +2638,54 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
 
                 ui.button('Run AI Analysis', on_click=run_progress_analysis).classes('primary-btn mt-4')
 
-ui.run(
-    host='0.0.0.0',
-    port=int(os.environ.get('PORT', 8080)),
-    title='Multi-Standard Engineering Auditor',
-    favicon='🏗️',
-    reload=False,
-    reconnect_timeout=30.0,
-)
+        # ---------------- FOOTER ----------------
+        ui.html('''
+        <div class="app-footer">
+            <b>Multi-Standard Engineering Quality Assurance Portal</b> &nbsp;|&nbsp; Automated compliance verification across ECP 203, ECP 202, ECP 104, ASTM, AASHTO, BS, EN, and ISO standards.<br>
+            <b>Official Direct Contacts:</b>
+            LinkedIn: <a href="https://www.linkedin.com/in/mohamed-abd-al-aty-a326a1214/" target="_blank">Mohamed Abd Al Aty</a> &nbsp;|&nbsp;
+            Email: <a href="mailto:mohamedabdalaty63@gmail.com">mohamedabdalaty63@gmail.com</a><br>
+            <i>Specialized in QA/QC, Civil Engineering Standards &amp; Automated Compliance.</i> &copy; 2026 Eng. Mohamed Abd Al Aty. All rights reserved.<br>
+            <span style="color: #FFFFFF; font-weight: 600;">Disclaimer:</span> These AI modules have high accuracy and are specified for the Egyptian codes, but results should be rechecked by a qualified engineer before any decision-making.
+        </div>
+        ''')
+
+
+# =====================================================================================
+# PROGRESS PDF GENERATION (custom function)
+# =====================================================================================
+def generate_progress_pdf(pdf_data, engineer_name, project_name, logo_bytes, ticket_id):
+    """Generate a custom PDF report for the Progress Tracker."""
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=MARGIN, leftMargin=MARGIN,
+                             topMargin=MARGIN, bottomMargin=MARGIN)
+    styles = build_pdf_styles()
+    story = []
+
+    unique_uid = f"PROGRESS-{uuid.uuid4().hex[:8].upper()}"
+    qr_buf = generate_qr_code(f"UID: {unique_uid} | Progress Report - {project_name}")
+
+    title_style = ParagraphStyle("DocTitle", fontSize=14, textColor=colors.HexColor("#1B2A4A"),
+                                  spaceAfter=3, fontName="Helvetica-Bold", leading=17)
+    sub_style = ParagraphStyle("DocSub", fontSize=9, textColor=colors.HexColor("#B45309"),
+                                spaceAfter=6, fontName="Helvetica-Bold")
+    meta_style = ParagraphStyle("MetaStyle", fontSize=8, textColor=colors.HexColor("#334155"),
+                                 leading=11.5, fontName="Helvetica")
+
+    company_name = "Smart Egypt Civil AI"  # you can change this
+    start_str = pdf_data['start_date'].strftime('%Y-%m-%d') if pdf_data['start_date'] else 'N/A'
+    end_str = pdf_data['end_date'].strftime('%Y-%m-%d') if pdf_data['end_date'] else 'N/A'
+    meta_html = f"""
+    <b>Company:</b> {company_name} &nbsp;|&nbsp; <b>Project:</b> {project_name}<br/>
+    <b>Engineer in Charge:</b> {engineer_name} &nbsp;|&nbsp; <b>Date Range:</b> {start_str} to {end_str}<br/>
+    <b>Phase:</b> {pdf_data['description']}<br/>
+    <b>Report UID:</b> <font color="#CC0000"><b>{unique_uid}</b></font>
+    """
+    right_cell = ReportLabImage(io.BytesIO(logo_bytes), width=70, height=32) if logo_bytes else ""
+    try:
+        header_table_data = [
+            [Paragraph(f"<b>PROGRESS TRACKING REPORT</b>", title_style), right_cell],
+            [Paragraph("Consolidated Progress Summary", sub_style), ""],
+            [Paragraph(meta_html, meta_style), ""],
+        ]
+        t_head = Table(header_table_data, colWidths=[USABLE_WIDTH
