@@ -23,7 +23,7 @@ from nicegui import app, ui, run
 
 from google import genai
 from google.genai import types
-
+from urllib.parse import quote_plus
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
@@ -36,6 +36,236 @@ from reportlab.platypus import (
     TableStyle,
     Image as ReportLabImage,
 )
+
+# ----- constants defined FIRST so they're available to all functions -----
+RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY", "").strip()
+JSEARCH_HOST = "jsearch.p.rapidapi.com"
+REQUEST_TIMEOUT = 15
+
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept-Language": "en-US,en;q=0.9,ar;q=0.8",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+}
+
+# ---------------------------------------------------------------------------
+# PRIMARY SOURCE: JSearch (RapidAPI) – bypasses Cloudflare/WAF.
+# ---------------------------------------------------------------------------
+def scrape_jsearch(query, max_results=20):
+    jobs = []
+    if not RAPIDAPI_KEY:
+        print("[scraper][JSearch] No RAPIDAPI_KEY set – skipping.")
+        return jobs
+    try:
+        resp = requests.get(
+            f"https://{JSEARCH_HOST}/search",
+            headers={
+                "X-RapidAPI-Key": RAPIDAPI_KEY,
+                "X-RapidAPI-Host": JSEARCH_HOST,
+            },
+            params={
+                "query": f"{query} in Egypt",
+                "page": "1",
+                "num_pages": "1",
+                "country": "eg",
+                "engine": "google_jobs",   # explicitly request Google Jobs
+            },
+            timeout=REQUEST_TIMEOUT,
+        )
+        print(f"[scraper][JSearch] status={resp.status_code}, len={len(resp.text)}")
+        if resp.status_code != 200:
+            print(f"[scraper][JSearch] error: {resp.text[:200]}")
+            return jobs
+        data = resp.json().get("data", [])
+        for item in data[:max_results]:
+            title = item.get("job_title")
+            if not title:
+                continue
+            company = item.get("employer_name") or "N/A"
+            city = item.get("job_city") or ""
+            country = item.get("job_country") or "Egypt"
+            location = ", ".join(p for p in [city, country] if p) or "Egypt"
+            desc = (item.get("job_description") or "No description available.")[:400]
+            url = item.get("job_apply_link") or item.get("job_google_link") or ""
+            source = item.get("job_publisher") or "JSearch"
+            if not url:
+                continue
+            jobs.append({
+                "title": title,
+                "company": company,
+                "location": location,
+                "description": desc,
+                "url": url,
+                "source": source,
+            })
+    except Exception as e:
+        print(f"[scraper][JSearch] exception: {e}")
+    print(f"[scraper] JSearch: {len(jobs)} jobs")
+    return jobs
+
+# ---------------------------------------------------------------------------
+# FALLBACK: direct scrapers (best effort – often blocked by Cloudflare)
+# ---------------------------------------------------------------------------
+def _get(url, label=""):
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+        print(f"[scraper] GET {url} -> status={resp.status_code}, len={len(resp.text)}")
+        if resp.status_code != 200:
+            preview = re.sub(r"\s+", " ", resp.text)[:200]
+            print(f"[scraper][{label}] non-200 body: {preview!r}")
+            return None
+        return BeautifulSoup(resp.text, "html.parser")
+    except Exception as e:
+        print(f"[scraper] request failed: {e}")
+        return None
+
+def scrape_wuzzuf(query, max_results=20):
+    jobs = []
+    url = f"https://wuzzuf.net/search/jobs/?q={quote_plus(query)}&a=hpb"
+    soup = _get(url, "Wuzzuf")
+    if soup is None:
+        return jobs
+    for a in soup.select('a[href*="/jobs/p/"]'):
+        href = a.get("href")
+        title = a.get_text(strip=True)
+        if not href or not title:
+            continue
+        full_url = href if href.startswith("http") else f"https://wuzzuf.net{href}"
+        card = a
+        for _ in range(6):
+            card = card.parent
+            if card is None:
+                break
+            if len(card.find_all("a")) >= 2:
+                break
+        company, location, desc = "", "", ""
+        if card is not None:
+            company_link = card.find("a", href=re.compile(r"/employers/"))
+            company = company_link.get_text(strip=True) if company_link else ""
+            chunks = [t.get_text(strip=True) for t in card.find_all(["span", "div"]) if t.get_text(strip=True)]
+            chunks = [t for t in chunks if t not in (title, company)]
+            desc = " | ".join(dict.fromkeys(chunks))[:400]
+        jobs.append({
+            "title": title,
+            "company": company or "N/A",
+            "location": location or "Egypt",
+            "description": desc or "No description preview.",
+            "url": full_url,
+            "source": "Wuzzuf",
+        })
+        if len(jobs) >= max_results:
+            break
+    print(f"[scraper] Wuzzuf: {len(jobs)} jobs")
+    return jobs
+
+def scrape_bayt(query, max_results=20):
+    jobs = []
+    slug = quote_plus(query.replace(" ", "-"))
+    url = f"https://www.bayt.com/en/egypt/jobs/{slug}-jobs/"
+    soup = _get(url, "Bayt")
+    if soup is None:
+        return jobs
+    cards = soup.select('li[id^="job_"]') or soup.select("div.has-pointer-d")
+    for card in cards[:max_results]:
+        a = card.find("h2") and card.find("h2").find("a")
+        if not a:
+            a = card.find("a", href=re.compile(r"/job/"))
+        if not a:
+            continue
+        title = a.get_text(strip=True)
+        href = a.get("href")
+        full_url = href if href.startswith("http") else f"https://www.bayt.com{href}"
+        company_el = card.select_one("div.t-nowrap.p10l.p10r.t-mute, .jb-company")
+        company = company_el.get_text(strip=True) if company_el else "N/A"
+        loc_el = card.select_one(".t-mute.t-small")
+        location = loc_el.get_text(strip=True) if loc_el else "Egypt"
+        desc_el = card.select_one("p")
+        desc = desc_el.get_text(strip=True) if desc_el else "No description."
+        jobs.append({"title": title, "company": company, "location": location, "description": desc, "url": full_url, "source": "Bayt"})
+    print(f"[scraper] Bayt: {len(jobs)} jobs")
+    return jobs
+
+def scrape_forasna(query, max_results=15):
+    jobs = []
+    url = f"https://forasna.com/jobs-in-egypt/?s={quote_plus(query)}"
+    soup = _get(url, "Forasna")
+    if soup is None:
+        return jobs
+    for art in (soup.select("article") or soup.select(".job-listing, .job_listing"))[:max_results]:
+        a = art.find("a", href=True)
+        if not a:
+            continue
+        title = a.get_text(strip=True) or (art.find("h2") and art.find("h2").get_text(strip=True)) or ""
+        if not title:
+            continue
+        href = a["href"]
+        full_url = href if href.startswith("http") else f"https://forasna.com{href}"
+        desc = art.find("p")
+        desc = desc.get_text(strip=True) if desc else "No description."
+        jobs.append({"title": title, "company": "N/A", "location": "Egypt", "description": desc, "url": full_url, "source": "Forasna"})
+    print(f"[scraper] Forasna: {len(jobs)} jobs")
+    return jobs
+
+def scrape_akhtaboot(query, max_results=15):
+    jobs = []
+    url = f"https://www.akhtaboot.com/en/jobs-in-egypt?keywords={quote_plus(query)}"
+    soup = _get(url, "Akhtaboot")
+    if soup is None:
+        return jobs
+    for card in (soup.select("div.job-item, div.job-card, li.job"))[:max_results]:
+        a = card.find("a", href=True)
+        if not a:
+            continue
+        title = a.get_text(strip=True)
+        if not title:
+            continue
+        href = a["href"]
+        full_url = href if href.startswith("http") else f"https://www.akhtaboot.com{href}"
+        company_el = card.select_one(".company, .job-company")
+        company = company_el.get_text(strip=True) if company_el else "N/A"
+        loc_el = card.select_one(".location, .job-location")
+        location = loc_el.get_text(strip=True) if loc_el else "Egypt"
+        desc_el = card.find("p")
+        desc = desc_el.get_text(strip=True) if desc_el else "No description."
+        jobs.append({"title": title, "company": company, "location": location, "description": desc, "url": full_url, "source": "Akhtaboot"})
+    print(f"[scraper] Akhtaboot: {len(jobs)} jobs")
+    return jobs
+
+def scrape_jobs(query, location=""):
+    full_query = f"{query} {location}".strip() if location else query
+    all_jobs = []
+
+    # 1. Primary: JSearch (requires RAPIDAPI_KEY)
+    try:
+        all_jobs.extend(scrape_jsearch(full_query))
+    except Exception as e:
+        print(f"[scraper] JSearch error: {e}")
+
+    # 2. Fallback: direct scrapers (if JSearch returns nothing)
+    if not all_jobs:
+        print("[scraper] JSearch returned empty – trying direct scrapers.")
+        for scraper in (scrape_wuzzuf, scrape_bayt, scrape_forasna, scrape_akhtaboot):
+            try:
+                all_jobs.extend(scraper(full_query))
+            except Exception as e:
+                print(f"[scraper] {scraper.__name__} error: {e}")
+
+    # Deduplicate and prioritise Wuzzuf-sourced jobs
+    seen = set()
+    deduped = []
+    for job in all_jobs:
+        if job["url"] in seen:
+            continue
+        seen.add(job["url"])
+        deduped.append(job)
+    deduped.sort(key=lambda j: 0 if j["source"] == "Wuzzuf" else 1)
+
+    print(f"[scraper] TOTAL jobs: {len(deduped)}")
+    return deduped
+
 
 load_dotenv()
 api_key = os.getenv("GEMINI_API_KEY")
@@ -2437,419 +2667,72 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import quote_plus
 
-"""
-job_scraper.py
-==============
-Drop-in replacement for `scrape_jobs()` used by the NiceGUI Job Board tab.
+            # =========================================================================
+            # TAB 6: JOB BOARD (FIXED)
+            # =========================================================================
+            with ui.tab_panel(t_jobs):
+                ui.label('Engineering Job Board - Egypt').classes('text-2xl font-bold text-white mb-4')
+                ui.markdown('Search for the latest engineering jobs in Egypt. Results are powered by **JSearch** (RapidAPI) – no Cloudflare blocking. Fallback to direct scrapers if the API key is not set.').classes('markdown-body mb-2')
 
-Sources (in priority order — Wuzzuf results are always listed first):
-    1. Wuzzuf   (primary)
-    2. Bayt     (fallback)
-    3. Forasna  (extra)
-    4. Akhtaboot (extra)
+                # Search & location inputs
+                with ui.row().classes('w-full gap-4 mb-4'):
+                    search_input = ui.input(label='Search for jobs', placeholder='e.g., Civil Engineer', value='Civil Engineer').classes('flex-1')
+                    location_input = ui.input(label='Location (optional)', placeholder='e.g., Cairo').classes('flex-1')
+                    search_button = ui.button('Search Jobs', on_click=lambda: search_jobs()).classes('primary-btn')
 
-Design notes / why the old version likely returned nothing:
---------------------------------------------------------------
-- Wuzzuf's frontend is built with a CSS-in-JS library (emotion/styled-
-  components), so class names like `css-1gatmva` are randomly hashed and
-  change on every deploy. Any scraper that hardcodes those class names
-  breaks the moment Wuzzuf ships a new build. This version instead anchors
-  on STABLE structural signals — the `<a href="...">` patterns each site
-  uses for job postings (e.g. `/jobs/p/` on Wuzzuf) — which survive CSS
-  rebuilds.
-- Cloud hosts (Render, Heroku, etc.) use shared/datacenter IPs. Some sites
-  are stricter with non-browser-looking traffic, so a realistic
-  `User-Agent` + `Accept-Language` header is included on every request.
-- Each source is wrapped in its own try/except so one site failing (layout
-  change, timeout, block) doesn't wipe out the other sources' results.
-- Debug logging (`print(...)`) is included so you can see exactly what
-  happened in your Render logs (status code, HTML length, cards found)
-  instead of silently getting an empty list.
+                # Filter input
+                filter_input = ui.input(label='Filter results', placeholder='Type to filter title, company, description...', on_change=lambda: filter_jobs()).classes('w-full mb-2')
 
-IMPORTANT CAVEAT
------------------
-I could not test this against the live sites (this environment has no
-outbound network access), so selectors are based on each site's typical
-HTML structure. Websites change their markup over time. If a source stops
-returning results:
-  1. Check the printed debug line for that source — status code 200 with
-     0 cards found means the SELECTOR is stale, not the network.
-  2. A non-200 status (403/429) usually means you're being rate-limited or
-     blocked — try adding a delay between requests, or rotating the
-     User-Agent.
-  3. Open the search URL in an incognito browser tab, view-source, and
-     search for a snippet of a job title to see the current wrapping tags.
-"""
+                # Container for results
+                results_container = ui.column().classes('w-full')
+                jobs_data = []  # current job list
 
-import os
-import re
-import requests
-from bs4 import BeautifulSoup
-from urllib.parse import quote_plus
+                def display_jobs(jobs, filter_text=''):
+                    """Render job cards with client‑side filtering."""
+                    results_container.clear()
+                    with results_container:
+                        if not jobs:
+                            ui.label('No jobs found. Try a different search, or ensure RAPIDAPI_KEY is set.').classes('text-white')
+                            return
+                        filtered = jobs
+                        if filter_text:
+                            f_lower = filter_text.lower()
+                            filtered = [j for j in jobs if f_lower in j['title'].lower() or f_lower in j['company'].lower() or f_lower in j['description'].lower()]
+                        if not filtered:
+                            ui.label('No jobs match the filter.').classes('text-white')
+                            return
+                        for job in filtered:
+                            with ui.card().classes('w-full bg-[#0d1a35] border border-[#2c3f6b] rounded-lg p-3 mb-2'):
+                                with ui.row().classes('w-full justify-between'):
+                                    ui.label(job['title']).classes('text-lg font-bold text-white')
+                                    ui.label(job['company']).classes('text-sm text-[#A9B6D0]')
+                                ui.label(job['location']).classes('text-sm text-[#A9B6D0]')
+                                desc = job['description'][:200] + ('...' if len(job['description']) > 200 else '')
+                                ui.label(desc).classes('text-sm text-white mt-1')
+                                ui.link('View Job', job['url'], new_tab=True).classes('text-[#4FC3F7] hover:text-[#FF8C00]')
 
-# ---------------------------------------------------------------------------
-# PRIMARY SOURCE: JSearch (RapidAPI), built on Google for Jobs.
-#
-# Why this exists: Wuzzuf, Bayt, and Forasna are protected by Cloudflare /
-# Akamai-style bot management (confirmed via Render logs — they return
-# "Just a moment..." Cloudflare challenge pages, not real job HTML). No
-# amount of header-spoofing in a plain `requests` scraper gets past that.
-# JSearch already indexes Bayt directly and, via Google for Jobs' own
-# crawling, surfaces postings from Wuzzuf/Forasna/Akhtaboot/etc. too — so
-# it sidesteps the anti-bot problem entirely instead of fighting it.
-#
-# Get a free key at: https://rapidapi.com/letscrape-6bRBa3QguO5/api/jsearch
-# Then set the RAPIDAPI_KEY environment variable on Render.
-# ---------------------------------------------------------------------------
-RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY", "").strip()
-JSEARCH_HOST = "jsearch.p.rapidapi.com"
+                def filter_jobs():
+                    display_jobs(jobs_data, filter_input.value.strip())
 
+                async def search_jobs():
+                    query = search_input.value.strip()
+                    if not query:
+                        ui.notify('Please enter a search term.', type='warning')
+                        return
+                    location = location_input.value.strip()
+                    if location:
+                        query += f' {location}'
+                    ui.notify(f'Searching for "{query}"...', type='info')
+                    results_container.clear()
+                    with results_container:
+                        ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
+                        ui.label('Fetching job listings...').classes('self-center text-sm')
 
-def scrape_jsearch(query, max_results=20):
-    """Primary source. Returns [] (not an exception) if no key is set or
-    the call fails, so callers can safely fall back to direct scraping."""
-    jobs = []
-    if not RAPIDAPI_KEY:
-        print("[scraper][JSearch] No RAPIDAPI_KEY set — skipping primary source.")
-        return jobs
-    print(f"[scraper][JSearch] Using key: length={len(RAPIDAPI_KEY)}, last4='{RAPIDAPI_KEY[-4:]}'")
-    try:
-        resp = requests.get(
-            f"https://{JSEARCH_HOST}/search",
-            headers={
-                "X-RapidAPI-Key": RAPIDAPI_KEY,
-                "X-RapidAPI-Host": JSEARCH_HOST,
-            },
-            params={
-                "query": f"{query} in Egypt",
-                "page": "1",
-                "num_pages": "1",
-                "country": "eg",
-            },
-            timeout=REQUEST_TIMEOUT,
-        )
-        print(f"[scraper][JSearch] status={resp.status_code}, len={len(resp.text)}")
-        if resp.status_code != 200:
-            print(f"[scraper][JSearch] body preview: {resp.text[:300]!r}")
-            return jobs
-        data = resp.json().get("data", [])
-        for item in data[:max_results]:
-            title = item.get("job_title", "")
-            if not title:
-                continue
-            company = item.get("employer_name") or "N/A"
-            city = item.get("job_city") or ""
-            country = item.get("job_country") or "Egypt"
-            location_txt = ", ".join(p for p in [city, country] if p)
-            desc = (item.get("job_description") or "No description available.")[:400]
-            url = item.get("job_apply_link") or item.get("job_google_link") or ""
-            source = item.get("job_publisher") or "JSearch"
-            if not url:
-                continue
-            jobs.append({
-                "title": title,
-                "company": company,
-                "location": location_txt or "Egypt",
-                "description": desc,
-                "url": url,
-                "source": source,
-            })
-    except Exception as e:
-        print(f"[scraper][JSearch] request failed: {e}")
-    print(f"[scraper] JSearch: {len(jobs)} jobs parsed")
-    return jobs
-
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-    ),
-    "Accept-Language": "en-US,en;q=0.9,ar;q=0.8",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-}
-
-REQUEST_TIMEOUT = 15
-
-
-def _get(url, debug_label=""):
-    """Shared GET with logging. Returns BeautifulSoup or None."""
-    try:
-        resp = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
-        print(f"[scraper] GET {url} -> status={resp.status_code}, len={len(resp.text)}")
-        if resp.status_code != 200:
-            # Print a short preview so we can tell a WAF/challenge page apart
-            # from a genuine (but selector-mismatched) response.
-            preview = re.sub(r"\s+", " ", resp.text)[:300]
-            print(f"[scraper][{debug_label}] non-200 body preview: {preview!r}")
-            return None
-        soup = BeautifulSoup(resp.text, "html.parser")
-        return soup
-    except Exception as e:
-        print(f"[scraper] request failed for {url}: {e}")
-        return None
-
-
-def _debug_dump_if_empty(soup, label, count, keyword=None):
-    """When a 200 response parses to 0 jobs, dump a snippet around a
-    likely keyword (e.g. 'job') so we can see the real markup structure
-    and fix the selector, instead of guessing blind."""
-    if count > 0 or soup is None:
-        return
-    text = str(soup)
-    idx = text.lower().find((keyword or "job").lower())
-    snippet = text[max(0, idx - 200):idx + 500] if idx != -1 else text[:700]
-    print(f"[scraper][{label}] 0 jobs parsed from a 200 response. HTML snippet:\n{snippet}")
-
-
-def scrape_wuzzuf(query, max_results=20):
-    jobs = []
-    url = f"https://wuzzuf.net/search/jobs/?q={quote_plus(query)}&a=hpb"
-    soup = _get(url, debug_label="Wuzzuf")
-    if soup is None:
-        return jobs
-
-    # Job title links always point to /jobs/p/<id>-... regardless of CSS build.
-    title_links = soup.select('a[href*="/jobs/p/"]')
-    seen_urls = set()
-
-    for a in title_links:
-        href = a.get("href", "")
-        title = a.get_text(strip=True)
-        if not href or not title or href in seen_urls:
-            continue
-        seen_urls.add(href)
-
-        full_url = href if href.startswith("http") else f"https://wuzzuf.net{href}"
-
-        # Walk up to the nearest ancestor that looks like a job card
-        # (has more than one link inside it, e.g. company + title).
-        card = a
-        for _ in range(6):
-            card = card.parent
-            if card is None:
-                break
-            if len(card.find_all("a")) >= 2:
-                break
-
-        company, location_txt, desc = "", "", ""
-        if card is not None:
-            company_link = card.find("a", href=re.compile(r"/employers/"))
-            if company_link:
-                company = company_link.get_text(strip=True)
-            text_chunks = [
-                t.get_text(strip=True)
-                for t in card.find_all(["span", "div"])
-                if t.get_text(strip=True)
-            ]
-            # Filter out the title/company text we already captured, keep the rest as description
-            text_chunks = [t for t in text_chunks if t not in (title, company)]
-            desc = " | ".join(dict.fromkeys(text_chunks))[:400]  # dedupe, keep order
-
-        jobs.append({
-            "title": title,
-            "company": company or "N/A",
-            "location": location_txt or "Egypt",
-            "description": desc or "No description preview available — click 'View Job' for details.",
-            "url": full_url,
-            "source": "Wuzzuf",
-        })
-        if len(jobs) >= max_results:
-            break
-
-    _debug_dump_if_empty(soup, "Wuzzuf", len(jobs), keyword="job")
-    print(f"[scraper] Wuzzuf: {len(jobs)} jobs parsed")
-    return jobs
-
-
-def scrape_bayt(query, max_results=20):
-    jobs = []
-    slug = quote_plus(query.replace(" ", "-"))
-    url = f"https://www.bayt.com/en/egypt/jobs/{slug}-jobs/"
-    soup = _get(url, debug_label="Bayt")
-    if soup is None:
-        return jobs
-
-    # Bayt job cards are <li> elements with an id starting with "job_"
-    cards = soup.select('li[id^="job_"]') or soup.select("div.has-pointer-d")
-
-    for card in cards[:max_results]:
-        a = card.find("h2") and card.find("h2").find("a")
-        if not a:
-            a = card.find("a", href=re.compile(r"/job/"))
-        if not a:
-            continue
-        title = a.get_text(strip=True)
-        href = a.get("href", "")
-        full_url = href if href.startswith("http") else f"https://www.bayt.com{href}"
-
-        company_el = card.select_one("div.t-nowrap.p10l.p10r.t-mute, .jb-company")
-        company = company_el.get_text(strip=True) if company_el else "N/A"
-
-        loc_el = card.select_one(".t-mute.t-small")
-        location_txt = loc_el.get_text(strip=True) if loc_el else "Egypt"
-
-        desc_el = card.select_one("p")
-        desc = desc_el.get_text(strip=True) if desc_el else "No description preview available."
-
-        jobs.append({
-            "title": title,
-            "company": company,
-            "location": location_txt,
-            "description": desc,
-            "url": full_url,
-            "source": "Bayt",
-        })
-
-    _debug_dump_if_empty(soup, "Bayt", len(jobs), keyword="job_")
-    print(f"[scraper] Bayt: {len(jobs)} jobs parsed")
-    return jobs
-
-
-def scrape_forasna(query, max_results=15):
-    jobs = []
-    url = f"https://forasna.com/jobs-in-egypt/?s={quote_plus(query)}"
-    soup = _get(url, debug_label="Forasna")
-    if soup is None:
-        return jobs
-
-    articles = soup.select("article") or soup.select(".job-listing, .job_listing")
-    for art in articles[:max_results]:
-        a = art.find("a", href=True)
-        if not a:
-            continue
-        title = a.get_text(strip=True) or (art.find("h2").get_text(strip=True) if art.find("h2") else "")
-        if not title:
-            continue
-        href = a["href"]
-        full_url = href if href.startswith("http") else f"https://forasna.com{href}"
-        desc_el = art.find("p")
-        desc = desc_el.get_text(strip=True) if desc_el else "No description preview available."
-
-        jobs.append({
-            "title": title,
-            "company": "N/A",
-            "location": "Egypt",
-            "description": desc,
-            "url": full_url,
-            "source": "Forasna",
-        })
-
-    _debug_dump_if_empty(soup, "Forasna", len(jobs), keyword="job")
-    print(f"[scraper] Forasna: {len(jobs)} jobs parsed")
-    return jobs
-
-
-def scrape_akhtaboot(query, max_results=15):
-    jobs = []
-    url = f"https://www.akhtaboot.com/en/jobs-in-egypt?keywords={quote_plus(query)}"
-    soup = _get(url, debug_label="Akhtaboot")
-    if soup is None:
-        return jobs
-
-    cards = soup.select("div.job-item, div.job-card, li.job")
-    for card in cards[:max_results]:
-        a = card.find("a", href=True)
-        if not a:
-            continue
-        title = a.get_text(strip=True)
-        if not title:
-            continue
-        href = a["href"]
-        full_url = href if href.startswith("http") else f"https://www.akhtaboot.com{href}"
-        company_el = card.select_one(".company, .job-company")
-        company = company_el.get_text(strip=True) if company_el else "N/A"
-        loc_el = card.select_one(".location, .job-location")
-        location_txt = loc_el.get_text(strip=True) if loc_el else "Egypt"
-        desc_el = card.find("p")
-        desc = desc_el.get_text(strip=True) if desc_el else "No description preview available."
-
-        jobs.append({
-            "title": title,
-            "company": company,
-            "location": location_txt,
-            "description": desc,
-            "url": full_url,
-            "source": "Akhtaboot",
-        })
-
-    _debug_dump_if_empty(soup, "Akhtaboot", len(jobs), keyword="job")
-    print(f"[scraper] Akhtaboot: {len(jobs)} jobs parsed")
-    return jobs
-
-
-def scrape_jobs(query, location=""):
-    """
-    Main entry point — call this exactly like before:
-        jobs = await run.io_bound(scrape_jobs, query)
-
-    Returns a combined list of job dicts, Wuzzuf results first, then Bayt,
-    then Forasna, then Akhtaboot. Each dict has:
-        title, company, location, description, url, source
-    """
-    full_query = f"{query} {location}".strip() if location else query
-    all_jobs = []
-
-    # 1. JSearch (primary) — indexes Bayt directly and, via Google for Jobs'
-    # own crawl, surfaces Wuzzuf/Forasna/Akhtaboot postings too, without
-    # hitting their Cloudflare/Akamai bot protection at all.
-    try:
-        all_jobs.extend(scrape_jsearch(full_query))
-    except Exception as e:
-        print(f"[scraper] JSearch top-level failure: {e}")
-
-    # 2-4. Direct scrapers, kept as a best-effort fallback only. Wuzzuf,
-    # Bayt, and Forasna are confirmed (via Render logs) to sit behind bot
-    # protection that returns a "Just a moment..." Cloudflare challenge —
-    # these calls will typically return [] and that's expected, not a bug.
-    if not all_jobs:
-        print("[scraper] JSearch returned nothing — falling back to direct scrapers.")
-        try:
-            all_jobs.extend(scrape_wuzzuf(full_query))
-        except Exception as e:
-            print(f"[scraper] Wuzzuf top-level failure: {e}")
-
-        try:
-            all_jobs.extend(scrape_bayt(full_query))
-        except Exception as e:
-            print(f"[scraper] Bayt top-level failure: {e}")
-
-        try:
-            all_jobs.extend(scrape_forasna(full_query))
-        except Exception as e:
-            print(f"[scraper] Forasna top-level failure: {e}")
-
-        try:
-            all_jobs.extend(scrape_akhtaboot(full_query))
-        except Exception as e:
-            print(f"[scraper] Akhtaboot top-level failure: {e}")
-
-    # De-dupe by URL while preserving source priority order (Wuzzuf first)
-    seen = set()
-    deduped = []
-    for job in all_jobs:
-        if job["url"] in seen:
-            continue
-        seen.add(job["url"])
-        deduped.append(job)
-
-    source_counts = {}
-    for j in deduped:
-        source_counts[j["source"]] = source_counts.get(j["source"], 0) + 1
-    print(f"[scraper] TOTAL after de-dup: {len(deduped)} jobs — by source: {source_counts}")
-
-    # Keep Wuzzuf-sourced postings on top regardless of which underlying
-    # call surfaced them (direct scrape or via JSearch's job_publisher field).
-    deduped.sort(key=lambda j: 0 if j["source"] == "Wuzzuf" else 1)
-
-    return deduped
-
-
-if __name__ == "__main__":
-    # Quick manual test — run `python job_scraper.py` locally (not on Render)
-    # to see debug output and confirm selectors still match live HTML.
-    results = scrape_jobs("Civil Engineer", "Cairo")
-    for r in results[:10]:
-        print(f"- [{r['source']}] {r['title']} @ {r['company']} ({r['location']}) -> {r['url']}")
+                    # Run the scraper in a separate thread (io_bound)
+                    jobs = await run.io_bound(scrape_jobs, query)
+                    jobs_data.clear()
+                    jobs_data.extend(jobs)
+                    display_jobs(jobs_data)
 
         # ---------------- FOOTER (unchanged) ----------------
         ui.html('''
