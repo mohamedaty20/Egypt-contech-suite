@@ -1552,7 +1552,7 @@ def get_processed_image(file_bytes, file_type, crop_percent=0):
 def main_page():
     ui.query('body').style('width: 100vw; height: 100vh; overflow-x: hidden;')
 
-    # ---------------- SIDEBAR (unchanged) ----------------
+    # ---------------- SIDEBAR ----------------
     sidebar = ui.left_drawer().classes('sidebar-container').style('width: 380px;')
     with sidebar:
         with ui.row().classes('w-full items-center justify-between mb-4 p-2'):
@@ -1561,28 +1561,27 @@ def main_page():
                 'bg-transparent text-white text-xl hover:text-[#FF8C00] p-1 min-w-[36px] !shadow-none !rounded-full !bg-transparent'
             ).style('font-size: 20px; line-height: 1;')
 
-        project_name_input = ui.input(label='Project Name', value='Highway Expansion Project').classes('w-full mb-3')
-        pour_location_input = ui.input(label='Structural Element / Chainage', value='Highway Section Ch. 12+500').classes('w-full mb-4')
+        project_name_input = ui.input('Project Name', value='Highway Expansion Project').classes('w-full mb-3')
+        pour_location_input = ui.input('Structural Element / Chainage', value='Highway Section Ch. 12+500').classes('w-full mb-4')
 
         ui.label('Governing Design Code Basis').classes('text-white font-bold text-sm mb-1')
         ui.markdown('By default every AI output in this app is generated strictly per **ECP 203 / ECP 202 / ECP 104**. Change this to switch the primary basis.').classes('text-xs text-[#A9B6D0] mb-2')
-        code_basis_select = ui.select(
-            label='Code Type (applies app-wide)',
+        code_basis_select = ui.select('Code Type (applies app-wide)',
             options=CODE_BASIS_OPTIONS,
             value=CODE_BASIS_OPTIONS[0],
         ).classes('w-full mb-4')
 
-        fcu_input = ui.number(label='Specified 28-Day Grade f_cu (N/mm2)', value=30.0, step=5.0).classes('w-full mb-4')
+        fcu_input = ui.number('Specified 28-Day Grade f_cu (N/mm2)', value=30.0, step=5.0).classes('w-full mb-4')
 
         ui.label('Batch Plant & Site Logs').classes('text-white font-bold text-sm mb-2')
-        truck_input = ui.input(label='Mixer Truck No.', value='TRK-104').classes('w-full mb-2')
-        ticket_input = ui.input(label='Batch Ticket ID', value='BT-99482').classes('w-full mb-4')
+        truck_input = ui.input('Mixer Truck No.', value='TRK-104').classes('w-full mb-2')
+        ticket_input = ui.input('Batch Ticket ID', value='BT-99482').classes('w-full mb-4')
 
         ui.label('Mix Design Parameters').classes('text-white font-bold text-sm mb-2')
-        cement_input = ui.input(label='Cement Content (kg/m3)', value='350.0').classes('w-full mb-2')
-        water_input = ui.input(label='Free Water Content (kg/m3)', value='150.0').classes('w-full mb-4')
+        cement_input = ui.input('Cement Content (kg/m3)', value='350.0').classes('w-full mb-2')
+        water_input = ui.input('Free Water Content (kg/m3)', value='150.0').classes('w-full mb-4')
 
-        engineer_input = ui.input(label='Engineer Name', value='Eng. Mohamed Abd Al Aty').classes('w-full mb-2')
+        engineer_input = ui.input('Engineer Name', value='Eng. Mohamed Abd Al Aty').classes('w-full mb-2')
 
         logo_status = ui.label('Logo: Not uploaded').classes('text-xs text-amber-400 mb-1')
         logo_bytes_holder = {'bytes': None}
@@ -1596,7 +1595,7 @@ def main_page():
             except Exception as ex:
                 ui.notify(f'Error reading logo: {str(ex)}', type='negative')
 
-        ui.upload(label='Upload Company Logo', auto_upload=True, on_upload=handle_logo_upload).props('flat dark').classes('w-full mb-2')
+        ui.upload('Upload Company Logo', auto_upload=True, on_upload=handle_logo_upload).props('flat dark').classes('w-full mb-2')
 
     ui.button('☰', on_click=sidebar.toggle).classes(
         'fixed top-4 left-4 z-50 bg-[#10203f] text-white border border-[#FF8C00] p-3 rounded-full shadow-lg hover:bg-[#1a2a4a]'
@@ -1614,7 +1613,7 @@ def main_page():
 
     # ---------------- MAIN COLUMN ----------------
     with ui.column().classes('w-full min-h-screen p-4 bg-[#031338]'):
-        # Title block (unchanged)
+        # Title block
         with ui.column().classes('w-full bg-[#0d1a35] px-6 py-4 rounded-xl border border-[#FF8C00] shadow-lg mb-4'):
             ui.label('SMART EGY-CIVIL AI AUDITOR').classes('main-title text-white')
             ui.label('Intelligent General Civil, Geotechnical & Structural Compliance Engine').classes('sub-title text-lg font-medium mt-1')
@@ -1633,7 +1632,7 @@ def main_page():
         </div>
         ''')
 
-        # Tabs (unchanged)
+        # Tabs
         with ui.tabs().classes('w-full text-white bg-[#0d1a35] rounded-lg') as tabs:
             t_dash = ui.tab('Concrete Cube Verifier').classes('text-white font-bold')
             t_audit = ui.tab('AI Multi-Standard Auditor').classes('text-white font-bold')
@@ -1644,7 +1643,7 @@ def main_page():
         with ui.tab_panels(tabs, value=t_dash).classes('w-full bg-transparent mt-4'):
 
             # =========================================================================
-            # TAB 1: CONCRETE CUBE VERIFIER (restored)
+            # TAB 1: CONCRETE CUBE VERIFIER
             # =========================================================================
             with ui.tab_panel(t_dash):
                 ui.label('Concrete Cube Calculation Sheet & Statistical Verifier').classes('text-2xl font-bold text-white mb-4')
@@ -1843,8 +1842,7 @@ REQUIRED REPORT STRUCTURE:
                         with result_output_area:
                             ui.notify(f'Calculation Error: {str(ex)}', type='negative')
 
-                stage_selector = ui.select(
-                    label='Select Stage Display Filter',
+                stage_selector = ui.select('Select Stage Display Filter',
                     options=['All Stages', '7-Day Stage', '14-Day Stage', '28-Day Stage'],
                     value='All Stages',
                     on_change=run_verification,
@@ -1860,14 +1858,14 @@ REQUIRED REPORT STRUCTURE:
                     ui.markdown('*Click "Run AI Statistical Calculation & Verification" to generate the report.*').classes('text-sm text-[#A9B6D0]')
 
             # =========================================================================
-            # TAB 2: AI MULTI-STANDARD AUDITOR (restored)
+            # TAB 2: AI MULTI-STANDARD AUDITOR
             # =========================================================================
             with ui.tab_panel(t_audit):
                 ui.label('AI Multi-Standard Engineering Auditor').classes('text-2xl font-bold text-white mb-2')
                 ui.markdown('Upload a specification, mix design, or site report to audit against the selected code basis.').classes('markdown-body mb-2')
 
                 audit_focus = ui.select(
-                    label='Audit Focus',
+                    'Audit Focus',
                     options=[
                         "Multi-Standard Structural & Geotechnical Compliance",
                         "Roads, Pavements & Subgrade Materials (ECP 104 & AASHTO)",
@@ -1892,7 +1890,7 @@ REQUIRED REPORT STRUCTURE:
                     except Exception as ex:
                         ui.notify(f'Error reading file: {str(ex)}', type='negative')
 
-                ui.upload(label='Select PDF or Image File', auto_upload=True, on_upload=handle_audit_upload).props('flat dark').classes('w-full mb-4')
+                ui.upload('Select PDF or Image File', auto_upload=True, on_upload=handle_audit_upload).props('flat dark').classes('w-full mb-4')
 
                 audit_output_container = ui.column().classes('w-full')
                 audit_export_container = ui.row().classes('w-full gap-4 mt-4')
@@ -1979,7 +1977,7 @@ report with clear ## section headings and real Markdown tables for any comparati
                 ui.button('Execute AI Audit & Compliance Check', on_click=run_ai_audit).classes('primary-btn')
 
             # =========================================================================
-            # TAB 3: DEFECT DIAGNOSTIC (restored)
+            # TAB 3: DEFECT DIAGNOSTIC
             # =========================================================================
             with ui.tab_panel(t_defect):
                 ui.label('AI Engineering Defect Diagnostic & Repair Protocol').classes('text-2xl font-bold text-white mb-2')
@@ -1988,7 +1986,7 @@ report with clear ## section headings and real Markdown tables for any comparati
                 defect_status_label = ui.label('Status: No file uploaded yet').classes('text-xs text-amber-400 font-semibold mb-2')
                 defect_file_data = {'bytes': None, 'type': None}
                 defect_result_holder = {'text': ''}
-                defect_user_message = ui.input(label='Describe the defect or additional context (optional)',
+                defect_user_message = ui.input('Describe the defect or additional context (optional)',
                                                placeholder='e.g., "Cracks near column base with spalling concrete"').classes('w-full mb-3')
 
                 async def handle_defect_upload(e):
@@ -2002,7 +2000,7 @@ report with clear ## section headings and real Markdown tables for any comparati
                     except Exception as ex:
                         ui.notify(f'Error reading file: {str(ex)}', type='negative')
 
-                ui.upload(label='Select Site Defect Photo or PDF', auto_upload=True, on_upload=handle_defect_upload).props('flat dark').classes('w-full mb-4')
+                ui.upload('Select Site Defect Photo or PDF', auto_upload=True, on_upload=handle_defect_upload).props('flat dark').classes('w-full mb-4')
                 defect_output = ui.column().classes('w-full')
                 defect_export_area = ui.row().classes('w-full gap-4 mt-4')
 
@@ -2099,7 +2097,7 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                 ui.button('Diagnose Defect & Get Repair Protocol', on_click=run_defect_diagnosis).classes('primary-btn')
 
             # =========================================================================
-            # TAB 4: AI CHATBOT (restored)
+            # TAB 4: AI CHATBOT
             # =========================================================================
             with ui.tab_panel(t_chat):
                 ui.label('Core-Code Intelligent Assistant Chatbot').classes('text-2xl font-bold text-white mb-2')
@@ -2118,498 +2116,3 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                                 label_class = 'assistant' if is_ai else 'user'
                                 ui.label(role_label).classes(f'role-label {label_class}')
                                 ui.markdown(msg['content']).classes('content markdown-body')
-
-                render_chat()
-                user_msg = ui.input(placeholder='Type your engineering question here...').classes('w-full mb-2')
-                user_msg.on('keydown.enter', lambda: send_chat())
-
-                async def send_chat():
-                    q = user_msg.value
-                    if not q or not q.strip():
-                        return
-                    chat_messages.append({"role": "user", "content": q})
-                    user_msg.value = ''
-                    render_chat()
-
-                    if not client:
-                        chat_messages.append({"role": "assistant", "content": "GEMINI_API_KEY is not configured."})
-                        render_chat()
-                        return
-
-                    try:
-                        basis = code_basis_select.value
-                        system_prompt = (
-                            "You are an elite Senior Civil, Geotechnical, and Structural Quality Engineering Expert "
-                            "acting as a master multi-standard technical assistant.\n\n"
-                            f"{get_code_directive(basis)}\n\n{NO_LATEX_RULE}\n\n"
-                            "UNIT SYSTEM: Use strictly METRIC (SI) units (mm, cm, m, MPa, kN, kg/m3, C)."
-                        )
-                        cleaned_response = await call_gemini(q, system_instruction=system_prompt, timeout=240)
-                        chat_messages.append({"role": "assistant", "content": cleaned_response})
-                    except Exception as e:
-                        chat_messages.append({"role": "assistant", "content": f"Error: {str(e)}"})
-                    render_chat()
-
-                with ui.row().classes('w-full gap-4 mt-2'):
-                    ui.button('Send Query', on_click=send_chat).classes('primary-btn flex-1')
-
-                    def download_chat_pdf():
-                        try:
-                            meta = current_meta('CHAT')
-                            styles = build_pdf_styles()
-                            flowables = []
-                            for m in chat_messages:
-                                role_label = "ASSISTANT" if m['role'] == 'assistant' else "USER"
-                                flowables.append(Paragraph(role_label, styles['h3']))
-                                flowables.extend(markdown_to_pdf_flowables(m['content'], styles))
-                                flowables.append(Spacer(1, 4))
-                            pdf_bytes = build_report_pdf(
-                                "AI ENGINEERING ASSISTANT TRANSCRIPT",
-                                "Official Q&A Consultation Record",
-                                "", meta, logo_bytes_holder['bytes'],
-                                extra_flowables_before_body=flowables,
-                            )
-                            ui.download(pdf_bytes, filename=f"AI_Chat_Transcript_{ticket_input.value}.pdf")
-                            ui.notify('Chat Transcript PDF downloaded!', type='positive')
-                        except Exception as ex:
-                            ui.notify(f'PDF Export Error: {str(ex)}', type='negative')
-
-                    ui.button('Download Chat PDF Transcript', on_click=download_chat_pdf).classes('primary-btn flex-1')
-
-            # =========================================================================
-            # TAB 5: PROFESSIONAL BOQ TAKEOFF (IMPROVED WITH PREPROCESSING)
-            # =========================================================================
-            with ui.tab_panel(t_boq):
-                ui.label('Professional AI BOQ Takeoff & Cost Estimation').classes('text-2xl font-bold text-white mb-2')
-                ui.markdown('Upload a structural plan (PDF, JPG, PNG). The AI will extract column data.').classes('markdown-body mb-2')
-                ui.markdown('*PDFs are converted to high‑quality PNGs (2000px width) for consistent accuracy.*').classes('text-xs text-yellow-400 mb-4')
-
-                # Global Parameters
-                with ui.column().classes('input-card w-full mb-4'):
-                    ui.label('Global Parameters').classes('text-lg font-bold text-white')
-                    with ui.row().classes('w-full gap-4'):
-                        floor_height_global = ui.number(label='Floor Height (mm)', value=3000, step=100).classes('w-1/2')
-                        use_floor_height_check = ui.checkbox('Use floor height for missing vertical dimensions', value=True).classes('w-1/2 text-white')
-                    with ui.row().classes('w-full gap-4'):
-                        concrete_grade_global = ui.input(label='Concrete Grade', value='C30/37').classes('w-1/2')
-                        rebar_grade_global = ui.input(label='Rebar Grade', value='400/600').classes('w-1/2')
-                    wastage_percent_global = ui.number(label='Wastage Allowance (%)', value=5, step=1, min=0, max=20).classes('w-1/2')
-
-                # Crop setting
-                crop_percent = ui.slider(label='Crop right side (%)', min=0, max=50, value=25, step=5).classes('w-full mb-4')
-
-                # File upload
-                boq_file_data = {'raw_bytes': None, 'type': None, 'name': None}
-                boq_status_label = ui.label('Status: No file uploaded yet').classes('text-xs text-amber-400 font-semibold mb-2')
-                processed_preview = ui.image().classes('w-full max-h-[400px] object-contain rounded-lg border border-[#FF8C00] hidden')
-                async def handle_boq_upload(e):
-                    try:
-                        data = await e.file.read()
-                        boq_file_data['raw_bytes'] = data
-                        boq_file_data['type'] = detect_mime_type(e.file.name, data)
-                        boq_file_data['name'] = e.file.name
-                        boq_status_label.set_text(f'File Ready: {e.file.name} ({(len(data)/1024/1024):.1f} MB)')
-                        boq_status_label.classes(replace='text-xs text-emerald-400 font-semibold mb-2')
-                        ui.notify(f'File uploaded: {e.file.name}', type='positive')
-
-                        # Generate and show preview of processed image
-                        try:
-                            processed = get_processed_image(data, boq_file_data['type'], crop_percent.value)
-                            processed_preview.set_source(io.BytesIO(processed))
-                            processed_preview.classes(replace='w-full max-h-[400px] object-contain rounded-lg border border-[#FF8C00]')
-                        except Exception as ex:
-                            ui.notify(f'Preview error: {str(ex)}', type='warning')
-                    except Exception as ex:
-                        ui.notify(f'Error: {str(ex)}', type='negative')
-                ui.upload(label='Upload Drawing', auto_upload=True, on_upload=handle_boq_upload).props('flat dark').classes('w-full mb-4')
-                ui.label('Preview of processed image (crop applied):').classes('text-sm text-[#A9B6D0] mt-2')
-                processed_preview
-
-                # Output areas
-                boq_output = ui.column().classes('w-full')
-                boq_export = ui.row().classes('w-full gap-4 mt-4')
-
-                # --------------------------------------------------------------------
-                # SIMPLE AI EXTRACTION (uses processed image)
-                # --------------------------------------------------------------------
-                async def extract_columns_simple(processed_bytes):
-                    """Extract columns using the preprocessed image."""
-                    prompt = """
-You are a Quantity Surveyor. Extract the column schedule from this structural drawing.
-
-For each column, return a JSON array of objects with these fields:
-- label: the column mark (e.g., C1)
-- width_mm: width in mm (number)
-- depth_mm: depth in mm (number)
-- count: the number of times this column appears in the drawing (number)
-
-If a dimension is not visible, set it to null.
-If you cannot count accurately, set count to null.
-
-Return ONLY the JSON array, no extra text.
-Example output:
-[{"label":"C1","width_mm":300,"depth_mm":300,"count":6},{"label":"C2","width_mm":250,"depth_mm":250,"count":4}]
-"""
-                    contents = [prompt]
-                    img_part = types.Part.from_bytes(data=processed_bytes, mime_type="image/png")
-                    contents.append(img_part)
-                    response_text = await call_gemini_json(contents, temperature=0, timeout=300)
-                    return response_text
-
-                def parse_columns_response(response_text):
-                    """Parse the AI response to extract a list of columns."""
-                    json_str = response_text.strip()
-                    json_str = re.sub(r'^```json\s*', '', json_str)
-                    json_str = re.sub(r'\s*```$', '', json_str)
-                    start = json_str.find('[')
-                    end = json_str.rfind(']')
-                    if start != -1 and end != -1:
-                        json_str = json_str[start:end+1]
-                    else:
-                        start = json_str.find('{')
-                        end = json_str.rfind('}')
-                        if start != -1 and end != -1:
-                            obj_str = json_str[start:end+1]
-                            try:
-                                obj = json.loads(obj_str)
-                                if isinstance(obj, dict):
-                                    if 'data' in obj and isinstance(obj['data'], list):
-                                        return obj['data']
-                                    if 'columns' in obj and isinstance(obj['columns'], list):
-                                        return obj['columns']
-                                    if 'extracted_columns' in obj and isinstance(obj['extracted_columns'], list):
-                                        return obj['extracted_columns']
-                                    if 'label' in obj:
-                                        return [obj]
-                            except:
-                                pass
-                        return []
-                    try:
-                        data = json.loads(json_str)
-                        if isinstance(data, list):
-                            return data
-                        elif isinstance(data, dict):
-                            if 'data' in data and isinstance(data['data'], list):
-                                return data['data']
-                            if 'columns' in data and isinstance(data['columns'], list):
-                                return data['columns']
-                            if 'extracted_columns' in data and isinstance(data['extracted_columns'], list):
-                                return data['extracted_columns']
-                            if 'label' in data:
-                                return [data]
-                        return []
-                    except:
-                        return []
-
-                # --------------------------------------------------------------------
-                # COMPUTATION FUNCTION
-                # --------------------------------------------------------------------
-                def compute_boq_simple(columns, user_params):
-                    rows = []
-                    floor_height = user_params.get('floor_height_mm', 3000) / 1000
-                    wastage = user_params.get('wastage', 5)
-                    concrete_rate = UNIT_RATES.get('Concrete (C30/37)', 2500)
-
-                    for col in columns:
-                        label = col.get('label', 'Unknown')
-                        w = col.get('width_mm', 0)
-                        d = col.get('depth_mm', 0)
-                        count = col.get('count', 0)
-                        if not label or count == 0 or w == 0 or d == 0:
-                            continue
-                        h = None
-                        if user_params.get('use_floor_height'):
-                            h = user_params.get('floor_height_mm', 3000)
-                        if h is None:
-                            h = col.get('height_mm')
-                        if h is None:
-                            continue
-                        h_m = h / 1000
-                        w_m = w / 1000
-                        d_m = d / 1000
-                        volume = w_m * d_m * h_m * count
-                        rows.append({
-                            'Item': f"Column - {label}",
-                            'Count': count,
-                            'Width (mm)': w,
-                            'Depth (mm)': d,
-                            'Height (mm)': h,
-                            'Volume (m³)': round(volume, 2),
-                            'Wastage %': wastage,
-                            'Quantity (with waste)': round(volume * (1 + wastage/100), 2),
-                            'Unit Rate (EGP)': concrete_rate,
-                            'Total Cost (EGP)': round(volume * (1 + wastage/100) * concrete_rate, 2)
-                        })
-
-                    if not rows:
-                        return None
-
-                    df = pd.DataFrame(rows)
-                    total_row = {
-                        'Item': 'GRAND TOTAL',
-                        'Count': df['Count'].sum(),
-                        'Volume (m³)': round(df['Volume (m³)'].sum(), 2),
-                        'Wastage %': '',
-                        'Quantity (with waste)': round(df['Quantity (with waste)'].sum(), 2),
-                        'Unit Rate (EGP)': '',
-                        'Total Cost (EGP)': round(df['Total Cost (EGP)'].sum(), 2)
-                    }
-                    for col in ['Width (mm)', 'Depth (mm)', 'Height (mm)']:
-                        if col in total_row:
-                            total_row[col] = ''
-                    df = pd.concat([df, pd.DataFrame([total_row])], ignore_index=True)
-                    return df
-
-                # --------------------------------------------------------------------
-                # DISPLAY FUNCTION
-                # --------------------------------------------------------------------
-                def display_boq(df, method):
-                    boq_output.clear()
-                    with boq_output:
-                        with ui.column().classes('output-card w-full'):
-                            ui.label(f'Columns Bill of Quantities ({method})').classes('text-xl font-bold text-white mb-2')
-                            def df_to_md(df):
-                                lines = []
-                                headers = list(df.columns)
-                                lines.append("| " + " | ".join(headers) + " |")
-                                lines.append("|" + "|".join(["---"] * len(headers)) + "|")
-                                for _, row in df.iterrows():
-                                    row_str = "| " + " | ".join(str(val) for val in row) + " |"
-                                    lines.append(row_str)
-                                return "\n".join(lines)
-                            ui.markdown(df_to_md(df)).classes('markdown-body')
-
-                            if len(df[df['Item'] != 'GRAND TOTAL']) > 0:
-                                df_chart = df[df['Item'] != 'GRAND TOTAL']
-                                fig_bar = go.Figure()
-                                fig_bar.add_trace(go.Bar(
-                                    x=df_chart['Item'],
-                                    y=df_chart['Volume (m³)'],
-                                    name='Volume (m³)',
-                                    marker_color='#FF8C00',
-                                    text=df_chart['Volume (m³)'],
-                                    textposition='auto',
-                                ))
-                                fig_bar.update_layout(
-                                    title='Column Volume per Group',
-                                    template='plotly_dark',
-                                    paper_bgcolor='#0d1a35',
-                                    plot_bgcolor='#0d1a35',
-                                    font=dict(color='white'),
-                                    margin=dict(t=40, b=20, l=40, r=20),
-                                    height=400,
-                                    xaxis_tickangle=-45,
-                                )
-                                ui.plotly(fig_bar).classes('w-full mt-2')
-
-                                fig_pie = go.Figure(data=[go.Pie(
-                                    labels=df_chart['Item'],
-                                    values=df_chart['Total Cost (EGP)'],
-                                    hole=0.4,
-                                    marker=dict(colors=px.colors.sequential.Oranges_r),
-                                    textinfo='label+percent',
-                                    textposition='auto',
-                                )])
-                                fig_pie.update_layout(
-                                    title='Cost Distribution',
-                                    template='plotly_dark',
-                                    paper_bgcolor='#0d1a35',
-                                    plot_bgcolor='#0d1a35',
-                                    font=dict(color='white'),
-                                    margin=dict(t=40, b=20, l=40, r=20),
-                                    height=400,
-                                )
-                                ui.plotly(fig_pie).classes('w-full mt-2')
-
-                    boq_export.clear()
-                    with boq_export:
-                        def download_boq_pdf():
-                            try:
-                                meta = current_meta('BOQ')
-                                pdf_bytes = build_report_pdf(
-                                    "BOQ Report - Columns",
-                                    method,
-                                    df_to_md(df),
-                                    meta,
-                                    logo_bytes_holder['bytes'],
-                                )
-                                ui.download(pdf_bytes, filename=f"BOQ_Columns_{ticket_input.value}.pdf")
-                                ui.notify('PDF downloaded', type='positive')
-                            except Exception as ex:
-                                ui.notify(f'PDF Error: {str(ex)}', type='negative')
-                        def download_boq_excel():
-                            try:
-                                excel_buffer = io.BytesIO()
-                                with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
-                                    df.to_excel(writer, sheet_name='BOQ', index=False)
-                                excel_buffer.seek(0)
-                                ui.download(excel_buffer.getvalue(), filename=f"BOQ_Columns_{ticket_input.value}.xlsx")
-                                ui.notify('Excel downloaded', type='positive')
-                            except Exception as ex:
-                                ui.notify(f'Excel Error: {str(ex)}', type='negative')
-                        ui.button('Download PDF', on_click=download_boq_pdf).classes('primary-btn flex-1')
-                        ui.button('Export Excel', on_click=download_boq_excel).classes('primary-btn flex-1')
-
-                # --------------------------------------------------------------------
-                # MANUAL ENTRY
-                # --------------------------------------------------------------------
-                def show_manual_entry():
-                    boq_output.clear()
-                    boq_export.clear()
-                    with boq_output:
-                        ui.label('Manual Column Entry').classes('text-xl font-bold text-white mb-2')
-                        ui.markdown('Enter the column data below. Click "Add Row" to add more columns.').classes('text-white')
-                        rows_container = ui.column().classes('w-full')
-                        manual_rows = []
-
-                        def add_row(label='', width=0, depth=0, count=0, height=0):
-                            with rows_container:
-                                with ui.row().classes('w-full gap-2 items-center'):
-                                    lbl = ui.input(label='Label', value=label).classes('w-1/5')
-                                    w = ui.number(label='Width (mm)', value=width, step=10).classes('w-1/5')
-                                    d = ui.number(label='Depth (mm)', value=depth, step=10).classes('w-1/5')
-                                    h = ui.number(label='Height (mm)', value=height, step=10).classes('w-1/5')
-                                    c = ui.number(label='Count', value=count, step=1, min=0).classes('w-1/5')
-                                    btn = ui.button('✕', on_click=lambda row=len(manual_rows): remove_row(row)).classes('bg-red-800 text-white p-1 min-w-[30px] !shadow-none !rounded-full')
-                                    manual_rows.append({'label': lbl, 'width': w, 'depth': d, 'height': h, 'count': c, 'ui': (lbl, w, d, h, c, btn)})
-
-                        def remove_row(index):
-                            if index < len(manual_rows):
-                                row = manual_rows[index]
-                                for el in row['ui']:
-                                    el.delete()
-                                manual_rows.pop(index)
-                                ui.notify('Row removed', type='info')
-
-                        add_row()
-
-                        ui.button('Add Row', on_click=add_row).classes('primary-btn mt-2')
-
-                        async def calculate_manual():
-                            rows_data = []
-                            for row in manual_rows:
-                                label = row['label'].value.strip()
-                                if not label:
-                                    continue
-                                w = row['width'].value or 0
-                                d = row['depth'].value or 0
-                                h = row['height'].value or 0
-                                c = row['count'].value or 0
-                                if w == 0 or d == 0 or h == 0 or c == 0:
-                                    ui.notify(f'Missing data for {label}. Please fill all fields.', type='warning')
-                                    return
-                                rows_data.append({
-                                    'label': label,
-                                    'width_mm': w,
-                                    'depth_mm': d,
-                                    'height_mm': h,
-                                    'count': c
-                                })
-                            if not rows_data:
-                                ui.notify('No valid rows. Add at least one row with data.', type='warning')
-                                return
-
-                            user_params = {
-                                'floor_height_mm': floor_height_global.value,
-                                'use_floor_height': use_floor_height_check.value,
-                                'wastage': wastage_percent_global.value,
-                                'concrete_grade': concrete_grade_global.value,
-                                'rebar_grade': rebar_grade_global.value,
-                            }
-                            df = compute_boq_simple(rows_data, user_params)
-                            if df is None:
-                                ui.notify('Could not compute quantities. Check dimensions.', type='error')
-                                return
-                            display_boq(df, 'Manual Entry')
-
-                        ui.button('Calculate Manual BOQ', on_click=calculate_manual).classes('primary-btn mt-4')
-
-                # --------------------------------------------------------------------
-                # RUN EXTRACTION
-                # --------------------------------------------------------------------
-                async def run_boq_extraction():
-                    if not client:
-                        ui.notify('GEMINI_API_KEY missing!', type='negative')
-                        return
-                    if not boq_file_data['raw_bytes']:
-                        ui.notify('Please upload a drawing first.', type='warning')
-                        return
-
-                    boq_output.clear()
-                    boq_export.clear()
-                    with boq_output:
-                        ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
-                        ui.label('Extracting columns from drawing...').classes('self-center text-sm')
-
-                    try:
-                        user_params = {
-                            'floor_height_mm': floor_height_global.value,
-                            'use_floor_height': use_floor_height_check.value,
-                            'wastage': wastage_percent_global.value,
-                            'concrete_grade': concrete_grade_global.value,
-                            'rebar_grade': rebar_grade_global.value,
-                        }
-
-                        # Preprocess image (crop + resize) – cached
-                        processed_bytes = get_processed_image(
-                            boq_file_data['raw_bytes'],
-                            boq_file_data['type'],
-                            crop_percent.value
-                        )
-
-                        # Call AI with processed image
-                        raw_response = await extract_columns_simple(processed_bytes)
-                        columns = parse_columns_response(raw_response)
-
-                        if not columns:
-                            boq_output.clear()
-                            with boq_output:
-                                ui.label('No columns could be extracted.').classes('text-amber-400')
-                                ui.markdown('**Raw AI Response:**').classes('text-white font-bold')
-                                ui.markdown(f'```json\n{raw_response[:1000]}\n```').classes('text-xs text-gray-400')
-                                ui.markdown('You can try the **Manual Entry** button below to enter the data yourself.').classes('text-white')
-                            return
-
-                        # Compute
-                        df = compute_boq_simple(columns, user_params)
-                        if df is None:
-                            boq_output.clear()
-                            with boq_output:
-                                ui.label('Could not compute quantities. Missing height or dimensions.').classes('text-amber-400')
-                                ui.markdown('Please check "Use floor height" or provide height manually.').classes('text-white')
-                            return
-
-                        display_boq(df, 'AI Extraction')
-
-                    except Exception as ex:
-                        boq_output.clear()
-                        with boq_output:
-                            ui.notify(f'Extraction failed: {str(ex)}', type='negative')
-                            ui.label('Error occurred. Please try again with a clearer drawing.').classes('text-red-400')
-
-                # Buttons
-                with ui.row().classes('w-full gap-4 mt-4'):
-                    ui.button('Run AI Extraction', on_click=run_boq_extraction).classes('primary-btn flex-1')
-                    ui.button('Manual Entry (Fallback)', on_click=show_manual_entry).classes('primary-btn flex-1')
-
-        # ---------------- FOOTER (unchanged) ----------------
-        ui.html('''
-        <div class="app-footer">
-            <b>Multi-Standard Engineering Quality Assurance Portal</b> &nbsp;|&nbsp; Automated compliance verification across ECP 203, ECP 202, ECP 104, ASTM, AASHTO, BS, EN, and ISO standards.<br>
-            <b>Official Direct Contacts:</b>
-            LinkedIn: <a href="https://www.linkedin.com/in/mohamed-abd-al-aty-a326a1214/" target="_blank">Mohamed Abd Al Aty</a> &nbsp;|&nbsp;
-            Email: <a href="mailto:mohamedabdalaty63@gmail.com">mohamedabdalaty63@gmail.com</a><br>
-            <i>Specialized in QA/QC, Civil Engineering Standards &amp; Automated Compliance.</i> &copy; 2026 Eng. Mohamed Abd Al Aty. All rights reserved.<br>
-            <span style="color: #FFFFFF; font-weight: 600;">Disclaimer:</span> These AI modules have high accuracy and are specified for the Egyptian codes, but results should be rechecked by a qualified engineer before any decision-making.
-        </div>
-        ''')
-
-
-ui.run(
-    host='0.0.0.0',
-    port=int(os.environ.get('PORT', 8080)),
-    title='Multi-Standard Engineering Auditor',
-    favicon='🏗️',
-    reload=False,
-    reconnect_timeout=30.0,
-)
