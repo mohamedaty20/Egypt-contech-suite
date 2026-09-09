@@ -773,7 +773,7 @@ def detect_mime_type(filename: str, data: bytes) -> str:
     return 'image/jpeg'
 
 # =====================================================================================
-# MAIN PAGE
+# MAIN PAGE (all ui.select calls now use only keyword arguments)
 # =====================================================================================
 
 @ui.page('/')
@@ -794,7 +794,7 @@ def main_page():
 
         ui.label('Governing Design Code Basis').classes('text-white font-bold text-sm mb-1')
         ui.markdown('By default every AI output in this app is generated strictly per **ECP 203 / ECP 202 / ECP 104**. Change this to switch the primary basis.').classes('text-xs text-[#A9B6D0] mb-2')
-        # === ui.select #1 (now with keyword-only arguments) ===
+        # === ui.select #1 (keyword-only) ===
         code_basis_select = ui.select(
             label='Code Type (applies app-wide)',
             options=CODE_BASIS_OPTIONS,
@@ -1603,4 +1603,4 @@ ui.run(
     favicon='🏗️',
     reload=False,
     reconnect_timeout=30.0,
-)
+    )
