@@ -357,7 +357,7 @@ async def call_gemini_json(contents, temperature=0.1, timeout=240):
         raise Exception(f"AI request failed: {str(e)}")
 
 # =====================================================================================
-# BOQ CALCULATION ENGINE (full version from original)
+# BOQ CALCULATION ENGINE
 # =====================================================================================
 boq_results = {
     'architectural': {},
@@ -1305,7 +1305,7 @@ Data (CSV format):
         return f"Error generating overview: {str(e)}"
 
 # =====================================================================================
-# DXF PROCESSING FUNCTIONS (FIXED)
+# DXF FUNCTIONS (FIXED: using bytes and errors='ignore')
 # =====================================================================================
 def detect_dxf_layers(doc):
     layers = {}
@@ -2721,7 +2721,7 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                 ui.button('Run AI Analysis', on_click=run_progress_analysis).classes('primary-btn mt-4')
 
             # ==============================================================
-            # TAB 8: DXF AREA EXTRACTOR
+            # TAB 8: DXF AREA EXTRACTOR (FIXED)
             # ==============================================================
             with ui.tab_panel(t_dxf):
                 ui.label('📐 DXF Area Extractor').classes('text-2xl font-bold text-white mb-4')
@@ -2732,14 +2732,15 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
 
                 async def handle_dxf_upload(e):
                     try:
-                        data = await e.file.read()
+                        data = await e.file.read()  # bytes
                         dxf_file_data['bytes'] = data
                         dxf_file_data['name'] = e.file.name
                         dxf_status_label.set_text(f'File Ready: {e.file.name} ({(len(data)/1024):.1f} KB)')
                         dxf_status_label.classes(replace='text-xs text-emerald-400 font-semibold mb-2')
                         ui.notify(f'Uploaded: {e.file.name}', type='positive')
                         try:
-                            doc = ezdxf.read(io.BytesIO(data))
+                            # Ensure we pass bytes as a BytesIO object
+                            doc = ezdxf.read(io.BytesIO(data), errors='ignore')
                             layers = detect_dxf_layers(doc)
                             layer_info = "\n".join([f"{layer}: {info['count']} entities, keywords: {', '.join(info['keywords'])}" for layer, info in layers.items()])
                             detected_layers_label.set_text(f"Detected layers:\n{layer_info}")
@@ -2782,7 +2783,7 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                         ui.label('Processing DXF file...').classes('self-center text-sm')
 
                     try:
-                        doc = ezdxf.read(io.BytesIO(dxf_file_data['bytes']))
+                        doc = ezdxf.read(io.BytesIO(dxf_file_data['bytes']), errors='ignore')
                         workflow = workflow_select.value
                         unit = unit_select.value
                         areas = extract_areas_from_dxf(doc, unit=unit, workflow=workflow.lower().split()[0])
