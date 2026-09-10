@@ -932,11 +932,25 @@ def build_complete_project(params):
 # config.cpu_bound_limited (which is semaphore-gated).
 # ======================================================================
 
+_DXF_BINARY_MAGIC = b"AutoCAD Binary DXF\r\n\x1a\n\x00"
+
 def _open_doc_from_bytes(doc_bytes):
-    """Rebuild a fresh ezdxf document from bytes inside a worker process."""
+    """Rebuild a fresh ezdxf document from bytes inside a worker process.
+
+    Binary DXF  -> bytes stream  (io.BytesIO)
+    ASCII  DXF  -> text stream   (io.StringIO), which is what ezdxf requires.
+    """
     if isinstance(doc_bytes, str):
-        doc_bytes = doc_bytes.encode('utf-8')
-    return ezdxf.read(io.BytesIO(doc_bytes))
+        doc_bytes = doc_bytes.encode("utf-8")
+
+    if doc_bytes[:len(_DXF_BINARY_MAGIC)] == _DXF_BINARY_MAGIC:
+        return ezdxf.read(io.BytesIO(doc_bytes))
+
+    try:
+        text = doc_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        text = doc_bytes.decode("latin-1", errors="replace")
+    return ezdxf.read(io.StringIO(text))
 
 
 def _extract_areas_from_dxf_worker(doc_bytes, unit, workflow):
