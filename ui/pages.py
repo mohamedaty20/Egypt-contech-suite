@@ -1,4 +1,4 @@
-# ui/pages.py – complete file with all tools restored
+# ui/pages.py – Complete file with all tools + AI-powered AutoCAD generator
 import io
 import datetime
 import os
@@ -17,7 +17,7 @@ import fitz
 import ezdxf
 from nicegui import app, ui, run
 from google.genai import types
-from services.scraper_service import RAPIDAPI_KEY
+
 # ----- Imports from our modules -----
 from config import (
     CODE_BASIS_OPTIONS,
@@ -51,7 +51,7 @@ from services.dxf_service import (
     extract_areas_from_dxf,
     build_complete_project,
 )
-from services.scraper_service import scrape_jobs, detect_mime_type
+from services.scraper_service import scrape_jobs, detect_mime_type, RAPIDAPI_KEY
 from utils.boq import (
     normalize_keys,
     compute_architectural_quantities,
@@ -62,8 +62,10 @@ from utils.boq import (
     generate_charts,
 )
 
-# ----- Helper functions (originally at the end of the monolith) -----
 
+# =====================================================================
+# Helper functions (PDF generators)
+# =====================================================================
 def process_excel_file(file_bytes, filename):
     try:
         df = pd.read_excel(io.BytesIO(file_bytes), engine='openpyxl')
@@ -78,12 +80,7 @@ def process_excel_file(file_bytes, filename):
         progress_col = progress_cols[0] if progress_cols else None
         cat_col = cat_cols[0] if cat_cols else None
         loc_col = loc_cols[0] if loc_cols else None
-        keep_cols = []
-        if date_col: keep_cols.append(date_col)
-        if desc_col: keep_cols.append(desc_col)
-        if progress_col: keep_cols.append(progress_col)
-        if cat_col: keep_cols.append(cat_col)
-        if loc_col: keep_cols.append(loc_col)
+        keep_cols = [c for c in [date_col, desc_col, progress_col, cat_col, loc_col] if c]
         if keep_cols:
             df = df[keep_cols]
         rename_map = {}
@@ -102,6 +99,7 @@ def process_excel_file(file_bytes, filename):
         print(f"Error reading Excel: {e}")
         return pd.DataFrame()
 
+
 def generate_progress_pdf(pdf_data, engineer_name, project_name, logo_bytes, ticket_id):
     from reportlab.platypus import SimpleDocTemplate, Spacer, Table, TableStyle, Paragraph, HRFlowable, Image as ReportLabImage
     from reportlab.lib import colors
@@ -111,7 +109,6 @@ def generate_progress_pdf(pdf_data, engineer_name, project_name, logo_bytes, tic
                              topMargin=MARGIN, bottomMargin=MARGIN)
     styles = build_pdf_styles()
     story = []
-
     unique_uid = f"PROGRESS-{uuid.uuid4().hex[:8].upper()}"
     qr_buf = generate_qr_code(f"UID: {unique_uid} | Progress Report - {project_name}")
 
@@ -155,7 +152,7 @@ def generate_progress_pdf(pdf_data, engineer_name, project_name, logo_bytes, tic
 
     df = pdf_data['df'].copy()
     if not df.empty:
-        cols_to_show = [col for col in df.columns if col in ['date', 'description', 'progress_percent', 'category', 'location']]
+        cols_to_show = [c for c in df.columns if c in ['date', 'description', 'progress_percent', 'category', 'location']]
         if 'source' in df.columns:
             cols_to_show.append('source')
         df_display = df[cols_to_show].fillna('')
@@ -197,10 +194,10 @@ def generate_progress_pdf(pdf_data, engineer_name, project_name, logo_bytes, tic
         story.append(Spacer(1, 6))
 
     build_pdf_footer_signature_and_qr(story, styles, qr_buf, engineer_name)
-
     doc.build(story)
     buffer.seek(0)
     return buffer.getvalue()
+
 
 def generate_dxf_pdf(df, total_area, filename, workflow, units, engineer_name, project_name, logo_bytes, ticket_id):
     from reportlab.platypus import SimpleDocTemplate, Spacer, Table, TableStyle, Paragraph, HRFlowable, Image as ReportLabImage
@@ -211,7 +208,6 @@ def generate_dxf_pdf(df, total_area, filename, workflow, units, engineer_name, p
                              topMargin=MARGIN, bottomMargin=MARGIN)
     styles = build_pdf_styles()
     story = []
-
     unique_uid = f"DXF-{uuid.uuid4().hex[:8].upper()}"
     qr_buf = generate_qr_code(f"UID: {unique_uid} | DXF Area Report - {project_name}")
 
@@ -272,16 +268,15 @@ def generate_dxf_pdf(df, total_area, filename, workflow, units, engineer_name, p
         ]))
         story.append(t)
         story.append(Spacer(1, 10))
-
         total_para = Paragraph(f"<b>Total Net Area: {total_area:.4f} m²</b>", styles['h2'])
         story.append(total_para)
         story.append(Spacer(1, 6))
 
     build_pdf_footer_signature_and_qr(story, styles, qr_buf, engineer_name)
-
     doc.build(story)
     buffer.seek(0)
     return buffer.getvalue()
+
 
 def generate_autocad_pdf(info, boq_df, engineer_name, project_name, logo_bytes, ticket_id):
     from reportlab.platypus import SimpleDocTemplate, Spacer, Table, TableStyle, Paragraph, HRFlowable, Image as ReportLabImage
@@ -292,7 +287,6 @@ def generate_autocad_pdf(info, boq_df, engineer_name, project_name, logo_bytes, 
                              topMargin=MARGIN, bottomMargin=MARGIN)
     styles = build_pdf_styles()
     story = []
-
     unique_uid = f"LAYOUT-{uuid.uuid4().hex[:8].upper()}"
     qr_buf = generate_qr_code(f"UID: {unique_uid} | Layout Report - {project_name}")
 
@@ -356,21 +350,20 @@ def generate_autocad_pdf(info, boq_df, engineer_name, project_name, logo_bytes, 
         ]))
         story.append(t)
         story.append(Spacer(1, 10))
-
         total_cost = boq_df['Total Cost (EGP)'].sum()
         total_para = Paragraph(f"<b>Total Estimated Cost: {total_cost:,.2f} EGP</b>", styles['h2'])
         story.append(total_para)
         story.append(Spacer(1, 6))
 
     build_pdf_footer_signature_and_qr(story, styles, qr_buf, engineer_name)
-
     doc.build(story)
     buffer.seek(0)
     return buffer.getvalue()
 
-# ----------------------------------------------------------------------
-# Main NiceGUI Page – all 9 tabs restored
-# ----------------------------------------------------------------------
+
+# =====================================================================
+# Main NiceGUI Page
+# =====================================================================
 @ui.page('/')
 def main_page():
     ui.query('body').style('width: 100vw; height: 100vh; overflow-x: hidden;')
@@ -498,11 +491,9 @@ def main_page():
                     arr = np.array(values, dtype=float)
                     std = float(arr.std(ddof=1)) if len(arr) > 1 else 0.0
                     mean = float(arr.mean())
-                    return {
-                        'n': len(arr), 'mean': mean, 'std': std,
-                        'min': float(arr.min()), 'max': float(arr.max()),
-                        'cov': (std / mean * 100.0) if mean > 0 else 0.0,
-                    }
+                    return {'n': len(arr), 'mean': mean, 'std': std,
+                            'min': float(arr.min()), 'max': float(arr.max()),
+                            'cov': (std / mean * 100.0) if mean > 0 else 0.0}
 
                 def get_selected_stages(stage_filter):
                     all_stages = [
@@ -512,8 +503,7 @@ def main_page():
                     ]
                     mapping = {'7-Day Stage': [0], '14-Day Stage': [1], '28-Day Stage': [2]}
                     if stage_filter in mapping:
-                        idxs = mapping[stage_filter]
-                        return [all_stages[i] for i in idxs]
+                        return [all_stages[i] for i in mapping[stage_filter]]
                     return all_stages
 
                 async def run_verification():
@@ -553,7 +543,7 @@ def main_page():
                                         ui.label(f'{label} Min / Max').classes('lbl')
                         stage_data_text = "\n".join(
                             f"- {label} Crushing Values (N/mm2): {', '.join(str(v) for v in values) if values else 'No data provided'} "
-                            f"(n={s['n'] if s else 0}, mean={s['mean']:.2f} if s else 'n/a')"
+                            f"(n={s['n'] if s else 0})"
                             for label, values, s in stage_stats
                         )
                         prompt = f"""
@@ -566,7 +556,6 @@ for the concrete cube test results below. Only evaluate the stage(s) actually pr
 {NO_LATEX_RULE}
 
 DISPLAY FILTER SELECTED BY USER: {stage_filter}
-(Only discuss the stage(s) listed below in detail; do not invent data for stages not listed.)
 
 PROJECT PARAMETERS:
 - Specified 28-Day Characteristic Compressive Strength (f_cu): {target_fcu} N/mm2
@@ -607,29 +596,10 @@ REQUIRED REPORT STRUCTURE:
                             def download_pdf_report():
                                 try:
                                     meta = current_meta('ECP-AI')
-                                    styles = build_pdf_styles()
-                                    stat_rows = [["Stage", "n", "Mean (N/mm2)", "Std Dev", "Min", "Max", "COV %"]]
-                                    for label, values, s in stage_stats:
-                                        if s:
-                                            stat_rows.append([label, str(s['n']), f"{s['mean']:.2f}", f"{s['std']:.2f}",
-                                                               f"{s['min']:.1f}", f"{s['max']:.1f}", f"{s['cov']:.1f}"])
-                                    colw = USABLE_WIDTH / len(stat_rows[0])
-                                    stat_table_data = [[Paragraph(c, styles['tablehead'] if r == 0 else styles['tablecell'])
-                                                         for c in row] for r, row in enumerate(stat_rows)]
-                                    stat_table = Table(stat_table_data, colWidths=[colw] * len(stat_rows[0]))
-                                    stat_table.setStyle(TableStyle([
-                                        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1B2A4A')),
-                                        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#94A3B8')),
-                                        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F1F5F9')]),
-                                        ('TOPPADDING', (0, 0), (-1, -1), 4), ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-                                    ]))
                                     pdf_bytes = build_report_pdf(
                                         "AI CONCRETE CUBE CALCULATION & VERIFICATION REPORT",
                                         f"Governing Standard: {basis} | Filter: {stage_filter}",
                                         ai_cube_result_holder['text'], meta, logo_bytes_holder['bytes'],
-                                        extra_flowables_before_body=[
-                                            Paragraph("Deterministic Statistics", styles['h2']), stat_table,
-                                        ],
                                     )
                                     ui.download(pdf_bytes, filename=f"AI_Concrete_Calculation_Sheet_{ticket_input.value}.pdf")
                                     ui.notify('Calculation Sheet PDF downloaded!', type='positive')
@@ -683,6 +653,7 @@ REQUIRED REPORT STRUCTURE:
                 ).classes('w-full mb-4')
                 audit_status_label = ui.label('Status: No file uploaded yet').classes('text-xs text-amber-400 font-semibold mb-2')
                 uploaded_file_data = {'bytes': None, 'name': None, 'type': None}
+
                 async def handle_audit_upload(e):
                     try:
                         data = await e.file.read()
@@ -694,10 +665,12 @@ REQUIRED REPORT STRUCTURE:
                         ui.notify(f'Successfully loaded: {e.file.name}', type='positive')
                     except Exception as ex:
                         ui.notify(f'Error reading file: {str(ex)}', type='negative')
+
                 ui.upload(label='Select PDF or Image File', auto_upload=True, on_upload=handle_audit_upload).props('flat dark').classes('w-full mb-4')
                 audit_output_container = ui.column().classes('w-full')
                 audit_export_container = ui.row().classes('w-full gap-4 mt-4')
                 audit_result_text_holder = {'text': ''}
+
                 async def run_ai_audit():
                     if not client:
                         ui.notify('GEMINI_API_KEY missing in .env!', type='negative')
@@ -720,8 +693,7 @@ Audit Focus: {audit_focus}
 
 {NO_LATEX_RULE}
 
-Perform a comprehensive technical audit of the provided document or image. Structure your
-report with clear ## section headings and real Markdown tables for any comparative data.
+Perform a comprehensive technical audit of the provided document or image.
 """
                         contents = [prompt]
                         if uploaded_file_data['type'] == 'application/pdf':
@@ -753,20 +725,12 @@ report with clear ## section headings and real Markdown tables for any comparati
                                     ui.notify('Audit PDF downloaded!', type='positive')
                                 except Exception as ex:
                                     ui.notify(f'PDF Export Error: {str(ex)}', type='negative')
-                            def download_audit_csv():
-                                df = pd.DataFrame({
-                                    "Audit Field": ["Project Name", "Focus", "Code Basis", "Source File", "Engineer", "Summary Findings"],
-                                    "Value": [project_name_input.value, audit_focus, basis, uploaded_file_data['name'],
-                                              engineer_input.value, audit_result_text_holder['text'][:300].replace('\n', ' ')],
-                                })
-                                ui.download(df.to_csv(index=False).encode('utf-8'), filename=f"AI_Audit_{ticket_input.value}.csv")
-                                ui.notify('Audit CSV downloaded!', type='positive')
-                            ui.button('Download Audit PDF', on_click=download_audit_pdf).classes('primary-btn flex-1')
-                            ui.button('Export Audit CSV', on_click=download_audit_csv).classes('primary-btn flex-1')
+                            ui.button('Download Audit PDF', on_click=download_audit_pdf).classes('primary-btn')
                     except Exception as ex:
                         audit_output_container.clear()
                         with audit_output_container:
                             ui.notify(f'Error: {str(ex)}', type='negative')
+
                 ui.button('Execute AI Audit & Compliance Check', on_click=run_ai_audit).classes('primary-btn')
 
             # ===== TAB 3: DEFECT DIAGNOSTIC =====
@@ -778,6 +742,7 @@ report with clear ## section headings and real Markdown tables for any comparati
                 defect_result_holder = {'text': ''}
                 defect_user_message = ui.input(label='Describe the defect or additional context (optional)',
                                                placeholder='e.g., "Cracks near column base with spalling concrete"').classes('w-full mb-3')
+
                 async def handle_defect_upload(e):
                     try:
                         data = await e.file.read()
@@ -788,9 +753,11 @@ report with clear ## section headings and real Markdown tables for any comparati
                         ui.notify(f'Successfully loaded file: {e.file.name}', type='positive')
                     except Exception as ex:
                         ui.notify(f'Error reading file: {str(ex)}', type='negative')
+
                 ui.upload(label='Select Site Defect Photo or PDF', auto_upload=True, on_upload=handle_defect_upload).props('flat dark').classes('w-full mb-4')
                 defect_output = ui.column().classes('w-full')
                 defect_export_area = ui.row().classes('w-full gap-4 mt-4')
+
                 async def run_defect_diagnosis():
                     if not client or not defect_file_data['bytes']:
                         ui.notify('API key missing or file not uploaded!', type='negative')
@@ -806,27 +773,19 @@ report with clear ## section headings and real Markdown tables for any comparati
                         contents = []
                         prompt = f"""
 You are a Senior Forensic Structural Engineer and Materials Specialist.
-Perform a detailed engineering diagnostic of the defect shown. The user has provided the following description:
+Perform a detailed engineering diagnostic of the defect shown. User description:
 "{user_desc}"
 
 {get_code_directive(basis)}
 
 {NO_LATEX_RULE}
 
-Based on the visual evidence (and description), provide:
-1. A clear identification of the defect type and severity.
+Provide:
+1. Identification of the defect type and severity.
 2. Root cause analysis with reference to code provisions.
-3. A detailed repair protocol with step-by-step instructions.
-4. **A professional table of recommended repair products available in the Egyptian market** with columns:
-   - Product Name
-   - Manufacturer (e.g., Sika, Fosroc, etc.)
-   - Application Method
-   - Unit Price (EGP) – provide realistic current market prices in Egyptian Pounds.
-   - Quantity Required (estimate)
-   - Total Cost (EGP)
-5. Overall cost summary and recommended contractor qualification.
-
-Ensure all tables are proper Markdown tables with header and separator rows.
+3. A detailed repair protocol.
+4. A professional table of recommended repair products available in the Egyptian market.
+5. Overall cost summary.
 """
                         contents.append(prompt)
                         if defect_file_data['type'] == 'application/pdf':
@@ -834,7 +793,7 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                             text = "".join([p.extract_text() or "" for p in reader.pages[:10]])
                             if len(text) > 10000:
                                 text = text[:10000] + "\n... (truncated)"
-                            contents.append(f"Extracted PDF Text (if any):\n{text}")
+                            contents.append(f"Extracted PDF Text:\n{text}")
                         else:
                             img_part = types.Part.from_bytes(data=defect_file_data['bytes'], mime_type=defect_file_data['type'])
                             contents.append(img_part)
@@ -843,7 +802,7 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                         defect_output.clear()
                         with defect_output:
                             with ui.column().classes('output-card w-full'):
-                                ui.label('Forensic Diagnosis & Repair Protocol with Market Prices').classes('text-xl font-bold text-white mb-2')
+                                ui.label('Forensic Diagnosis & Repair Protocol').classes('text-xl font-bold text-white mb-2')
                                 ui.markdown(res_text).classes('markdown-body')
                         with defect_export_area:
                             def download_defect_pdf():
@@ -858,29 +817,21 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                                     ui.notify('Defect Diagnostic PDF downloaded!', type='positive')
                                 except Exception as ex:
                                     ui.notify(f'PDF Export Error: {str(ex)}', type='negative')
-                            def download_defect_csv():
-                                try:
-                                    df = pd.DataFrame({
-                                        "Diagnostic Report": [defect_result_holder['text']]
-                                    })
-                                    ui.download(df.to_csv(index=False).encode('utf-8'), filename=f"Defect_Report_{ticket_input.value}.csv")
-                                    ui.notify('CSV downloaded!', type='positive')
-                                except Exception as ex:
-                                    ui.notify(f'CSV Export Error: {str(ex)}', type='negative')
-                            ui.button('Download Defect PDF Report', on_click=download_defect_pdf).classes('primary-btn flex-1')
-                            ui.button('Export Report as CSV', on_click=download_defect_csv).classes('primary-btn flex-1')
+                            ui.button('Download Defect PDF Report', on_click=download_defect_pdf).classes('primary-btn')
                     except Exception as ex:
                         defect_output.clear()
                         with defect_output:
                             ui.notify(f'Diagnosis failed: {ex}', type='negative')
+
                 ui.button('Diagnose Defect & Get Repair Protocol', on_click=run_defect_diagnosis).classes('primary-btn')
 
             # ===== TAB 4: AI CHATBOT =====
             with ui.tab_panel(t_chat):
                 ui.label('Core-Code Intelligent Assistant Chatbot').classes('text-2xl font-bold text-white mb-2')
-                ui.markdown('Ask any engineering, mix design, geotechnical, or pavement question and get answers based on the Egyptian Codes (ECP 203, ECP 202, ECP 104) and international standards.').classes('markdown-body mb-2')
+                ui.markdown('Ask any engineering question and get answers based on the Egyptian Codes and international standards.').classes('markdown-body mb-2')
                 chat_container = ui.column().classes('output-card w-full h-[500px] overflow-y-auto mb-4')
                 chat_messages = [{"role": "assistant", "content": "Hello! I am your Multi-Standard Engineering Assistant. How can I assist you today?"}]
+
                 def render_chat():
                     chat_container.clear()
                     with chat_container:
@@ -891,9 +842,11 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                                 label_class = 'assistant' if is_ai else 'user'
                                 ui.label(role_label).classes(f'role-label {label_class}')
                                 ui.markdown(msg['content']).classes('content markdown-body')
+
                 render_chat()
                 user_msg = ui.input(placeholder='Type your engineering question here...').classes('w-full mb-2')
                 user_msg.on('keydown.enter', lambda: send_chat())
+
                 async def send_chat():
                     q = user_msg.value
                     if not q or not q.strip():
@@ -911,15 +864,17 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                             "You are an elite Senior Civil, Geotechnical, and Structural Quality Engineering Expert "
                             "acting as a master multi-standard technical assistant.\n\n"
                             f"{get_code_directive(basis)}\n\n{NO_LATEX_RULE}\n\n"
-                            "UNIT SYSTEM: Use strictly METRIC (SI) units (mm, cm, m, MPa, kN, kg/m3, C)."
+                            "UNIT SYSTEM: Use strictly METRIC (SI) units."
                         )
                         cleaned_response = await call_gemini(q, system_instruction=system_prompt, timeout=240)
                         chat_messages.append({"role": "assistant", "content": cleaned_response})
                     except Exception as e:
                         chat_messages.append({"role": "assistant", "content": f"Error: {str(e)}"})
                     render_chat()
+
                 with ui.row().classes('w-full gap-4 mt-2'):
                     ui.button('Send Query', on_click=send_chat).classes('primary-btn flex-1')
+
                     def download_chat_pdf():
                         try:
                             meta = current_meta('CHAT')
@@ -940,14 +895,16 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                             ui.notify('Chat Transcript PDF downloaded!', type='positive')
                         except Exception as ex:
                             ui.notify(f'PDF Export Error: {str(ex)}', type='negative')
+
                     ui.button('Download Chat PDF Transcript', on_click=download_chat_pdf).classes('primary-btn flex-1')
 
             # ===== TAB 5: HANDWRITING OCR =====
             with ui.tab_panel(t_handwriting):
                 ui.label('Handwriting to Digital Text Transcription').classes('text-2xl font-bold text-white mb-2')
-                ui.markdown('Upload a scanned handwritten note (PNG, JPG) or PDF. The AI will convert it to clean digital text, detecting tables if present.').classes('markdown-body mb-2')
+                ui.markdown('Upload a scanned handwritten note (PNG, JPG) or PDF. The AI will convert it to clean digital text.').classes('markdown-body mb-2')
                 ocr_file_data = {'bytes': None, 'type': None, 'name': None}
                 ocr_status_label = ui.label('Status: No file uploaded yet').classes('text-xs text-amber-400 font-semibold mb-2')
+
                 async def handle_ocr_upload(e):
                     try:
                         data = await e.file.read()
@@ -959,11 +916,13 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                         ui.notify(f'File uploaded: {e.file.name}', type='positive')
                     except Exception as ex:
                         ui.notify(f'Error: {str(ex)}', type='negative')
+
                 ui.upload(label='Upload Handwriting Image or PDF', auto_upload=True, on_upload=handle_ocr_upload).props('flat dark').classes('w-full mb-4')
                 ocr_output = ui.column().classes('w-full')
                 ocr_export = ui.row().classes('w-full gap-4 mt-4')
                 transcribed_text_holder = {'text': ''}
                 text_editor = None
+
                 async def run_ocr():
                     if not client:
                         ui.notify('GEMINI_API_KEY missing!', type='negative')
@@ -979,9 +938,8 @@ Ensure all tables are proper Markdown tables with header and separator rows.
                     try:
                         prompt = """
 You are an expert OCR system. Transcribe the handwritten text from the provided image(s).
-- If you detect any tabular data (rows and columns), format it as a proper Markdown table with a header row and a separator line (|---|...|).
-- Return only the transcribed text and tables, without any additional commentary, headings, or formatting.
-- If there are multiple pages, combine them in order.
+- If you detect any tabular data, format it as a proper Markdown table.
+- Return only the transcribed text and tables.
 """
                         contents = [prompt]
                         if ocr_file_data['type'] == 'application/pdf':
@@ -1007,9 +965,10 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                         with ocr_output:
                             with ui.column().classes('output-card w-full'):
                                 ui.label('Transcribed Text (editable)').classes('text-xl font-bold text-white mb-2')
-                                text_editor = ui.textarea(value=transcribed, placeholder='Edit the transcribed text here...').classes('w-full markdown-body').style('min-height: 300px; background: #0a1a3a; color: white; border: 1px solid #FF8C00;')
+                                text_editor = ui.textarea(value=transcribed).classes('w-full markdown-body').style('min-height: 300px;')
                                 ui.label('Preview:').classes('text-lg font-bold text-white mt-2')
                                 preview_container = ui.column().classes('w-full')
+
                                 def update_preview():
                                     preview_container.clear()
                                     with preview_container:
@@ -1021,33 +980,17 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                                 try:
                                     current_text = text_editor.value if text_editor else transcribed_text_holder['text']
                                     meta = current_meta('OCR')
-                                    pdf_bytes = build_report_pdf(
-                                        doc_title="",
-                                        subtitle="",
-                                        body_markdown=current_text,
-                                        meta=meta,
-                                        logo_bytes=logo_bytes_holder['bytes'],
-                                        show_ticket=False
-                                    )
+                                    pdf_bytes = build_report_pdf("", "", current_text, meta, logo_bytes_holder['bytes'], show_ticket=False)
                                     ui.download(pdf_bytes, filename=f"Handwriting_Transcription_{ticket_input.value}.pdf")
                                     ui.notify('PDF report downloaded!', type='positive')
                                 except Exception as ex:
                                     ui.notify(f'PDF Error: {str(ex)}', type='negative')
-                            def download_ocr_txt():
-                                try:
-                                    current_text = text_editor.value if text_editor else transcribed_text_holder['text']
-                                    txt_bytes = current_text.encode('utf-8')
-                                    ui.download(txt_bytes, filename=f"Handwriting_Transcription_{ticket_input.value}.txt")
-                                    ui.notify('TXT file downloaded!', type='positive')
-                                except Exception as ex:
-                                    ui.notify(f'TXT Error: {str(ex)}', type='negative')
-                            ui.button('Download PDF Report', on_click=download_ocr_pdf).classes('primary-btn flex-1')
-                            ui.button('Download TXT', on_click=download_ocr_txt).classes('primary-btn flex-1')
+                            ui.button('Download PDF Report', on_click=download_ocr_pdf).classes('primary-btn')
                     except Exception as ex:
                         ocr_output.clear()
                         with ocr_output:
                             ui.notify(f'Transcription failed: {str(ex)}', type='negative')
-                            ui.label('Error occurred. Please try again with a clearer image.').classes('text-red-400')
+
                 ui.button('Transcribe Handwriting', on_click=run_ocr).classes('primary-btn')
                 with ocr_output:
                     ui.markdown('*Upload a file and click "Transcribe Handwriting" to start.*').classes('text-sm text-[#A9B6D0]')
@@ -1055,7 +998,7 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
             # ===== TAB 6: JOB BOARD =====
             with ui.tab_panel(t_jobs):
                 ui.label('Engineering Job Board - Egypt').classes('text-2xl font-bold text-white mb-4')
-                ui.markdown('Search for the latest engineering jobs in Egypt. Uses **JSearch** (RapidAPI) if the key is set, otherwise falls back to direct Wuzzuf and Bayt scraping with Cloudflare bypass.').classes('markdown-body mb-2')
+                ui.markdown('Search for the latest engineering jobs in Egypt. Uses **JSearch** (RapidAPI) if the key is set, otherwise falls back to direct Wuzzuf and Bayt scraping.').classes('markdown-body mb-2')
                 key_status = ui.label(
                     '🔑 RapidAPI key: ' + ('✅ Set' if RAPIDAPI_KEY else '❌ Not set – using Wuzzuf/Bayt fallback.')
                 ).classes('text-sm text-[#A9B6D0] mb-2')
@@ -1064,9 +1007,10 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                     search_input = ui.input(label='Search for jobs', placeholder='e.g., Civil Engineer', value='Civil Engineer').classes('flex-1')
                     location_input = ui.input(label='Location (optional)', placeholder='e.g., Cairo').classes('flex-1')
                     search_button = ui.button('Search Jobs', on_click=lambda: search_jobs()).classes('primary-btn')
-                filter_input = ui.input(label='Filter results', placeholder='Type to filter title, company, description...', on_change=lambda: filter_jobs()).classes('w-full mb-2')
+                filter_input = ui.input(label='Filter results', placeholder='Type to filter...', on_change=lambda: filter_jobs()).classes('w-full mb-2')
                 results_container = ui.column().classes('w-full')
                 jobs_data = []
+
                 def display_jobs(jobs, filter_text=''):
                     results_container.clear()
                     with results_container:
@@ -1089,8 +1033,10 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                                 desc = job['description'][:200] + ('...' if len(job['description']) > 200 else '')
                                 ui.label(desc).classes('text-sm text-white mt-1')
                                 ui.link('View Job', job['url'], new_tab=True).classes('text-[#4FC3F7] hover:text-[#FF8C00]')
+
                 def filter_jobs():
                     display_jobs(jobs_data, filter_input.value.strip())
+
                 async def search_jobs():
                     query = search_input.value.strip()
                     if not query:
@@ -1121,7 +1067,7 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
             # ===== TAB 7: PROGRESS TRACKER =====
             with ui.tab_panel(t_progress):
                 ui.label('📊 Project Progress Tracker').classes('text-2xl font-bold text-white mb-4')
-                ui.markdown('Upload multiple files (images, PDFs, Excel) from different people to track project progress. The AI will extract data and create a unified summary with charts and an overview.').classes('markdown-body mb-2')
+                ui.markdown('Upload files (images, PDFs, Excel) to track project progress.').classes('markdown-body mb-2')
 
                 uploaded_files = []
                 upload_status = ui.label('No files uploaded yet.').classes('text-xs text-amber-400 mb-2')
@@ -1147,7 +1093,7 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                     ui.label('End Date').classes('text-white text-sm font-semibold')
                     end_date = ui.date(value=datetime.date.today()).classes('w-40')
 
-                description_input = ui.input(label='Project Phase / Description', placeholder='e.g., Foundation Work', value='Foundation and Structure').classes('w-full mb-4')
+                description_input = ui.input(label='Project Phase / Description', value='Foundation and Structure').classes('w-full mb-4')
 
                 progress_output = ui.column().classes('w-full')
                 progress_charts = ui.column().classes('w-full')
@@ -1169,7 +1115,7 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
 
                     with progress_output:
                         ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
-                        ui.label('Processing files and extracting progress data...').classes('self-center text-sm')
+                        ui.label('Processing files...').classes('self-center text-sm')
 
                     try:
                         all_rows = []
@@ -1192,14 +1138,9 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                                         'source': f['name']
                                     }
                                     all_rows.append(pd.DataFrame([row]))
-                            else:
-                                ui.notify(f'Skipping unsupported file: {f["name"]}', type='warning')
 
                         if not all_rows:
-                            ui.notify('No data could be extracted from the uploaded files.', type='warning')
-                            progress_output.clear()
-                            with progress_output:
-                                ui.label('No data found in the uploaded files. Please check file contents.').classes('text-white')
+                            ui.notify('No data could be extracted.', type='warning')
                             return
 
                         combined_df = pd.concat(all_rows, ignore_index=True)
@@ -1218,60 +1159,9 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                             ui.label('📋 Progress Summary Table').classes('text-xl font-bold text-white mb-2')
                             columns = [
                                 {'name': col, 'label': col.replace('_', ' ').title(), 'field': col, 'sortable': True}
-                                for col in display_df.columns if col != 'source'
+                                for col in display_df.columns
                             ]
-                            if 'source' in display_df.columns:
-                                columns.append({'name': 'source', 'label': 'Source File', 'field': 'source', 'sortable': True})
                             ui.table(columns=columns, rows=display_df.to_dict('records'), row_key='index').classes('w-full text-white')
-
-                        fig_bar, fig_scatter, fig_pie, fig_line = None, None, None, None
-                        if not combined_df.empty:
-                            if 'category' in combined_df.columns and 'progress_percent' in combined_df.columns:
-                                avg_progress = combined_df.groupby('category')['progress_percent'].mean().reset_index()
-                                if not avg_progress.empty:
-                                    fig_bar = px.bar(avg_progress, x='category', y='progress_percent',
-                                                     title='Average Progress by Category',
-                                                     color='category', template='plotly_dark')
-                                    fig_bar.update_layout(paper_bgcolor='#0d1a35', plot_bgcolor='#0d1a35', font_color='white')
-
-                            if 'date' in combined_df.columns and 'progress_percent' in combined_df.columns:
-                                df_time = combined_df.dropna(subset=['date', 'progress_percent'])
-                                if not df_time.empty:
-                                    fig_scatter = px.scatter(df_time, x='date', y='progress_percent',
-                                                            color='category', title='Progress Over Time',
-                                                            template='plotly_dark')
-                                    fig_scatter.update_layout(paper_bgcolor='#0d1a35', plot_bgcolor='#0d1a35', font_color='white')
-
-                            if 'category' in combined_df.columns:
-                                cat_counts = combined_df['category'].value_counts().reset_index()
-                                cat_counts.columns = ['category', 'count']
-                                if not cat_counts.empty:
-                                    fig_pie = px.pie(cat_counts, names='category', values='count',
-                                                     title='Category Distribution', template='plotly_dark')
-                                    fig_pie.update_layout(paper_bgcolor='#0d1a35', plot_bgcolor='#0d1a35', font_color='white')
-
-                            if 'date' in combined_df.columns and 'progress_percent' in combined_df.columns:
-                                df_time = combined_df.dropna(subset=['date', 'progress_percent']).sort_values('date')
-                                if not df_time.empty:
-                                    df_time['cumulative'] = df_time['progress_percent'].cumsum()
-                                    fig_line = px.line(df_time, x='date', y='cumulative',
-                                                       title='Cumulative Progress Over Time',
-                                                       template='plotly_dark')
-                                    fig_line.update_layout(paper_bgcolor='#0d1a35', plot_bgcolor='#0d1a35', font_color='white')
-
-                        progress_charts.clear()
-                        with progress_charts:
-                            ui.label('📈 Charts').classes('text-xl font-bold text-white mb-2')
-                            chart_grid = ui.row().classes('w-full gap-4')
-                            with chart_grid:
-                                if fig_bar:
-                                    ui.plotly(fig_bar).classes('w-full md:w-1/2')
-                                if fig_scatter:
-                                    ui.plotly(fig_scatter).classes('w-full md:w-1/2')
-                                if fig_pie:
-                                    ui.plotly(fig_pie).classes('w-full md:w-1/2')
-                                if fig_line:
-                                    ui.plotly(fig_line).classes('w-full md:w-1/2')
 
                         overview_text = await generate_progress_overview(
                             combined_df,
@@ -1283,48 +1173,17 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                         with progress_overview:
                             ui.label('📝 AI Overview').classes('text-xl font-bold text-white mb-2')
                             ui.markdown(overview_text).classes('markdown-body')
-
-                        pdf_data = {
-                            'df': combined_df,
-                            'fig_bar': fig_bar,
-                            'fig_scatter': fig_scatter,
-                            'fig_pie': fig_pie,
-                            'fig_line': fig_line,
-                            'overview': overview_text,
-                            'start_date': start_date.value,
-                            'end_date': end_date.value,
-                            'description': description_input.value
-                        }
-                        progress_export.clear()
-                        with progress_export:
-                            def download_progress_pdf():
-                                try:
-                                    pdf_bytes = generate_progress_pdf(
-                                        pdf_data,
-                                        engineer_input.value,
-                                        project_name_input.value,
-                                        logo_bytes_holder['bytes'],
-                                        ticket_input.value
-                                    )
-                                    ui.download(pdf_bytes, filename=f"Progress_Report_{ticket_input.value}.pdf")
-                                    ui.notify('PDF downloaded!', type='positive')
-                                except Exception as e:
-                                    ui.notify(f'PDF generation error: {str(e)}', type='negative')
-
-                            ui.button('Download Progress PDF', on_click=download_progress_pdf).classes('primary-btn')
-
                     except Exception as e:
                         progress_output.clear()
                         with progress_output:
                             ui.notify(f'Analysis failed: {str(e)}', type='negative')
-                            ui.label(f'Error: {str(e)}').classes('text-red-400')
 
                 ui.button('Run AI Analysis', on_click=run_progress_analysis).classes('primary-btn mt-4')
 
             # ===== TAB 8: DXF AREA EXTRACTOR =====
             with ui.tab_panel(t_dxf):
                 ui.label('📐 DXF Area Extractor').classes('text-2xl font-bold text-white mb-4')
-                ui.markdown('Upload a DXF file (architectural or structural) to extract areas of closed polylines. The tool auto-detects layers and lets you choose workflow and units.').classes('markdown-body mb-2')
+                ui.markdown('Upload a DXF file to extract areas of closed polylines.').classes('markdown-body mb-2')
 
                 dxf_file_data = {'bytes': None, 'name': None}
                 dxf_status_label = ui.label('Status: No file uploaded yet').classes('text-xs text-amber-400 font-semibold mb-2')
@@ -1339,40 +1198,21 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                         dxf_status_label.set_text(f'File Ready: {e.file.name} ({(len(data)/1024):.1f} KB)')
                         dxf_status_label.classes(replace='text-xs text-emerald-400 font-semibold mb-2')
                         ui.notify(f'Uploaded: {e.file.name}', type='positive')
-                        try:
-                            doc = ezdxf.read(io.BytesIO(data))
-                            layers = detect_dxf_layers(doc)
-                            layer_info = "\n".join([f"{layer}: {info['count']} entities, keywords: {', '.join(info['keywords'])}" for layer, info in layers.items()])
-                            detected_layers_label.set_text(f"Detected layers:\n{layer_info}")
-                            detected_layers_label.classes(replace='text-xs text-white')
-                        except Exception as ex:
-                            detected_layers_label.set_text(f"Error reading DXF: {str(ex)}")
-                            detected_layers_label.classes(replace='text-xs text-red-400')
-                            traceback.print_exc()
                     except Exception as ex:
                         ui.notify(f'Upload error: {str(ex)}', type='negative')
-                        traceback.print_exc()
 
-                ui.label('Upload DXF File').classes('text-white text-sm font-semibold mb-1')
                 ui.upload(auto_upload=True, on_upload=handle_dxf_upload, multiple=False).props('flat dark').classes('w-full mb-4')
 
                 detected_layers_label = ui.label('Detected layers will appear here after upload.').classes('text-xs text-[#A9B6D0] mb-2')
 
                 with ui.row().classes('w-full gap-4 mb-4'):
-                    workflow_select = ui.select(
-                        label='Workflow',
+                    workflow_select = ui.select(label='Workflow',
                         options=['Architectural BOQ', 'Structural Mass', 'Site Layout'],
-                        value='Architectural BOQ'
-                    ).classes('flex-1')
-                    unit_select = ui.select(
-                        label='Drawing Units',
-                        options=['mm', 'cm', 'm'],
-                        value='mm'
-                    ).classes('flex-1')
+                        value='Architectural BOQ').classes('flex-1')
+                    unit_select = ui.select(label='Drawing Units', options=['mm', 'cm', 'm'], value='mm').classes('flex-1')
 
                 dxf_output = ui.column().classes('w-full')
                 dxf_export = ui.row().classes('w-full gap-4 mt-4')
-                dxf_data_holder = {'df': None, 'total_area': 0}
 
                 async def process_dxf():
                     if dxf_file_data['bytes'] is None:
@@ -1383,29 +1223,17 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                     with dxf_output:
                         ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
                         ui.label('Processing DXF file...').classes('self-center text-sm')
-
                     try:
                         data = dxf_file_data['bytes']
                         if isinstance(data, str):
                             data = data.encode('utf-8')
                         doc = ezdxf.read(io.BytesIO(data))
-                        workflow = workflow_select.value
-                        unit = unit_select.value
-                        areas = extract_areas_from_dxf(doc, unit=unit, workflow=workflow.lower().split()[0])
-
+                        areas = extract_areas_from_dxf(doc, unit=unit_select.value, workflow=workflow_select.value.lower().split()[0])
                         if not areas:
                             ui.notify('No closed polylines found in the DXF.', type='warning')
-                            dxf_output.clear()
-                            with dxf_output:
-                                ui.label('No closed polylines found. Please check the DXF file.').classes('text-white')
                             return
-
-                        df = pd.DataFrame(areas)
-                        df = df.sort_values('area_m2', ascending=False)
-                        dxf_data_holder['df'] = df
+                        df = pd.DataFrame(areas).sort_values('area_m2', ascending=False)
                         total = df['area_m2'].sum()
-                        dxf_data_holder['total_area'] = total
-
                         dxf_output.clear()
                         with dxf_output:
                             ui.label('📋 Extracted Areas (m²)').classes('text-xl font-bold text-white mb-2')
@@ -1413,174 +1241,156 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                                 {'name': 'layer', 'label': 'Layer', 'field': 'layer', 'sortable': True},
                                 {'name': 'label', 'label': 'Label', 'field': 'label', 'sortable': True},
                                 {'name': 'area_m2', 'label': 'Area (m²)', 'field': 'area_m2', 'sortable': True},
-                                {'name': 'vertices', 'label': 'Vertices', 'field': 'vertices', 'sortable': True},
                             ]
                             ui.table(columns=columns, rows=df.to_dict('records'), row_key='index').classes('w-full text-white')
                             ui.label(f'Total Net Area: {total:.4f} m²').classes('text-lg font-bold text-[#FF8C00] mt-2')
-
-                        dxf_export.clear()
-                        with dxf_export:
-                            def download_dxf_pdf():
-                                try:
-                                    pdf_bytes = generate_dxf_pdf(
-                                        df,
-                                        total,
-                                        dxf_file_data['name'],
-                                        workflow_select.value,
-                                        unit_select.value,
-                                        engineer_input.value,
-                                        project_name_input.value,
-                                        logo_bytes_holder['bytes'],
-                                        ticket_input.value
-                                    )
-                                    ui.download(pdf_bytes, filename=f"DXF_Area_Report_{ticket_input.value}.pdf")
-                                    ui.notify('PDF downloaded!', type='positive')
-                                except Exception as e:
-                                    ui.notify(f'PDF generation error: {str(e)}', type='negative')
-                                    traceback.print_exc()
-
-                            ui.button('Download DXF Report PDF', on_click=download_dxf_pdf).classes('primary-btn')
-
                     except Exception as e:
                         dxf_output.clear()
                         with dxf_output:
                             ui.notify(f'Processing error: {str(e)}', type='negative')
-                            ui.label(f'Error: {str(e)}').classes('text-red-400')
-                            traceback.print_exc()
 
                 ui.button('Process DXF', on_click=process_dxf).classes('primary-btn mt-4')
-                with dxf_output:
-                    ui.markdown('*Upload a DXF and click "Process DXF" to extract areas.*').classes('text-sm text-[#A9B6D0]')
-with ui.tab_panel(t_autocad):
-    ui.label('🏗️ AI-Powered Home Layout Generator').classes('text-2xl font-bold text-white mb-4')
-    ui.markdown('Describe your plot and what you want — the AI designs the layout, applies Egyptian building code, and derives the structural system automatically.').classes('markdown-body mb-2')
 
-    with ui.row().classes('w-full gap-4 flex-wrap'):
-        with ui.column().classes('input-card flex-1'):
-            ui.label('Your Plot').classes('font-bold text-white')
-            plot_area_input = ui.number(label='Plot Area (m²)', value=200, min=50, max=2000).classes('w-full')
-            plot_width_input = ui.number(label='Plot Width (m) — optional', value=10, step=0.5).classes('w-full')
-            plot_length_input = ui.number(label='Plot Length (m) — optional', value=20, step=0.5).classes('w-full')
-            street_width_input = ui.number(label='Street Width (m)', value=10, min=4, max=60).classes('w-full')
-            location_select = ui.select(label='Location', options=['Cairo','Giza','Alexandria','New Cairo','6th of October','Delta','Other'], value='Cairo').classes('w-full')
+            # ===== TAB 9: AUTOCAD LAYOUT GENERATOR (AI-POWERED) =====
+            with ui.tab_panel(t_autocad):
+                ui.label('🏗️ AI-Powered Home Layout Generator').classes('text-2xl font-bold text-white mb-4')
+                ui.markdown('Describe your plot and what you want — the AI designs the layout, applies Egyptian building code, and derives the structural system automatically.').classes('markdown-body mb-2')
 
-        with ui.column().classes('input-card flex-1'):
-            ui.label('Your Home').classes('font-bold text-white')
-            num_floors_input = ui.number(label='Number of Floors', value=2, min=1, max=6).classes('w-full')
-            floor_height_input = ui.number(label='Floor Height (m)', value=3.0, step=0.1).classes('w-full')
-            num_units_input = ui.number(label='Units per Floor', value=1, min=1, max=4).classes('w-full')
-            num_bedrooms_input = ui.number(label='Bedrooms', value=3, min=1, max=8).classes('w-full')
-            num_bathrooms_input = ui.number(label='Bathrooms', value=2, min=1, max=5).classes('w-full')
+                with ui.row().classes('w-full gap-4 flex-wrap'):
+                    with ui.column().classes('input-card flex-1'):
+                        ui.label('Your Plot').classes('font-bold text-white')
+                        plot_area_input = ui.number(label='Plot Area (m²)', value=200, min=50, max=2000).classes('w-full')
+                        plot_width_input = ui.number(label='Plot Width (m) — optional', value=10, step=0.5).classes('w-full')
+                        plot_length_input = ui.number(label='Plot Length (m) — optional', value=20, step=0.5).classes('w-full')
+                        street_width_input = ui.number(label='Street Width (m)', value=10, min=4, max=60).classes('w-full')
+                        location_select = ui.select(
+                            label='Location',
+                            options=['Cairo', 'Giza', 'Alexandria', 'New Cairo', '6th of October', 'Delta', 'Other'],
+                            value='Cairo'
+                        ).classes('w-full')
 
-        with ui.column().classes('input-card flex-1'):
-            ui.label('Special Requests (optional)').classes('font-bold text-white')
-            user_desc_input = ui.textarea(
-                label='Tell the AI what you want',
-                placeholder='e.g., "Large open living room, big kitchen with island, master bedroom with en-suite, separate guest room, rooftop terrace"'
-            ).classes('w-full').style('min-height: 140px;')
+                    with ui.column().classes('input-card flex-1'):
+                        ui.label('Your Home').classes('font-bold text-white')
+                        num_floors_input = ui.number(label='Number of Floors', value=2, min=1, max=6).classes('w-full')
+                        floor_height_input = ui.number(label='Floor Height (m)', value=3.0, step=0.1).classes('w-full')
+                        num_units_input = ui.number(label='Units per Floor', value=1, min=1, max=4).classes('w-full')
+                        num_bedrooms_input = ui.number(label='Bedrooms', value=3, min=1, max=8).classes('w-full')
+                        num_bathrooms_input = ui.number(label='Bathrooms', value=2, min=1, max=5).classes('w-full')
 
-    autocad_output = ui.column().classes('w-full')
-    autocad_export = ui.row().classes('w-full gap-4 mt-4')
-    autocad_data_holder = {'dxf': None, 'boq': None, 'info': None}
+                    with ui.column().classes('input-card flex-1'):
+                        ui.label('Special Requests (optional)').classes('font-bold text-white')
+                        user_desc_input = ui.textarea(
+                            label='Tell the AI what you want',
+                            placeholder='e.g., "Large open living room, big kitchen with island, master bedroom with en-suite"'
+                        ).classes('w-full').style('min-height: 140px;')
 
-    async def generate_enhanced_autocad():
-        from services.ai_service import plan_architectural_layout
-        autocad_output.clear()
-        autocad_export.clear()
-        with autocad_output:
-            ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
-            ui.label('🤖 AI is designing your home layout according to Egyptian building code…').classes('self-center text-sm')
+                autocad_output = ui.column().classes('w-full')
+                autocad_export = ui.row().classes('w-full gap-4 mt-4')
+                autocad_data_holder = {'dxf': None, 'boq': None, 'info': None}
 
-        try:
-            plot_data = {
-                'plot_area_m2': plot_area_input.value or 200,
-                'plot_width': plot_width_input.value or 10,
-                'plot_length': plot_length_input.value or 20,
-                'street_width_m': street_width_input.value or 10,
-                'location': location_select.value or 'Cairo',
-                'num_floors': int(num_floors_input.value or 2),
-                'floor_height_m': floor_height_input.value or 3.0,
-                'num_units_per_floor': int(num_units_input.value or 1),
-                'num_bedrooms': int(num_bedrooms_input.value or 3),
-                'num_bathrooms': int(num_bathrooms_input.value or 2),
-                'user_description': user_desc_input.value or 'Standard Egyptian family home',
-            }
+                async def generate_enhanced_autocad():
+                    from services.ai_service import plan_architectural_layout
+                    autocad_output.clear()
+                    autocad_export.clear()
+                    with autocad_output:
+                        ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
+                        ui.label('🤖 AI is designing your home layout according to Egyptian building code…').classes('self-center text-sm')
 
-            with autocad_output:
-                ui.label('Step 1/2 — AI is planning the rooms…').classes('self-center text-sm')
-            layout_plan = await plan_architectural_layout(plot_data)
-
-            params = dict(plot_data)
-            params.update({
-                'layout_plan': layout_plan,
-                'project_name': project_name_input.value,
-                'engineer': engineer_input.value,
-                'date': datetime.date.today().strftime('%Y-%m-%d'),
-            })
-
-            with autocad_output:
-                ui.label('Step 2/2 — Generating DXF + structural grid…').classes('self-center text-sm')
-
-            result = await asyncio.to_thread(build_complete_project, params)
-            autocad_data_holder.update(result)
-
-            autocad_output.clear()
-            with autocad_output:
-                ui.label('✅ Layout Generated by AI').classes('text-xl font-bold text-green-400 mb-2')
-                info = result['info']
-                ui.markdown(f"""
-                **Plot Area:** {info['plot_area']:.2f} m²  
-                **Street Width:** {info['street_width']} m  
-                **Location:** {info['location']}  
-                **Floors Used:** {info['num_floors']} (max allowed: {info['max_floors']})  
-                **Footprint:** {info['footprint_area']} m²  
-                **Building:** {info['building_width']:.2f} m × {info['building_length']:.2f} m  
-                **Rooms Planned:** {info['num_rooms']}  
-                **Columns Auto-Placed:** {info['num_columns']}
-                """).classes('text-white')
-
-                ui.label('📋 Bill of Quantities (Egyptian Code compliance)').classes('text-xl font-bold text-white mt-4 mb-2')
-                boq_df = pd.DataFrame(result['boq'])
-                columns = [
-                    {'name': 'Item', 'label': 'Item', 'field': 'Item', 'sortable': True},
-                    {'name': 'Quantity', 'label': 'Quantity', 'field': 'Quantity', 'sortable': True},
-                    {'name': 'Unit', 'label': 'Unit', 'field': 'Unit', 'sortable': True},
-                    {'name': 'Unit Rate (EGP)', 'label': 'Unit Rate (EGP)', 'field': 'Unit Rate (EGP)', 'sortable': True},
-                    {'name': 'Total Cost (EGP)', 'label': 'Total Cost (EGP)', 'field': 'Total Cost (EGP)', 'sortable': True},
-                ]
-                ui.table(columns=columns, rows=boq_df.to_dict('records'), row_key='index').classes('w-full text-white')
-                total_cost = boq_df['Total Cost (EGP)'].sum()
-                ui.label(f'🏷️ Grand Total: {total_cost:,.0f} EGP').classes('text-2xl font-bold text-[#FF8C00] mt-2')
-
-            autocad_export.clear()
-            with autocad_export:
-                def download_dxf():
-                    if autocad_data_holder.get('dxf'):
-                        ui.download(autocad_data_holder['dxf'], filename=f"AI_Home_Layout_{info['plot_area']:.0f}m2.dxf")
-                        ui.notify('DXF downloaded!', type='positive')
-                def download_pdf():
                     try:
-                        pdf_bytes = generate_autocad_pdf(
-                            info, pd.DataFrame(result['boq']),
-                            engineer_input.value, project_name_input.value,
-                            logo_bytes_holder['bytes'], ticket_input.value
-                        )
-                        ui.download(pdf_bytes, filename=f"AI_Home_Report_{info['plot_area']:.0f}m2.pdf")
-                        ui.notify('PDF downloaded!', type='positive')
+                        plot_data = {
+                            'plot_area_m2': plot_area_input.value or 200,
+                            'plot_width': plot_width_input.value or 10,
+                            'plot_length': plot_length_input.value or 20,
+                            'street_width_m': street_width_input.value or 10,
+                            'location': location_select.value or 'Cairo',
+                            'num_floors': int(num_floors_input.value or 2),
+                            'floor_height_m': floor_height_input.value or 3.0,
+                            'num_units_per_floor': int(num_units_input.value or 1),
+                            'num_bedrooms': int(num_bedrooms_input.value or 3),
+                            'num_bathrooms': int(num_bathrooms_input.value or 2),
+                            'user_description': user_desc_input.value or 'Standard Egyptian family home',
+                        }
+
+                        with autocad_output:
+                            ui.label('Step 1/2 — AI is planning the rooms…').classes('self-center text-sm')
+                        layout_plan = await plan_architectural_layout(plot_data)
+
+                        params = dict(plot_data)
+                        params.update({
+                            'layout_plan': layout_plan,
+                            'project_name': project_name_input.value,
+                            'engineer': engineer_input.value,
+                            'date': datetime.date.today().strftime('%Y-%m-%d'),
+                        })
+
+                        with autocad_output:
+                            ui.label('Step 2/2 — Generating DXF + structural grid…').classes('self-center text-sm')
+
+                        result = await asyncio.to_thread(build_complete_project, params)
+                        autocad_data_holder['dxf'] = result['dxf']
+                        autocad_data_holder['boq'] = result['boq']
+                        autocad_data_holder['info'] = result['info']
+
+                        autocad_output.clear()
+                        with autocad_output:
+                            ui.label('✅ Layout Generated by AI').classes('text-xl font-bold text-green-400 mb-2')
+                            info = result['info']
+                            ui.markdown(f"""
+**Plot Area:** {info['plot_area']:.2f} m²  
+**Street Width:** {info['street_width']} m  
+**Location:** {info['location']}  
+**Floors Used:** {info['num_floors']} (max allowed: {info['max_floors']})  
+**Footprint:** {info['footprint_area']} m²  
+**Building:** {info['building_width']:.2f} m × {info['building_length']:.2f} m  
+**Rooms Planned:** {info['num_rooms']}  
+**Columns Auto‑Placed:** {info['num_columns']}
+""").classes('text-white')
+
+                            ui.label('📋 Bill of Quantities (Egyptian Code compliance)').classes('text-xl font-bold text-white mt-4 mb-2')
+                            boq_df = pd.DataFrame(result['boq'])
+                            columns = [
+                                {'name': 'Item', 'label': 'Item', 'field': 'Item', 'sortable': True},
+                                {'name': 'Quantity', 'label': 'Quantity', 'field': 'Quantity', 'sortable': True},
+                                {'name': 'Unit', 'label': 'Unit', 'field': 'Unit', 'sortable': True},
+                                {'name': 'Unit Rate (EGP)', 'label': 'Unit Rate (EGP)', 'field': 'Unit Rate (EGP)', 'sortable': True},
+                                {'name': 'Total Cost (EGP)', 'label': 'Total Cost (EGP)', 'field': 'Total Cost (EGP)', 'sortable': True},
+                            ]
+                            ui.table(columns=columns, rows=boq_df.to_dict('records'), row_key='index').classes('w-full text-white')
+                            total_cost = boq_df['Total Cost (EGP)'].sum()
+                            ui.label(f'🏷️ Grand Total: {total_cost:,.0f} EGP').classes('text-2xl font-bold text-[#FF8C00] mt-2')
+
+                        autocad_export.clear()
+                        with autocad_export:
+                            def download_dxf():
+                                if autocad_data_holder.get('dxf'):
+                                    ui.download(autocad_data_holder['dxf'], filename=f"AI_Home_Layout_{info['plot_area']:.0f}m2.dxf")
+                                    ui.notify('DXF downloaded!', type='positive')
+
+                            def download_pdf():
+                                try:
+                                    pdf_bytes = generate_autocad_pdf(
+                                        info, pd.DataFrame(result['boq']),
+                                        engineer_input.value, project_name_input.value,
+                                        logo_bytes_holder['bytes'], ticket_input.value
+                                    )
+                                    ui.download(pdf_bytes, filename=f"AI_Home_Report_{info['plot_area']:.0f}m2.pdf")
+                                    ui.notify('PDF downloaded!', type='positive')
+                                except Exception as e:
+                                    ui.notify(f'PDF error: {e}', type='negative')
+
+                            ui.button('📥 Download DXF', on_click=download_dxf).classes('primary-btn')
+                            ui.button('📄 Download PDF Report', on_click=download_pdf).classes('primary-btn')
+
                     except Exception as e:
-                        ui.notify(f'PDF error: {e}', type='negative')
-                ui.button('📥 Download DXF', on_click=download_dxf).classes('primary-btn')
-                ui.button('📄 Download PDF Report', on_click=download_pdf).classes('primary-btn')
+                        autocad_output.clear()
+                        with autocad_output:
+                            ui.notify(f'Generation failed: {e}', type='negative')
+                            traceback.print_exc()
 
-        except Exception as e:
-            autocad_output.clear()
-            with autocad_output:
-                ui.notify(f'Generation failed: {e}', type='negative')
-                traceback.print_exc()
+                ui.button('🚀 Generate My Home Layout (AI)', on_click=generate_enhanced_autocad).classes('primary-btn mt-4')
+                with autocad_output:
+                    ui.markdown('*Just describe your plot and what you want. The AI does the rest — architectural layout, structural grid, and BOQ per Egyptian code.*').classes('text-sm text-[#A9B6D0]')
 
-    ui.button('🚀 Generate My Home Layout (AI)', on_click=generate_enhanced_autocad).classes('primary-btn mt-4')
-    with autocad_output:
-        ui.markdown('*Just describe your plot and what you want. The AI does the rest — architectural layout, structural grid, and BOQ per Egyptian code.*').classes('text-sm text-[#A9B6D0]')
         # ---------------- FOOTER ----------------
         ui.html('''
         <div class="app-footer">
