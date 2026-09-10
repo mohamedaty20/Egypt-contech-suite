@@ -9,13 +9,12 @@ from shapely.geometry import Polygon, box
 from config import BOQ_RATES
 
 # ----------------------------------------------------------------------
-# Valid DXF lineweights (values ezdxf accepts)
+# Valid DXF lineweights
 # ----------------------------------------------------------------------
 _VALID_LINEWEIGHTS = [0, 5, 9, 13, 15, 18, 20, 25, 30, 35, 40, 50, 53, 60,
                       70, 80, 90, 100, 106, 120, 140, 158, 200, 211]
 
 def _snap_lineweight(lw):
-    """Return the nearest valid DXF lineweight."""
     try:
         lw = int(lw)
     except Exception:
@@ -26,7 +25,7 @@ def _snap_lineweight(lw):
 
 
 # ----------------------------------------------------------------------
-# Layer detection / area extraction (unchanged)
+# Layer detection / area extraction
 # ----------------------------------------------------------------------
 def detect_dxf_layers(doc):
     layers = {}
@@ -104,7 +103,6 @@ def create_dxf_layer(doc, name, color, lineweight=25, linetype='CONTINUOUS'):
 # Slice-and-dice room placement
 # ----------------------------------------------------------------------
 def slice_and_dice(rect, rooms):
-    """rect: (x0,y0,x1,y1) in mm.  rooms: list of dicts sorted by priority."""
     x0, y0, x1, y1 = rect
     if len(rooms) == 0:
         return []
@@ -187,10 +185,9 @@ def build_complete_project(params):
     door_h = params.get('door_height_mm', 2100)
     win_w = params.get('window_width_mm', 1200)
     win_h = params.get('window_height_mm', 1200)
-
     num_units = params.get('num_units_per_floor', 1)
 
-    # ----- 5. Structural params (auto-derived defaults) -----
+    # ----- 5. Structural params -----
     col_sp_x = params.get('column_spacing_x', 5.0) * 1000
     col_sp_y = params.get('column_spacing_y', 5.0) * 1000
     beam_w = params.get('beam_width_mm', 300)
@@ -217,15 +214,15 @@ def build_complete_project(params):
         'A-WALL-INT':   {'color': 8,  'lineweight': 30},
         'A-DOOR':       {'color': 3,  'lineweight': 20},
         'A-WINDOW':     {'color': 5,  'lineweight': 15},
-        'A-ROOM-TEXT':  {'color': 4,  'lineweight': 13},   # was 10
+        'A-ROOM-TEXT':  {'color': 4,  'lineweight': 13},
         'A-CORE':       {'color': 4,  'lineweight': 25},
         'S-COLUMN':     {'color': 6,  'lineweight': 40},
         'S-BEAM':       {'color': 1,  'lineweight': 30},
         'S-SLAB':       {'color': 9,  'lineweight': 20},
         'S-FOOTING':    {'color': 9,  'lineweight': 40},
-        'S-REBAR':      {'color': 10, 'lineweight': 13},   # was 10
+        'S-REBAR':      {'color': 10, 'lineweight': 13},
         'ANNO-DIMS':    {'color': 2,  'lineweight': 15},
-        'ANNO-TEXT':    {'color': 4,  'lineweight': 13},   # was 10
+        'ANNO-TEXT':    {'color': 4,  'lineweight': 13},
     }
     for name, props in layers_def.items():
         create_dxf_layer(doc, name, props['color'], lineweight=props['lineweight'])
@@ -236,7 +233,7 @@ def build_complete_project(params):
         dxfattribs={'layer': 'A-WALL', 'color': 7, 'lineweight': 50}
     )
 
-    # ----- 8. Core (stair) -----
+    # ----- 8. Core -----
     core_w, core_d = 2500, 3500
     core_x = (x0 + L_mm / 2) - core_w / 2
     core_y = (y0 + W_mm / 2) - core_d / 2
@@ -249,16 +246,15 @@ def build_complete_project(params):
          (core_x, core_y)],
         dxfattribs={'layer': 'A-CORE', 'color': 4, 'lineweight': 25}
     )
-    msp.add_text("STAIR / CORE",
-                 dxfattribs={'layer': 'A-ROOM-TEXT', 'height': 150, 'color': 4}
-                 ).set_pos((core_x + core_w / 2, core_y + core_d / 2),
-                           align=TextEntityAlignment.MIDDLE_CENTER)
+    t = msp.add_text("STAIR / CORE",
+                     dxfattribs={'layer': 'A-ROOM-TEXT', 'height': 150, 'color': 4})
+    t.set_placement((core_x + core_w / 2, core_y + core_d / 2),
+                    align=TextEntityAlignment.MIDDLE_CENTER)
 
-    # ----- 9. Use AI layout plan if available -----
+    # ----- 9. AI layout plan -----
     layout_plan = params.get('layout_plan') or {}
     ai_rooms = layout_plan.get('rooms', [])
     if not ai_rooms:
-        # Fallback rooms if AI failed
         ai_rooms = [
             {"name": "Living Room", "type": "living", "area_m2": 25, "priority": 1, "zone": "public", "needs_window": True},
             {"name": "Kitchen", "type": "kitchen", "area_m2": 9, "priority": 2, "zone": "public", "needs_window": True},
@@ -267,15 +263,13 @@ def build_complete_project(params):
             {"name": "Bathroom", "type": "bathroom", "area_m2": 4, "priority": 5, "zone": "private", "needs_window": False},
         ]
 
-    # Split into public (near street) and private (rear)
     public_rooms = sorted([r for r in ai_rooms if r.get('zone') == 'public'], key=lambda r: r.get('priority', 99))
     private_rooms = sorted([r for r in ai_rooms if r.get('zone') == 'private'], key=lambda r: r.get('priority', 99))
 
-    # Corridor across middle
     corridor_h = 1200
     mid_y = y0 + W_mm / 2
-    lower_rect = (x0 + 100, y0 + 100, x0 + L_mm - 100, mid_y - corridor_h / 2)   # front/public
-    upper_rect = (x0 + 100, mid_y + corridor_h / 2, x0 + L_mm - 100, y0 + W_mm - 100)  # rear/private
+    lower_rect = (x0 + 100, y0 + 100, x0 + L_mm - 100, mid_y - corridor_h / 2)
+    upper_rect = (x0 + 100, mid_y + corridor_h / 2, x0 + L_mm - 100, y0 + W_mm - 100)
 
     placements = []
     if public_rooms:
@@ -283,19 +277,16 @@ def build_complete_project(params):
     if private_rooms:
         placements += slice_and_dice(upper_rect, private_rooms)
 
-    # Draw rooms
     for room, (rx0, ry0, rx1, ry1) in placements:
-        # Inner wall rectangle
         msp.add_lwpolyline(
             [(rx0, ry0), (rx1, ry0), (rx1, ry1), (rx0, ry1), (rx0, ry0)],
             dxfattribs={'layer': 'A-WALL-INT', 'color': 8, 'lineweight': 30}
         )
-        # Room label
-        msp.add_text(room['name'],
-                     dxfattribs={'layer': 'A-ROOM-TEXT', 'height': 150, 'color': 4}
-                     ).set_pos(((rx0 + rx1) / 2, (ry0 + ry1) / 2),
-                               align=TextEntityAlignment.MIDDLE_CENTER)
-        # Door (on the corridor side)
+        t = msp.add_text(room['name'],
+                         dxfattribs={'layer': 'A-ROOM-TEXT', 'height': 150, 'color': 4})
+        t.set_placement(((rx0 + rx1) / 2, (ry0 + ry1) / 2),
+                        align=TextEntityAlignment.MIDDLE_CENTER)
+
         door_cx = (rx0 + rx1) / 2
         door_cy = ry0 if ry0 > mid_y else ry1
         msp.add_lwpolyline(
@@ -304,7 +295,7 @@ def build_complete_project(params):
              (door_cx - 450, door_cy)],
             dxfattribs={'layer': 'A-DOOR', 'color': 3, 'lineweight': 20}
         )
-        # Window (on exterior wall)
+
         if room.get('needs_window'):
             win_cx = (rx0 + rx1) / 2
             if ry1 >= y0 + W_mm - 200:
@@ -324,8 +315,7 @@ def build_complete_project(params):
                     dxfattribs={'layer': 'A-WINDOW', 'color': 5, 'lineweight': 15}
                 )
 
-    # ----- 10. Structural grid (auto-derived, no user input) -----
-    # Max span 5 m per ECP 203
+    # ----- 10. Structural grid -----
     span_x = min(5000, max(3000, L_mm / max(1, math.ceil(L_mm / 5000))))
     span_y = min(5000, max(3000, W_mm / max(1, math.ceil(W_mm / 5000))))
 
@@ -346,13 +336,11 @@ def build_complete_project(params):
                 msp.add_line((cx, cy), (cx, cy + span_y),
                              dxfattribs={'layer': 'S-BEAM', 'color': 1, 'lineweight': 30})
 
-    # Slab boundary
     msp.add_lwpolyline(
         [(x0, y0), (x0 + L_mm, y0), (x0 + L_mm, y0 + W_mm), (x0, y0 + W_mm), (x0, y0)],
         dxfattribs={'layer': 'S-SLAB', 'color': 9, 'lineweight': 20}
     )
 
-    # Footings
     for cx in cols_x:
         for cy in cols_y:
             msp.add_lwpolyline(
@@ -364,7 +352,6 @@ def build_complete_project(params):
                 dxfattribs={'layer': 'S-FOOTING', 'color': 9, 'lineweight': 40}
             )
 
-    # Rebar (symbolic)
     for cx in cols_x:
         for cy in cols_y:
             msp.add_circle((cx, cy), radius=rebar_main_d / 2,
@@ -373,15 +360,15 @@ def build_complete_project(params):
     # ----- 11. Dimensions -----
     msp.add_line((x0, y0 - 400), (x0 + L_mm, y0 - 400),
                  dxfattribs={'layer': 'ANNO-DIMS', 'color': 2, 'lineweight': 15})
-    msp.add_text(f"L = {L_mm/1000:.2f} m",
-                 dxfattribs={'layer': 'ANNO-TEXT', 'height': 200, 'color': 2}
-                 ).set_pos((x0 + L_mm / 2, y0 - 600), align=TextEntityAlignment.MIDDLE_CENTER)
+    t = msp.add_text(f"L = {L_mm/1000:.2f} m",
+                     dxfattribs={'layer': 'ANNO-TEXT', 'height': 200, 'color': 2})
+    t.set_placement((x0 + L_mm / 2, y0 - 600), align=TextEntityAlignment.MIDDLE_CENTER)
 
     msp.add_line((x0 - 400, y0), (x0 - 400, y0 + W_mm),
                  dxfattribs={'layer': 'ANNO-DIMS', 'color': 2, 'lineweight': 15})
-    msp.add_text(f"W = {W_mm/1000:.2f} m",
-                 dxfattribs={'layer': 'ANNO-TEXT', 'height': 200, 'color': 2}
-                 ).set_pos((x0 - 600, y0 + W_mm / 2), align=TextEntityAlignment.MIDDLE_CENTER)
+    t = msp.add_text(f"W = {W_mm/1000:.2f} m",
+                     dxfattribs={'layer': 'ANNO-TEXT', 'height': 200, 'color': 2})
+    t.set_placement((x0 - 600, y0 + W_mm / 2), align=TextEntityAlignment.MIDDLE_CENTER)
 
     # ----- 12. BOQ -----
     num_columns = len(cols_x) * len(cols_y)
@@ -404,7 +391,6 @@ def build_complete_project(params):
     formwork = 2 * (L_mm / 1000 + W_mm / 1000) * floor_height_m * num_floors
     total_floor_area = (L_mm / 1000) * (W_mm / 1000) * num_floors
 
-    # Wall area from actual room perimeter
     wall_area = 0
     for _r, (rx0, ry0, rx1, ry1) in placements:
         wall_area += 2 * ((rx1 - rx0) + (ry1 - ry0)) / 1000 * floor_height_m
