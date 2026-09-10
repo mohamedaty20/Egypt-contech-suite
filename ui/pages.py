@@ -16,7 +16,8 @@ import pypdf
 import fitz
 import ezdxf
 from nicegui import app, ui, run
-
+from google.genai import types
+from services.scraper_service import RAPIDAPI_KEY
 # ----- Imports from our modules -----
 from config import (
     CODE_BASIS_OPTIONS,
