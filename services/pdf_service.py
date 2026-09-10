@@ -228,3 +228,94 @@ def build_report_pdf(doc_title, subtitle, body_markdown, meta, logo_bytes,
     doc.build(story)
     buffer.seek(0)
     return buffer.getvalue()
+
+
+# =====================================================================
+# ADDITIVE HIGH-TRAFFIC LAYER
+# ---------------------------------------------------------------------
+# Nothing above this line was changed.
+#
+# Notes on this specific module:
+#   * No Gemini calls here — the async-Gemini half of the pattern does
+#     not apply.
+#   * BytesIO is already used throughout (generate_qr_code,
+#     build_report_pdf, build_pdf_header). Nothing to convert there.
+#   * The one heavy operation is build_report_pdf() — ReportLab is pure
+#     CPU. Below we add an async wrapper that offloads it.
+#
+# Dispatch rule for build_report_pdf_async():
+#   * extra_flowables_before_body is None  -> CPU process pool
+#       Everything is picklable: doc_title (str), subtitle (str),
+#       body_markdown (str), meta (dict of str/int), logo_bytes
+#       (bytes|None), show_ticket (bool).
+#   * extra_flowables_before_body given   -> IO thread pool
+#       ReportLab flowables (Paragraph/Table/Spacer) are NOT picklable
+#       and cannot cross a process boundary. Threads share the process,
+#       so passing them by reference works.
+#
+# Both paths are gated by config.cpu_bound_limited / io_bound_limited,
+# which apply a global semaphore (CPU_MAX_CONCURRENT).
+# =====================================================================
+
+async def build_report_pdf_async(doc_title, subtitle, body_markdown, meta,
+                                  logo_bytes,
+                                  extra_flowables_before_body=None,
+                                  show_ticket=True):
+    """
+    Async version of build_report_pdf().
+
+    Returns the same `bytes` as the sync version.
+
+    Use this from NiceGUI async handlers so ReportLab doesn't block the
+    event loop under concurrent PDF downloads:
+
+        pdf_bytes = await build_report_pdf_async(
+            "AI CONCRETE CUBE ...", subtitle, markdown_text,
+            meta, logo_bytes_holder['bytes'],
+        )
+        ui.download(pdf_bytes, filename="report.pdf")
+
+    For the chat-transcript path (which passes pre-built flowables):
+
+        pdf_bytes = await build_report_pdf_async(
+            "AI CHAT TRANSCRIPT", "Q&A Record", "",
+            meta, logo_bytes_holder['bytes'],
+            extra_flowables_before_body=flowables,
+        )
+    """
+    from config import cpu_bound_limited, io_bound_limited
+
+    # Non-picklable path: ReportLab flowables must stay in-process.
+    if extra_flowables_before_body:
+        return await io_bound_limited(
+            build_report_pdf,
+            doc_title,
+            subtitle,
+            body_markdown,
+            meta,
+            logo_bytes,
+            extra_flowables_before_body,
+            show_ticket,
+        )
+
+    # Picklable path: run in the CPU process pool for true parallelism.
+    return await cpu_bound_limited(
+        build_report_pdf,
+        doc_title,
+        subtitle,
+        body_markdown,
+        meta,
+        logo_bytes,
+        None,
+        show_ticket,
+    )
+
+
+async def generate_qr_code_async(data_str):
+    """
+    Async wrapper for generate_qr_code(). Returns the same io.BytesIO.
+    Rarely needed on its own — build_report_pdf() already builds its
+    own QR internally — but provided for symmetry with the sync API.
+    """
+    from config import cpu_bound_limited
+    return await cpu_bound_limited(generate_qr_code, data_str)
