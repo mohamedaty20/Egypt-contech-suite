@@ -502,10 +502,12 @@ def best_opening_position(p1, p2, columns, opening_width, col_size=300):
 # MAIN GENERATOR
 # ======================================================================
 def build_complete_project(params):
-    seed = hash((params.get('plot_area_m2', 200),
-                 params.get('street_width_m', 10),
-                 params.get('num_floors', 2),
-                 params.get('num_bedrooms', 3)))
+        seed = params.get('variation_seed') or hash((
+        params.get('plot_area_m2', 200),
+        params.get('street_width_m', 10),
+        params.get('num_floors', 2),
+        params.get('num_bedrooms', 3),
+    ))
     random.seed(seed)
 
     # ----- 1. Plot -----
@@ -812,6 +814,26 @@ def build_complete_project(params):
     # Title above arch plan
     draw_label(msp, x0 + L/2, y1 + 3000, "GROUND FLOOR PLAN  —  SCALE 1:100",
                'ANNO-TITLE', 350, 7)
+    # --- Enhanced architectural sheet: dimension chains ---
+    off_chain = off + 3500
+    _draw_dimension_chain(msp, x0, y0, xs, -off_chain, label=f"Overall {L/1000:.2f} m")
+    _draw_dimension_chain(msp, x0, y0, xs, -(off_chain + 900))
+    # Vertical chain
+    y_dim_x = x0 - off_chain
+    msp.add_line((y_dim_x, y0), (y_dim_x, y1),
+                 dxfattribs={'layer': 'ANNO-DIM', 'color': 2})
+    for yy in ys:
+        msp.add_line((y_dim_x - 100, yy), (y_dim_x + 100, yy),
+                     dxfattribs={'layer': 'ANNO-DIM', 'color': 2})
+    for i in range(len(ys) - 1):
+        mid = (ys[i] + ys[i + 1]) / 2
+        seg = ys[i + 1] - ys[i]
+        draw_label(msp, y_dim_x - 400, mid, f"{seg:.0f}", 'ANNO-DIM', 180, 2)
+    # Section markers
+    _draw_section_marker(msp, x0 + L / 2, y1 + 500, "A-A", 'up')
+    _draw_section_marker(msp, x0 + L / 2, y0 - 500, "B-B", 'down')
+    # North arrow (top-right of arch plan)
+    _draw_north_arrow(msp, x0 + L + 2500, y1 - 1000, size=1400)
 
     # ==================================================================
     # SHEET 2 — STRUCTURAL PLAN (below)
@@ -930,6 +952,143 @@ def build_complete_project(params):
             win_rows.append((f"W{i+1}", "Sliding Alum.", "1400", "1200", "1", room['name']))
     draw_table(msp, tb_x, win_y, [700, 1500, 800, 800, 500, 2000], win_rows)
 
+def _draw_dimension_chain(msp, x0, y_ref, grid_positions, offset_mm, label=None,
+                           layer='ANNO-DIM', color=2):
+    """Draw a chain of dimension segments between grid_positions, offset from y_ref."""
+    if len(grid_positions) < 2:
+        return
+    y_dim = y_ref + offset_mm
+    # Main dimension line
+    msp.add_line((grid_positions[0], y_dim), (grid_positions[-1], y_dim),
+                 dxfattribs={'layer': layer, 'color': color})
+    # Ticks + segment labels
+    for i, x in enumerate(grid_positions):
+        msp.add_line((x, y_dim - 100), (x, y_dim + 100),
+                     dxfattribs={'layer': layer, 'color': color})
+        if i < len(grid_positions) - 1:
+            seg_mm = grid_positions[i + 1] - grid_positions[i]
+            mid = (grid_positions[i] + grid_positions[i + 1]) / 2
+            draw_label(msp, mid, y_dim + 220, f"{seg_mm:.0f}", layer, height=180, color=color)
+    # Extension lines back to the drawing
+    for x in (grid_positions[0], grid_positions[-1]):
+        msp.add_line((x, y_ref), (x, y_dim + 200),
+                     dxfattribs={'layer': layer, 'color': color})
+    if label:
+        mid = (grid_positions[0] + grid_positions[-1]) / 2
+        draw_label(msp, mid, y_dim + 700, label, layer, height=220, color=color)
+
+
+def _draw_north_arrow(msp, x, y, size=1200, layer='ANNO-SYMBOL'):
+    """North arrow: circle, filled triangle, 'N' label."""
+    msp.add_circle((x, y), radius=size / 2,
+                   dxfattribs={'layer': layer, 'color': 7})
+    # Triangle pointing up
+    half = size * 0.22
+    msp.add_lwpolyline([(x, y + half * 1.4), (x - half, y - half * 0.6),
+                        (x + half, y - half * 0.6)],
+                       dxfattribs={'layer': layer, 'color': 7}, close=True)
+    draw_label(msp, x, y + size * 0.75, "N", layer, height=320, color=7)
+
+
+def _draw_section_marker(msp, x, y, tag, direction='down', layer='ANNO-SECTION'):
+    """Section cut marker: circle with tag + a short cut line."""
+    arrow_len = 1200
+    if direction == 'down':
+        msp.add_line((x, y), (x, y - arrow_len),
+                     dxfattribs={'layer': layer, 'color': 1})
+        msp.add_lwpolyline([(x, y), (x - 200, y - 400), (x + 200, y - 400)],
+                           dxfattribs={'layer': layer, 'color': 1}, close=True)
+    else:
+        msp.add_line((x, y), (x, y + arrow_len),
+                     dxfattribs={'layer': layer, 'color': 1})
+        msp.add_lwpolyline([(x, y), (x - 200, y + 400), (x + 200, y + 400)],
+                           dxfattribs={'layer': layer, 'color': 1}, close=True)
+    # Tag bubble
+    by = y - arrow_len - 400 if direction == 'down' else y + arrow_len + 400
+    msp.add_circle((x, by), radius=500, dxfattribs={'layer': layer, 'color': 1})
+    draw_label(msp, x, by, tag, layer, height=280, color=1)
+
+
+def _draw_column_section_detail(msp, x, y, col_w, col_h, n_bars, bar_dia,
+                                 stirrup_dia, cover=40, layer='S-DETAIL'):
+    """Draw a typical column cross-section detail at (x,y) bottom-left."""
+    msp.add_lwpolyline([(x, y), (x + col_w, y), (x + col_w, y + col_h),
+                        (x, y + col_h)],
+                       dxfattribs={'layer': layer, 'color': 7}, close=True)
+    # Stirrup (inset by cover)
+    c = cover
+    msp.add_lwpolyline([(x + c, y + c), (x + col_w - c, y + c),
+                        (x + col_w - c, y + col_h - c), (x + c, y + col_h - c)],
+                       dxfattribs={'layer': layer, 'color': 1}, close=True)
+    # Longitudinal bars at corners + midpoints
+    bar_r = max(60, bar_dia * 1.5)
+    positions = [
+        (x + c, y + c), (x + col_w - c, y + c),
+        (x + col_w - c, y + col_h - c), (x + c, y + col_h - c),
+        (x + col_w / 2, y + c), (x + col_w / 2, y + col_h - c),
+        (x + c, y + col_h / 2), (x + col_w - c, y + col_h / 2),
+    ]
+    for bx, by in positions[:n_bars]:
+        msp.add_circle((bx, by), radius=bar_r,
+                       dxfattribs={'layer': layer, 'color': 1})
+
+
+def _draw_beam_section_detail(msp, x, y, beam_w, beam_d, top_bars, bot_bars,
+                               stirrup_dia, layer='S-DETAIL'):
+    msp.add_lwpolyline([(x, y), (x + beam_w, y), (x + beam_w, y + beam_d),
+                        (x, y + beam_d)],
+                       dxfattribs={'layer': layer, 'color': 7}, close=True)
+    c = 40
+    msp.add_lwpolyline([(x + c, y + c), (x + beam_w - c, y + c),
+                        (x + beam_w - c, y + beam_d - c), (x + c, y + beam_d - c)],
+                       dxfattribs={'layer': layer, 'color': 1}, close=True)
+    bar_r = 80
+    # Bottom bars (evenly spaced)
+    for i in range(bot_bars):
+        bx = x + c + (beam_w - 2 * c) * (i + 1) / (bot_bars + 1)
+        msp.add_circle((bx, y + c), radius=bar_r,
+                       dxfattribs={'layer': layer, 'color': 1})
+    # Top bars
+    for i in range(top_bars):
+        bx = x + c + (beam_w - 2 * c) * (i + 1) / (top_bars + 1)
+        msp.add_circle((bx, y + beam_d - c), radius=bar_r,
+                       dxfattribs={'layer': layer, 'color': 1})
+
+
+def _draw_footing_section_detail(msp, x, y, foot_w, foot_h, col_w,
+                                  n_bars_bot, layer='S-DETAIL'):
+    msp.add_lwpolyline([(x, y), (x + foot_w, y), (x + foot_w, y + foot_h),
+                        (x, y + foot_h)],
+                       dxfattribs={'layer': layer, 'color': 7}, close=True)
+    # Column stub on top
+    col_x = x + (foot_w - col_w) / 2
+    msp.add_lwpolyline([(col_x, y + foot_h), (col_x + col_w, y + foot_h),
+                        (col_x + col_w, y + foot_h + col_w * 1.5),
+                        (col_x, y + foot_h + col_w * 1.5)],
+                       dxfattribs={'layer': layer, 'color': 7}, close=True)
+    # Bottom reinforcement
+    bar_r = 80
+    c = 100
+    for i in range(n_bars_bot):
+        bx = x + c + (foot_w - 2 * c) * (i + 1) / (n_bars_bot + 1)
+        msp.add_circle((bx, y + c), radius=bar_r,
+                       dxfattribs={'layer': layer, 'color': 1})
+
+
+def _draw_sheet_border(msp, x, y, w, h, sheet_title, sheet_code,
+                        layer='ANNO-BORDER'):
+    """Outer border + inner frame + title strip at bottom-right."""
+    msp.add_lwpolyline([(x, y), (x + w, y), (x + w, y + h), (x, y + h)],
+                       dxfattribs={'layer': layer, 'color': 7}, close=True)
+    margin = 1000
+    msp.add_lwpolyline([(x + margin, y + margin), (x + w - margin, y + margin),
+                        (x + w - margin, y + h - margin), (x + margin, y + h - margin)],
+                       dxfattribs={'layer': layer, 'color': 7}, close=True)
+    draw_label(msp, x + w / 2, y + h - margin - 800,
+               sheet_title, layer, height=450, color=7)
+    draw_label(msp, x + w - margin - 3000, y + margin + 400,
+               f"SHEET: {sheet_code}", layer, height=300, color=7)
+
     # ==================================================================
     # SHEET 4 — BOQ + NOTES (right side of struct plan)
     # ==================================================================
@@ -982,6 +1141,77 @@ def build_complete_project(params):
     ny_y = by - (len(boq_rows) + 2) * 350 - 500
     draw_label(msp, bx + 3000, ny_y + 500, "STRUCTURAL NOTES (ECP 203)",
                'ANNO-TITLE', 300, 7)
+                              # ==================================================================
+    # SHEET 5 — SCHEDULES (columns, beams, footings) + TYPICAL DETAILS
+    # ==================================================================
+    sch_x = bx
+    sch_y = ny_y - (len(notes_rows) + 3) * 350 - 1500
+
+    # --- Column schedule ---
+    draw_label(msp, sch_x + 4000, sch_y + 500, "COLUMN SCHEDULE",
+               'ANNO-TITLE', 300, 7)
+    col_sched = [("Mark", "Size (mm)", "Main Bars", "Stirrups", "Qty")]
+    n_bars_col = 8
+    for i, (label, cx, cy) in enumerate(col_labels[:20]):
+        col_sched.append((
+            label, f"{col_size}x{col_size}",
+            f"{n_bars_col}D16", "D8@150", "1",
+        ))
+    draw_table(msp, sch_x, sch_y, [1200, 1600, 1400, 1400, 800], col_sched)
+
+    # --- Beam schedule ---
+    beam_y = sch_y - (len(col_sched) + 3) * 350 - 1000
+    draw_label(msp, sch_x + 4000, beam_y + 500, "BEAM SCHEDULE",
+               'ANNO-TITLE', 300, 7)
+    beam_sched = [("Mark", "Size (mm)", "Top Bars", "Bottom Bars", "Stirrups", "Span (m)")]
+    for i in range(min(12, len(beam_labels))):
+        bsize = f"{beam_b}x{beam_d}"
+        beam_sched.append((
+            f"B{i+1}", bsize, "2D16", "3D16", "D8@150", "5.00",
+        ))
+    draw_table(msp, sch_x, beam_y,
+               [1000, 1500, 1300, 1300, 1400, 1100], beam_sched)
+
+    # --- Footing schedule ---
+    foot_y = beam_y - (len(beam_sched) + 3) * 350 - 1000
+    draw_label(msp, sch_x + 4000, foot_y + 500, "FOOTING SCHEDULE",
+               'ANNO-TITLE', 300, 7)
+    foot_sched = [("Mark", "Size (mm)", "Depth (mm)", "Bottom R/F", "Qty")]
+    for i in range(min(12, len(foot_labels))):
+        foot_sched.append((
+            f"F{i+1}", f"{foot}x{foot}", "500",
+            "D12@150 both ways", "1",
+        ))
+    draw_table(msp, sch_x, foot_y,
+               [1200, 1700, 1400, 2600, 800], foot_sched)
+
+    # --- Typical column section detail ---
+    det_x = sch_x
+    det_y = foot_y - (len(foot_sched) + 3) * 350 - 2500
+    draw_label(msp, det_x + 2500, det_y + 3500, "TYPICAL COLUMN SECTION  (1:20)",
+               'ANNO-TITLE', 300, 7)
+    _draw_column_section_detail(msp, det_x, det_y, col_size * 2.5, col_size * 2.5,
+                                 n_bars=8, bar_dia=16, stirrup_dia=8)
+    draw_label(msp, det_x + col_size * 1.25, det_y - 700,
+               f"{col_size}x{col_size} 8D16  D8@150 c/c", 'ANNO-TEXT', 220, 7)
+
+    # --- Typical beam section detail ---
+    bd_x = det_x + 4000
+    draw_label(msp, bd_x + 2500, det_y + 3500, "TYPICAL BEAM SECTION  (1:20)",
+               'ANNO-TITLE', 300, 7)
+    _draw_beam_section_detail(msp, bd_x, det_y, beam_b * 3.5, beam_d * 1.8,
+                              top_bars=2, bot_bars=3, stirrup_dia=8)
+    draw_label(msp, bd_x + beam_b * 1.75, det_y - 700,
+               f"{beam_b}x{beam_d} 2D16 top, 3D16 bot", 'ANNO-TEXT', 220, 7)
+
+    # --- Typical footing section detail ---
+    ft_x = bd_x + 4000
+    draw_label(msp, ft_x + 2500, det_y + 3500, "TYPICAL FOOTING SECTION  (1:20)",
+               'ANNO-TITLE', 300, 7)
+    _draw_footing_section_detail(msp, ft_x, det_y, foot * 1.6, 500,
+                                  col_size, n_bars_bot=8)
+    draw_label(msp, ft_x + foot * 0.8, det_y - 700,
+               f"{foot}x{foot}x500  D12@150 B/W", 'ANNO-TEXT', 220, 7)
     notes = [
         "1. All dimensions are in millimetres unless noted otherwise.",
         "2. Concrete grade: C30/37 for columns & beams, C25/30 for slabs.",
