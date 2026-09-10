@@ -6,9 +6,52 @@ import pypdf
 import fitz
 from nicegui import run
 from google.genai import types
-from config import client, GEMINI_MODEL, get_code_directive, NO_LATEX_RULE
+from config import (
+    client, GEMINI_MODEL, get_code_directive, NO_LATEX_RULE,
+    cpu_bound_limited, _get_gemini_sem,
+)
 from utils.boq import normalize_keys
 from services.scraper_service import detect_mime_type
+
+
+# =====================================================================
+# ADDITIVE: process-pool workers for PDF work
+# ---------------------------------------------------------------------
+# Module-level so NiceGUI's run.cpu_bound can pickle them.
+# They take plain bytes and return plain bytes/str — nothing crosses
+# the process boundary that isn't picklable.
+# =====================================================================
+
+def _pdf_first_page_to_png_bytes(pdf_bytes, zoom=2.0):
+    """Worker: PDF bytes -> PNG bytes of page 1 (or None)."""
+    try:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        try:
+            if len(doc) == 0:
+                return None
+            page = doc.load_page(0)
+            pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
+            return pix.tobytes("png")
+        finally:
+            doc.close()
+    except Exception:
+        return None
+
+
+def _pdf_extract_text(pdf_bytes, max_pages=3, max_chars=6000):
+    """Worker: PDF bytes -> concatenated text from first N pages."""
+    try:
+        reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
+        parts = []
+        for i in range(min(max_pages, len(reader.pages))):
+            try:
+                txt = reader.pages[i].extract_text() or ""
+                parts.append(txt)
+            except Exception:
+                pass
+        return "".join(parts)[:max_chars]
+    except Exception:
+        return ""
 
 
 # =====================================================================
@@ -19,16 +62,16 @@ async def call_gemini(contents, system_instruction=None, temperature=0.1, timeou
     if system_instruction:
         cfg_kwargs["system_instruction"] = system_instruction
     config = types.GenerateContentConfig(**cfg_kwargs)
+    sem = _get_gemini_sem()
     try:
-        response = await asyncio.wait_for(
-            run.io_bound(
-                client.models.generate_content,
+        async def _do():
+            return await client.aio.models.generate_content(
                 model=GEMINI_MODEL,
                 contents=contents,
                 config=config,
-            ),
-            timeout=timeout
-        )
+            )
+        async with sem:
+            response = await asyncio.wait_for(_do(), timeout=timeout)
         from services.pdf_service import sanitize_ai_markdown
         return sanitize_ai_markdown(response.text)
     except asyncio.TimeoutError:
@@ -40,16 +83,16 @@ async def call_gemini(contents, system_instruction=None, temperature=0.1, timeou
 async def call_gemini_json(contents, temperature=0.1, timeout=240):
     cfg_kwargs = {"temperature": temperature}
     config = types.GenerateContentConfig(**cfg_kwargs)
+    sem = _get_gemini_sem()
     try:
-        response = await asyncio.wait_for(
-            run.io_bound(
-                client.models.generate_content,
+        async def _do():
+            return await client.aio.models.generate_content(
                 model=GEMINI_MODEL,
                 contents=contents,
                 config=config,
-            ),
-            timeout=timeout
-        )
+            )
+        async with sem:
+            response = await asyncio.wait_for(_do(), timeout=timeout)
         return response.text
     except asyncio.TimeoutError:
         raise Exception("AI request timed out after 240 seconds.")
@@ -109,15 +152,12 @@ Example: {{"door_count": 10, "window_count": 15}}
 
     if file_type == 'application/pdf':
         try:
-            doc = fitz.open(stream=file_bytes, filetype="pdf")
-            if len(doc) > 0:
-                page = doc.load_page(0)
-                mat = fitz.Matrix(2.0, 2.0)
-                pix = page.get_pixmap(matrix=mat)
-                img_bytes = pix.tobytes("png")
+            img_bytes = await cpu_bound_limited(_pdf_first_page_to_png_bytes, file_bytes)
+            if img_bytes:
                 img_part = types.Part.from_bytes(data=img_bytes, mime_type="image/png")
                 contents.append(img_part)
-            doc.close()
+            else:
+                contents.append(types.Part.from_bytes(data=file_bytes, mime_type='application/pdf'))
         except Exception:
             contents.append(types.Part.from_bytes(data=file_bytes, mime_type='application/pdf'))
     else:
@@ -199,26 +239,15 @@ Now extract from the drawing.
 
     if file_type == 'application/pdf':
         try:
-            reader = pypdf.PdfReader(io.BytesIO(file_bytes))
-            pages_text = []
-            for i in range(min(3, len(reader.pages))):
-                try:
-                    txt = reader.pages[i].extract_text() or ""
-                    pages_text.append(txt)
-                except:
-                    pass
-            full_text = "".join(pages_text)
+            full_text = await cpu_bound_limited(_pdf_extract_text, file_bytes, 3, 6000)
             if full_text.strip():
-                contents.append(f"Extracted text from PDF:\n{full_text[:6000]}")
-            doc = fitz.open(stream=file_bytes, filetype="pdf")
-            if len(doc) > 0:
-                page = doc.load_page(0)
-                mat = fitz.Matrix(2.0, 2.0)
-                pix = page.get_pixmap(matrix=mat)
-                img_bytes = pix.tobytes("png")
+                contents.append(f"Extracted text from PDF:\n{full_text}")
+            img_bytes = await cpu_bound_limited(_pdf_first_page_to_png_bytes, file_bytes)
+            if img_bytes:
                 img_part = types.Part.from_bytes(data=img_bytes, mime_type="image/png")
                 contents.append(img_part)
-            doc.close()
+            else:
+                contents.append(types.Part.from_bytes(data=file_bytes, mime_type='application/pdf'))
         except Exception as e:
             contents.append(types.Part.from_bytes(data=file_bytes, mime_type='application/pdf'))
     else:
@@ -246,10 +275,9 @@ If the drawing is unclear, return an empty array [].
             contents2 = [prompt2]
             if file_type == 'application/pdf':
                 try:
-                    reader = pypdf.PdfReader(io.BytesIO(file_bytes))
-                    txt = "".join([p.extract_text() or "" for p in reader.pages[:3]])
+                    txt = await cpu_bound_limited(_pdf_extract_text, file_bytes, 3, 6000)
                     if txt.strip():
-                        contents2.append(f"Extracted text from PDF:\n{txt[:6000]}")
+                        contents2.append(f"Extracted text from PDF:\n{txt}")
                 except:
                     pass
             try:
@@ -305,14 +333,11 @@ Example: {"date": "2026-03-15", "description": "Formwork installation for slab",
     contents = [prompt]
     if file_type == 'application/pdf':
         try:
-            doc = fitz.open(stream=file_bytes, filetype="pdf")
-            if len(doc) > 0:
-                page = doc.load_page(0)
-                mat = fitz.Matrix(2.0, 2.0)
-                pix = page.get_pixmap(matrix=mat)
-                img_bytes = pix.tobytes("png")
+            img_bytes = await cpu_bound_limited(_pdf_first_page_to_png_bytes, file_bytes)
+            if img_bytes:
                 contents.append(types.Part.from_bytes(data=img_bytes, mime_type="image/png"))
-            doc.close()
+            else:
+                contents.append(types.Part.from_bytes(data=file_bytes, mime_type='application/pdf'))
         except:
             contents.append(types.Part.from_bytes(data=file_bytes, mime_type='application/pdf'))
     else:
