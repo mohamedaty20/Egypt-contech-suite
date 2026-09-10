@@ -73,7 +73,7 @@ You are a Quantity Surveyor. Extract the building dimensions from the architectu
 From the drawing, determine:
 - total_length_m: the overall length of the building in meters
 - total_width_m: the overall width of the building in meters
-- area_m2: the total floor area in square meters (if not given, compute from length × width)
+- area_m2: the total floor area in square meters (if not given, compute from length x width)
 
 If a dimension is not clearly visible, set it to null.
 Return ONLY a JSON object with these fields, no extra text.
@@ -345,7 +345,7 @@ Data (CSV format):
 
 
 # =====================================================================
-# AI Architectural Plan (for AutoCAD Layout Generator)
+# AI Architectural Plan (fallback room program)
 # =====================================================================
 async def plan_architectural_layout(plot_data):
     """Use Gemini to produce a room program that follows Egyptian building code."""
@@ -415,3 +415,96 @@ Return ONLY valid JSON (no markdown, no code fences). Structure:
             "manwer_size_m": 0,
             "compliance_notes": "Fallback layout."
         }
+
+
+# =====================================================================
+# AI FULL LAYOUT DESIGNER (draws real positioned rectangles)
+# =====================================================================
+async def design_layout_with_ai(plot_data):
+    """AI designs the actual positioned rectangles. Returns full layout JSON."""
+    pw_mm = int(plot_data.get('plot_width', 12) * 1000)
+    pl_mm = int(plot_data.get('plot_length', 16) * 1000)
+    street = plot_data.get('street_side', 'S')
+
+    prompt = f"""You are a master Egyptian architect. Design a REAL residential floor plan as POSITIONED rectangles in millimetres.
+
+PLOT: {pw_mm} x {pl_mm} mm. Street faces {street} side.
+Floors: {plot_data.get('num_floors', 2)}. Bedrooms: {plot_data.get('num_bedrooms', 3)}. Bathrooms: {plot_data.get('num_bathrooms', 2)}.
+User wish: {plot_data.get('user_description', 'Standard Egyptian family home')}
+
+EGYPTIAN CODE RULES (must obey):
+- Building footprint must be inside plot with setbacks: front 2500mm, rear 2000mm, each side 1500mm (from plot edge)
+- Corridor width >= 1100 mm
+- Stair core >= 2200 x 3200 mm, must touch corridor
+- Master bedroom >= 14 m2, other bedrooms >= 10 m2, kitchen >= 7 m2, bathroom >= 3.5 m2, living >= 20 m2, dining >= 10 m2
+- Every room must have a door on the corridor side
+- Living, kitchen, all bedrooms must have a window on an EXTERIOR wall
+- No two rooms may overlap
+
+COORDINATE SYSTEM: (0,0) at bottom-left of plot. X to the right, Y up. Room (x,y) is bottom-left corner, (w,h) is width/height. All in mm.
+
+Return ONLY valid JSON, no markdown, no fences:
+
+{{
+  "building": {{"x": 1500, "y": 2500, "w": {pw_mm-3000}, "h": {pl_mm-4500}}},
+  "corridor": {{"x": 2000, "y": 9000, "w": {pw_mm-4000}, "h": 1300}},
+  "core": {{"x": 9000, "y": 7000, "w": 2500, "h": 3500}},
+  "rooms": [
+    {{"name": "Living Room", "type": "living", "x": 2000, "y": 2700, "w": 5000, "h": 6000,
+      "door_wall": "N", "door_pos": 3000, "window_walls": ["S", "W"]}},
+    {{"name": "Kitchen", "type": "kitchen", "x": 7200, "y": 2700, "w": 3500, "h": 4000,
+      "door_wall": "N", "door_pos": 2000, "window_walls": ["S"]}},
+    {{"name": "Master Bedroom", "type": "bedroom_master", "x": 2000, "y": 10500, "w": 4500, "h": 4200,
+      "door_wall": "S", "door_pos": 2500, "window_walls": ["W", "N"]}}
+  ]
+}}
+
+Design something BEAUTIFUL and FUNCTIONAL for real Egyptian families. Vary the layout based on the inputs. Position rooms to minimize wasted corridor space. Group wet rooms (kitchen, bathrooms) together for plumbing efficiency. Place bedrooms away from street noise."""
+
+    try:
+        text = await call_gemini_json([prompt], temperature=0.7, timeout=300)
+        text = re.sub(r'^```json\s*', '', text.strip())
+        text = re.sub(r'\s*```$', '', text)
+        s, e = text.find('{'), text.rfind('}')
+        if s != -1 and e != -1:
+            text = text[s:e+1]
+        return json.loads(text)
+    except Exception as ex:
+        print(f"[AI design] failed: {ex}")
+        return None
+
+
+async def refine_layout_with_ai(previous_layout, violations, plot_data):
+    """Send violations back to AI to fix the layout."""
+    prompt = f"""You are a master Egyptian architect. Your previous design has code violations.
+Fix ALL of them and return the corrected full layout JSON.
+
+PREVIOUS LAYOUT:
+{json.dumps(previous_layout, indent=2)}
+
+VIOLATIONS TO FIX:
+{chr(10).join('- ' + v for v in violations)}
+
+PLOT: {int(plot_data.get('plot_width',12)*1000)} x {int(plot_data.get('plot_length',16)*1000)} mm.
+Street on {plot_data.get('street_side','S')} side.
+
+Egyptian code minimums:
+- Corridor >= 1100 mm, core >= 2200x3200 mm
+- Master BR >= 14 m2, BR >= 10 m2, kitchen >= 7 m2, bath >= 3.5 m2, living >= 20 m2
+- Every room needs a door on the corridor-facing wall
+- Living/kitchen/bedrooms need a window on exterior wall
+- No overlaps, all inside building bounds
+
+Return ONLY valid JSON (same structure as before), no markdown, no explanation."""
+
+    try:
+        text = await call_gemini_json([prompt], temperature=0.4, timeout=300)
+        text = re.sub(r'^```json\s*', '', text.strip())
+        text = re.sub(r'\s*```$', '', text)
+        s, e = text.find('{'), text.rfind('}')
+        if s != -1 and e != -1:
+            text = text[s:e+1]
+        return json.loads(text)
+    except Exception as ex:
+        print(f"[AI refine] failed: {ex}")
+        return None
