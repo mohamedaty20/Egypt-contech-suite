@@ -2,6 +2,7 @@
 import io
 import datetime
 import os
+from services.dxf_service import build_complete_project, detect_dxf_layers, extract_areas_from_dxf
 import uuid
 import re
 import asyncio
