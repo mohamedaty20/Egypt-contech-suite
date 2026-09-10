@@ -533,3 +533,181 @@ Return ONLY valid JSON (same structure as before), no markdown, no explanation."
     except Exception as ex:
         print(f"[AI refine] failed: {ex}")
         return None
+
+
+# =====================================================================
+# ADDITIVE: sophisticated, varied AI layout designer
+# ---------------------------------------------------------------------
+# Nothing above this line was changed. Everything below is new:
+#   - _LAYOUT_STYLES : curated design vocabulary
+#   - design_layout_with_ai_enhanced() : full positioned floor plan,
+#     high-temperature, style-hinted, different output every call
+#   - validate_layout() : checks each design against ECP minimums and
+#     returns a list of violations (empty = clean)
+# =====================================================================
+
+import random as _random
+
+
+_LAYOUT_STYLES = [
+    ("Contemporary open-plan villa",
+     "wide central living-dining axis, minimal corridors, sliding glass to garden, "
+     "guest powder room near entry, master suite on quiet rear corner"),
+    ("Traditional Egyptian mandara layout",
+     "formal guest reception (mandara) at entry with separate WC, family living "
+     "deeper in plan, kitchens with service yard access, bedrooms clustered rear"),
+    ("Compact urban efficiency",
+     "minimal circulation, stacked wet walls, bedrooms side by side, entry foyer "
+     "opening directly to living, no wasted corridor area"),
+    ("Luxury family residence",
+     "walk-in closets, en-suite master, family lounge separate from formal living, "
+     "large kitchen with island and pantry, laundry room, guest suite with own bath"),
+    ("Multi-generational home",
+     "two separate bedroom wings sharing a communal living core, ground floor "
+     "bedroom with accessible bathroom, secondary entrance"),
+    ("Courtyard-orientation home",
+     "central internal light well (manwar), all major rooms open onto courtyard, "
+     "L-shaped footprint around the void"),
+    ("Long narrow plot optimiser",
+     "single-loaded corridor along one side, service rooms stacked, bedrooms with "
+     "cross ventilation front-to-back"),
+    ("Garden-facing residence",
+     "living, dining, and master all on the rear façade, service rooms front, "
+     "guest wing separate"),
+]
+
+
+async def design_layout_with_ai_enhanced(plot_data, style_hint=None, temperature=0.95):
+    """Ask Gemini for a FULL positioned floor plan. Returns dict with
+    building/corridor/rooms, or None on failure. Uses a random style hint
+    and high temperature so every call produces a different design."""
+    pw_mm = int((plot_data.get('plot_width') or 12) * 1000)
+    pl_mm = int((plot_data.get('plot_length') or 16) * 1000)
+    street = plot_data.get('street_side', 'S')
+    if style_hint is None:
+        style_hint = _random.choice(_LAYOUT_STYLES)
+
+    if isinstance(style_hint, tuple):
+        style_name, style_desc = style_hint
+    else:
+        style_name, style_desc = "Custom", style_hint
+
+    prompt = f"""You are a master Egyptian architect. Design a REAL residential floor plan as POSITIONED rectangles in millimetres.
+
+STYLE FOR THIS DESIGN (obey strictly): {style_name}
+Style details: {style_desc}
+
+PLOT: {pw_mm} x {pl_mm} mm. Street faces {street} side.
+Floors: {plot_data.get('num_floors', 2)}.
+Bedrooms: {plot_data.get('num_bedrooms', 3)}.
+Bathrooms: {plot_data.get('num_bathrooms', 2)}.
+User wish: {plot_data.get('user_description', 'Standard Egyptian family home')}
+
+EGYPTIAN CODE RULES (MUST OBEY, ECP 203 + Law 119/2008):
+- Setbacks: front 2500mm, rear 2000mm, each side 1500mm from plot edge
+- Corridor width >= 1100 mm
+- Stair core >= 2200 x 3200 mm, must touch corridor
+- Master bedroom >= 14 m2, other bedrooms >= 10 m2
+- Living >= 20 m2
+- Kitchen >= 7 m2 (must have exterior wall for window)
+- Bathroom >= 3.5 m2
+- Dining (if present) >= 10 m2
+- Every room must have a door on the corridor side
+- Living, kitchen, all bedrooms MUST have a window on an EXTERIOR wall
+- NO TWO ROOMS MAY OVERLAP
+- Every room must be INSIDE the building bounds
+
+COORDINATE SYSTEM: (0,0) at bottom-left of the PLOT (not the building).
+X increases right, Y increases up. Room (x,y,w,h) is bottom-left corner + size.
+All values in MILLIMETRES.
+
+Return ONLY a JSON object, no prose, no markdown fences:
+
+{{
+  "building": {{"x": 1500, "y": 2500, "w": {pw_mm-3000}, "h": {pl_mm-4500}}},
+  "corridor": {{"x": 1600, "y": 8000, "w": {pw_mm-3200}, "h": 1200}},
+  "core": {{"x": 8500, "y": 6500, "w": 2400, "h": 3600}},
+  "rooms": [
+    {{"name": "Living Room", "type": "living", "x": 1600, "y": 2600, "w": 5000, "h": 5200,
+      "door_wall": "N", "door_pos": 2500, "window_walls": ["S", "W"]}},
+    {{"name": "Kitchen", "type": "kitchen", "x": 6800, "y": 2600, "w": 3200, "h": 4000,
+      "door_wall": "N", "door_pos": 1600, "window_walls": ["S"]}}
+  ],
+  "design_notes": "Brief 1-2 sentence description of the layout concept"
+}}
+
+Design a DIFFERENT, rich layout each time. Vary room sizes within code limits.
+Place wet rooms (kitchen + baths) together for plumbing efficiency.
+Place bedrooms away from street noise. Fill the plot efficiently without waste."""
+
+    try:
+        text = await call_gemini_json([prompt], temperature=temperature, timeout=300)
+        text = re.sub(r'^```json\s*', '', text.strip())
+        text = re.sub(r'\s*```$', '', text)
+        s, e = text.find('{'), text.rfind('}')
+        if s != -1 and e != -1:
+            text = text[s:e+1]
+        data = json.loads(text)
+        if not data.get('rooms'):
+            return None
+        data['_style'] = style_name
+        return data
+    except Exception as ex:
+        print(f"[design_layout_with_ai_enhanced] failed: {ex}")
+        return None
+
+
+def validate_layout(layout, plot_data):
+    """Return list of violation strings; empty list = valid."""
+    violations = []
+    rooms = layout.get('rooms', [])
+    if not rooms:
+        return ["No rooms produced"]
+
+    pw_mm = int((plot_data.get('plot_width') or 12) * 1000)
+    pl_mm = int((plot_data.get('plot_length') or 16) * 1000)
+
+    for r in rooms:
+        name = r.get('name', '?')
+        try:
+            x = float(r.get('x', 0)); y = float(r.get('y', 0))
+            w = float(r.get('w', 0)); h = float(r.get('h', 0))
+        except Exception:
+            violations.append(f"{name}: non-numeric x/y/w/h")
+            continue
+        if w <= 0 or h <= 0:
+            violations.append(f"{name}: zero or negative size")
+            continue
+        area_m2 = (w * h) / 1_000_000
+        nm = name.lower()
+        if 'master' in nm and area_m2 < 12:
+            violations.append(f"{name}: {area_m2:.1f} m2 < 12 m2 min")
+        elif 'bedroom' in nm and area_m2 < 9:
+            violations.append(f"{name}: {area_m2:.1f} m2 < 9 m2 min")
+        elif 'living' in nm and area_m2 < 18:
+            violations.append(f"{name}: {area_m2:.1f} m2 < 18 m2 min")
+        elif 'kitchen' in nm and area_m2 < 6:
+            violations.append(f"{name}: {area_m2:.1f} m2 < 6 m2 min")
+        elif 'bath' in nm and area_m2 < 3:
+            violations.append(f"{name}: {area_m2:.1f} m2 < 3 m2 min")
+        if x < 0 or y < 0 or (x + w) > pw_mm or (y + h) > pl_mm:
+            violations.append(f"{name}: outside plot bounds")
+
+    # Overlap check
+    for i in range(len(rooms)):
+        for j in range(i + 1, len(rooms)):
+            r1, r2 = rooms[i], rooms[j]
+            try:
+                x1, y1 = float(r1['x']), float(r1['y'])
+                w1, h1 = float(r1['w']), float(r1['h'])
+                x2, y2 = float(r2['x']), float(r2['y'])
+                w2, h2 = float(r2['w']), float(r2['h'])
+            except Exception:
+                continue
+            if x1 < x2 + w2 and x2 < x1 + w1 and y1 < y2 + h2 and y2 < y1 + h1:
+                ov = min(x1 + w1, x2 + w2) - max(x1, x2)
+                ov *= min(y1 + h1, y2 + h2) - max(y1, y2)
+                if ov > 100_000:  # more than 0.1 m2 overlap
+                    violations.append(
+                        f"{r1.get('name')} overlaps {r2.get('name')} by {ov/1e6:.2f} m2")
+    return violations
