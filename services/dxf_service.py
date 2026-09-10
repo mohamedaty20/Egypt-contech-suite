@@ -5,7 +5,6 @@ import random
 import numpy as np
 import pandas as pd
 import ezdxf
-from ezdxf import recover  # or use the lazy import inside the function
 from ezdxf.enums import TextEntityAlignment
 from shapely.geometry import Polygon, box
 from config import BOQ_RATES
@@ -450,6 +449,15 @@ def build_complete_project(params):
                              "type": "bathroom", "area_m2": 4.5,
                              "priority": 10+i, "zone": "private", "needs_window": False})
 
+    # ----- 3b. Detect pre-positioned rooms -----
+    # `_position_rooms` (in ui/pages.py) returns rooms with x/y/w/h but no
+    # `zone` key. `_partition_rect_grid` below expects a raw room program
+    # with `zone`. When the caller passes pre-positioned rooms, use them
+    # directly instead of partitioning again.
+    _pre_positioned = bool(ai_rooms) and all(
+        ('x' in r and 'y' in r and 'w' in r and 'h' in r) for r in ai_rooms
+    )
+
     # ----- 4. Sizes in mm -----
     L = building_length * 1000
     W = building_width * 1000
@@ -504,16 +512,31 @@ def build_complete_project(params):
     public_zone = (x0, y0, x1, mid_y - corridor_h/2)
     private_zone = (x0, mid_y + corridor_h/2, x1, y1)
 
-    public_rooms = sorted([r for r in ai_rooms if r.get('zone') == 'public'],
-                          key=lambda r: r.get('priority', 99))
-    private_rooms = sorted([r for r in ai_rooms if r.get('zone') == 'private'],
-                           key=lambda r: r.get('priority', 99))
-    if random.random() > 0.5:
-        private_rooms = list(reversed(private_rooms))
+    if _pre_positioned:
+        # Caller already positioned the rooms — use them as-is.
+        placements = []
+        for r in ai_rooms:
+            placements.append((
+                {
+                    'name': r.get('name', 'Room'),
+                    'type': r.get('type', 'bedroom'),
+                    'needs_window': bool(r.get('window_walls')),
+                },
+                (float(r['x']), float(r['y']),
+                 float(r['x']) + float(r['w']),
+                 float(r['y']) + float(r['h'])),
+            ))
+    else:
+        public_rooms = sorted([r for r in ai_rooms if r.get('zone') == 'public'],
+                              key=lambda r: r.get('priority', 99))
+        private_rooms = sorted([r for r in ai_rooms if r.get('zone') == 'private'],
+                               key=lambda r: r.get('priority', 99))
+        if random.random() > 0.5:
+            private_rooms = list(reversed(private_rooms))
 
-    pub_pl = _partition_rect_grid(public_zone, public_rooms, xs, ys) if public_rooms else []
-    priv_pl = _partition_rect_grid(private_zone, private_rooms, xs, ys) if private_rooms else []
-    placements = pub_pl + priv_pl
+        pub_pl = _partition_rect_grid(public_zone, public_rooms, xs, ys) if public_rooms else []
+        priv_pl = _partition_rect_grid(private_zone, private_rooms, xs, ys) if private_rooms else []
+        placements = pub_pl + priv_pl
 
     # Outer walls with openings
     # Collect exterior openings first
@@ -921,19 +944,7 @@ def build_complete_project(params):
 # Nothing above this line was changed.
 # This file has NO Gemini calls — the async-Gemini part of the pattern
 # does not apply here. Only the cpu_bound + BytesIO parts do.
-#
-# What is added:
-#   - _extract_areas_from_dxf_worker(bytes, unit, workflow)
-#         Picklable worker that rebuilds the ezdxf doc inside the pool.
-#   - detect_dxf_layers_async(doc_bytes)
-#   - extract_areas_from_dxf_async(doc_bytes, unit, workflow)
-#   - build_complete_project_async(params)
-#
-# All four delegate to the UNCHANGED sync functions above via
-# config.cpu_bound_limited (which is semaphore-gated).
 # ======================================================================
-
-_DXF_BINARY_MAGIC = b"AutoCAD Binary DXF\r\n\x1a\x00"
 
 def _strip_thumbnail_section(text: str) -> str:
     """
@@ -1017,15 +1028,16 @@ def _open_dxf_doc_from_bytes(doc_bytes):
             print(f"[dxf] recover(StringIO) failed: {e2!r}; trying raw bytes")
             return _recover.read(io.BytesIO(doc_bytes))
 
+
 def _extract_areas_from_dxf_worker(doc_bytes, unit, workflow):
     """Runs INSIDE the cpu_bound worker. Plain bytes in, plain list out."""
-    doc = _open_doc_from_bytes(doc_bytes)
+    doc = _open_dxf_doc_from_bytes(doc_bytes)
     return extract_areas_from_dxf(doc, unit=unit, workflow=workflow)
 
 
 def _detect_dxf_layers_worker(doc_bytes):
     """Runs INSIDE the cpu_bound worker. Plain bytes in, plain dict out."""
-    doc = _open_doc_from_bytes(doc_bytes)
+    doc = _open_dxf_doc_from_bytes(doc_bytes)
     result = detect_dxf_layers(doc)
     # `types` is a set — convert to list so the result is picklable back.
     for layer, info in result.items():
