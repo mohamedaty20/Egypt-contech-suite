@@ -932,7 +932,7 @@ def build_complete_project(params):
 # config.cpu_bound_limited (which is semaphore-gated).
 # ======================================================================
 
-_DXF_BINARY_MAGIC = b"AutoCAD Binary DXF\r\n\x1a\n\x00"
+_DXF_BINARY_MAGIC = b"AutoCAD Binary DXF\r\n\x1a\x00"
 
 def _open_doc_from_bytes(doc_bytes):
     """Rebuild a fresh ezdxf document from bytes inside a worker process.
