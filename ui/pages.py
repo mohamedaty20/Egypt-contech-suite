@@ -1453,102 +1453,136 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                     ui.markdown('*Upload a DXF and click "Process DXF" to extract areas.*').classes('text-sm text-[#A9B6D0]')
 
             # ===== TAB 9: AUTOCAD LAYOUT GENERATOR (UPGRADED) =====
-            with ui.tab_panel(t_autocad):
-                ui.label('🏗️ AutoCAD Layout Generator – Full Architectural & Structural').classes('text-2xl font-bold text-white mb-4')
-                ui.markdown('Enter your plot details and generate a comprehensive DXF with architectural plan, structural grid, reinforcement, and BOQ with grand totals.').classes('markdown-body mb-2')
+with ui.tab_panel(t_autocad):
+    ui.label('🏗️ AI-Powered Home Layout Generator').classes('text-2xl font-bold text-white mb-4')
+    ui.markdown('Describe your plot and what you want — the AI designs the layout, applies Egyptian building code, and derives the structural system automatically.').classes('markdown-body mb-2')
 
-                with ui.row().classes('w-full gap-4 flex-wrap'):
-                    # Plot & Building
-                    with ui.column().classes('input-card flex-1'):
-                        ui.label('Plot & Building').classes('font-bold text-white')
-                        plot_area_input = ui.number(label='Plot Area (m²)', value=200, min=50, max=1000).classes('w-full')
-                        street_width_input = ui.number(label='Street Width (m)', value=10, min=4, max=40).classes('w-full')
-                        location_select = ui.select(
-                            label='Location',
-                            options=['Cairo', 'Giza', 'Alexandria', 'Delta', 'Other'],
-                            value='Cairo'
-                        ).classes('w-full')
-                        num_floors_input = ui.number(label='Number of Floors', value=2, min=1, max=10).classes('w-full')
-                        floor_height_input = ui.number(label='Floor Height (m)', value=3.0, step=0.1).classes('w-full')
+    with ui.row().classes('w-full gap-4 flex-wrap'):
+        with ui.column().classes('input-card flex-1'):
+            ui.label('Your Plot').classes('font-bold text-white')
+            plot_area_input = ui.number(label='Plot Area (m²)', value=200, min=50, max=2000).classes('w-full')
+            plot_width_input = ui.number(label='Plot Width (m) — optional', value=10, step=0.5).classes('w-full')
+            plot_length_input = ui.number(label='Plot Length (m) — optional', value=20, step=0.5).classes('w-full')
+            street_width_input = ui.number(label='Street Width (m)', value=10, min=4, max=60).classes('w-full')
+            location_select = ui.select(label='Location', options=['Cairo','Giza','Alexandria','New Cairo','6th of October','Delta','Other'], value='Cairo').classes('w-full')
 
-                    # Architectural
-                    with ui.column().classes('input-card flex-1'):
-                        ui.label('Architectural Details').classes('font-bold text-white')
-                        wall_thickness_mm = ui.number(label='Wall Thickness (mm)', value=200, step=10).classes('w-full')
-                        door_width_mm = ui.number(label='Door Width (mm)', value=900, step=50).classes('w-full')
-                        door_height_mm = ui.number(label='Door Height (mm)', value=2100, step=50).classes('w-full')
-                        window_width_mm = ui.number(label='Window Width (mm)', value=1200, step=50).classes('w-full')
-                        window_height_mm = ui.number(label='Window Height (mm)', value=1200, step=50).classes('w-full')
+        with ui.column().classes('input-card flex-1'):
+            ui.label('Your Home').classes('font-bold text-white')
+            num_floors_input = ui.number(label='Number of Floors', value=2, min=1, max=6).classes('w-full')
+            floor_height_input = ui.number(label='Floor Height (m)', value=3.0, step=0.1).classes('w-full')
+            num_units_input = ui.number(label='Units per Floor', value=1, min=1, max=4).classes('w-full')
+            num_bedrooms_input = ui.number(label='Bedrooms', value=3, min=1, max=8).classes('w-full')
+            num_bathrooms_input = ui.number(label='Bathrooms', value=2, min=1, max=5).classes('w-full')
 
-                    # Structural
-                    with ui.column().classes('input-card flex-1'):
-                        ui.label('Structural Grid').classes('font-bold text-white')
-                        column_spacing_x = ui.number(label='Column Spacing X (m)', value=4.0, step=0.5).classes('w-full')
-                        column_spacing_y = ui.number(label='Column Spacing Y (m)', value=4.0, step=0.5).classes('w-full')
-                        beam_width_mm = ui.number(label='Beam Width (mm)', value=300, step=10).classes('w-full')
-                        beam_depth_mm = ui.number(label='Beam Depth (mm)', value=500, step=10).classes('w-full')
-                        slab_thickness_mm = ui.number(label='Slab Thickness (mm)', value=150, step=10).classes('w-full')
+        with ui.column().classes('input-card flex-1'):
+            ui.label('Special Requests (optional)').classes('font-bold text-white')
+            user_desc_input = ui.textarea(
+                label='Tell the AI what you want',
+                placeholder='e.g., "Large open living room, big kitchen with island, master bedroom with en-suite, separate guest room, rooftop terrace"'
+            ).classes('w-full').style('min-height: 140px;')
 
-                    # Footings & Rebar
-                    with ui.column().classes('input-card flex-1'):
-                        ui.label('Footings & Reinforcement').classes('font-bold text-white')
-                        footing_width_mm = ui.number(label='Footing Width (mm)', value=800, step=50).classes('w-full')
-                        footing_depth_mm = ui.number(label='Footing Depth (mm)', value=400, step=50).classes('w-full')
-                        footing_length_mm = ui.number(label='Footing Length (mm)', value=800, step=50).classes('w-full')
-                        rebar_main_diam_mm = ui.number(label='Main Bar Diameter (mm)', value=16, step=2).classes('w-full')
-                        rebar_stirrup_diam_mm = ui.number(label='Stirrup Diameter (mm)', value=10, step=2).classes('w-full')
-                        rebar_spacing_mm = ui.number(label='Stirrup Spacing (mm)', value=200, step=10).classes('w-full')
+    autocad_output = ui.column().classes('w-full')
+    autocad_export = ui.row().classes('w-full gap-4 mt-4')
+    autocad_data_holder = {'dxf': None, 'boq': None, 'info': None}
 
-                autocad_output = ui.column().classes('w-full')
-                autocad_export = ui.row().classes('w-full gap-4 mt-4')
-                autocad_data_holder = {'dxf': None, 'boq': None, 'info': None}
+    async def generate_enhanced_autocad():
+        from services.ai_service import plan_architectural_layout
+        autocad_output.clear()
+        autocad_export.clear()
+        with autocad_output:
+            ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
+            ui.label('🤖 AI is designing your home layout according to Egyptian building code…').classes('self-center text-sm')
 
-                async def generate_enhanced_autocad():
-                    autocad_output.clear()
-                    autocad_export.clear()
-                    with autocad_output:
-                        ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
-                        ui.label('Generating full architectural & structural DXF with BOQ...').classes('self-center text-sm')
+        try:
+            plot_data = {
+                'plot_area_m2': plot_area_input.value or 200,
+                'plot_width': plot_width_input.value or 10,
+                'plot_length': plot_length_input.value or 20,
+                'street_width_m': street_width_input.value or 10,
+                'location': location_select.value or 'Cairo',
+                'num_floors': int(num_floors_input.value or 2),
+                'floor_height_m': floor_height_input.value or 3.0,
+                'num_units_per_floor': int(num_units_input.value or 1),
+                'num_bedrooms': int(num_bedrooms_input.value or 3),
+                'num_bathrooms': int(num_bathrooms_input.value or 2),
+                'user_description': user_desc_input.value or 'Standard Egyptian family home',
+            }
 
+            with autocad_output:
+                ui.label('Step 1/2 — AI is planning the rooms…').classes('self-center text-sm')
+            layout_plan = await plan_architectural_layout(plot_data)
+
+            params = dict(plot_data)
+            params.update({
+                'layout_plan': layout_plan,
+                'project_name': project_name_input.value,
+                'engineer': engineer_input.value,
+                'date': datetime.date.today().strftime('%Y-%m-%d'),
+            })
+
+            with autocad_output:
+                ui.label('Step 2/2 — Generating DXF + structural grid…').classes('self-center text-sm')
+
+            result = await asyncio.to_thread(build_complete_project, params)
+            autocad_data_holder.update(result)
+
+            autocad_output.clear()
+            with autocad_output:
+                ui.label('✅ Layout Generated by AI').classes('text-xl font-bold text-green-400 mb-2')
+                info = result['info']
+                ui.markdown(f"""
+                **Plot Area:** {info['plot_area']:.2f} m²  
+                **Street Width:** {info['street_width']} m  
+                **Location:** {info['location']}  
+                **Floors Used:** {info['num_floors']} (max allowed: {info['max_floors']})  
+                **Footprint:** {info['footprint_area']} m²  
+                **Building:** {info['building_width']:.2f} m × {info['building_length']:.2f} m  
+                **Rooms Planned:** {info['num_rooms']}  
+                **Columns Auto-Placed:** {info['num_columns']}
+                """).classes('text-white')
+
+                ui.label('📋 Bill of Quantities (Egyptian Code compliance)').classes('text-xl font-bold text-white mt-4 mb-2')
+                boq_df = pd.DataFrame(result['boq'])
+                columns = [
+                    {'name': 'Item', 'label': 'Item', 'field': 'Item', 'sortable': True},
+                    {'name': 'Quantity', 'label': 'Quantity', 'field': 'Quantity', 'sortable': True},
+                    {'name': 'Unit', 'label': 'Unit', 'field': 'Unit', 'sortable': True},
+                    {'name': 'Unit Rate (EGP)', 'label': 'Unit Rate (EGP)', 'field': 'Unit Rate (EGP)', 'sortable': True},
+                    {'name': 'Total Cost (EGP)', 'label': 'Total Cost (EGP)', 'field': 'Total Cost (EGP)', 'sortable': True},
+                ]
+                ui.table(columns=columns, rows=boq_df.to_dict('records'), row_key='index').classes('w-full text-white')
+                total_cost = boq_df['Total Cost (EGP)'].sum()
+                ui.label(f'🏷️ Grand Total: {total_cost:,.0f} EGP').classes('text-2xl font-bold text-[#FF8C00] mt-2')
+
+            autocad_export.clear()
+            with autocad_export:
+                def download_dxf():
+                    if autocad_data_holder.get('dxf'):
+                        ui.download(autocad_data_holder['dxf'], filename=f"AI_Home_Layout_{info['plot_area']:.0f}m2.dxf")
+                        ui.notify('DXF downloaded!', type='positive')
+                def download_pdf():
                     try:
-                        params = {
-                            'plot_polygon': None,
-                            'plot_area_m2': plot_area_input.value or 200,
-                            'street_width_m': street_width_input.value or 10,
-                            'location': location_select.value or 'Cairo',
-                            'num_floors': int(num_floors_input.value or 2),
-                            'floor_height_m': floor_height_input.value or 3.0,
-                            'wall_thickness_mm': int(wall_thickness_mm.value or 200),
-                            'door_width_mm': int(door_width_mm.value or 900),
-                            'door_height_mm': int(door_height_mm.value or 2100),
-                            'window_width_mm': int(window_width_mm.value or 1200),
-                            'window_height_mm': int(window_height_mm.value or 1200),
-                            'column_spacing_x': column_spacing_x.value or 4.0,
-                            'column_spacing_y': column_spacing_y.value or 4.0,
-                            'beam_width_mm': int(beam_width_mm.value or 300),
-                            'beam_depth_mm': int(beam_depth_mm.value or 500),
-                            'slab_thickness_mm': int(slab_thickness_mm.value or 150),
-                            'footing_width_mm': int(footing_width_mm.value or 800),
-                            'footing_depth_mm': int(footing_depth_mm.value or 400),
-                            'footing_length_mm': int(footing_length_mm.value or 800),
-                            'rebar_main_diam_mm': int(rebar_main_diam_mm.value or 16),
-                            'rebar_stirrup_diam_mm': int(rebar_stirrup_diam_mm.value or 10),
-                            'rebar_spacing_mm': int(rebar_spacing_mm.value or 200),
-                            'project_name': project_name_input.value,
-                            'engineer': engineer_input.value,
-                            'date': datetime.date.today().strftime('%Y-%m-%d'),
-                            'num_units_per_floor': 2,   # you can later add a UI control
-                        }
+                        pdf_bytes = generate_autocad_pdf(
+                            info, pd.DataFrame(result['boq']),
+                            engineer_input.value, project_name_input.value,
+                            logo_bytes_holder['bytes'], ticket_input.value
+                        )
+                        ui.download(pdf_bytes, filename=f"AI_Home_Report_{info['plot_area']:.0f}m2.pdf")
+                        ui.notify('PDF downloaded!', type='positive')
+                    except Exception as e:
+                        ui.notify(f'PDF error: {e}', type='negative')
+                ui.button('📥 Download DXF', on_click=download_dxf).classes('primary-btn')
+                ui.button('📄 Download PDF Report', on_click=download_pdf).classes('primary-btn')
 
-                        result = await asyncio.to_thread(build_complete_project, params)
+        except Exception as e:
+            autocad_output.clear()
+            with autocad_output:
+                ui.notify(f'Generation failed: {e}', type='negative')
+                traceback.print_exc()
 
-                        autocad_data_holder['dxf'] = result['dxf']
-                        autocad_data_holder['boq'] = result['boq']
-                        autocad_data_holder['info'] = result['info']
-
-                        autocad_output.clear()
-                        with autocad_output:
-                            ui.label('✅ Enhanced Layout Generated').classes('text-xl font-bold text-green-400 mb-2')
+    ui.button('🚀 Generate My Home Layout (AI)', on_click=generate_enhanced_autocad).classes('primary-btn mt-4')
+    with autocad_output:
+        ui.markdown('*Just describe your plot and what you want. The AI does the rest — architectural layout, structural grid, and BOQ per Egyptian code.*').classes('text-sm text-[#A9B6D0]')
                             info = result['info']
                             ui.markdown(f"""
                             **Plot Area:** {info['plot_area']:.2f} m²  
