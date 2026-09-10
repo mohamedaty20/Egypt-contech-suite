@@ -61,14 +61,14 @@ from utils.boq import (
 
 
 # =====================================================================
-# AI layout planner  (fallback version)
+# AI layout planner  (fallback version, uses Gemini if available)
 # =====================================================================
 async def plan_architectural_layout(plot_data):
-    n_bed   = int(plot_data.get('num_bedrooms', 3) or 3)
-    n_bath  = int(plot_data.get('num_bathrooms', 2) or 2)
+    n_bed    = int(plot_data.get('num_bedrooms', 3) or 3)
+    n_bath   = int(plot_data.get('num_bathrooms', 2) or 2)
     user_req = (plot_data.get('user_description') or '').strip()
-    area    = float(plot_data.get('plot_area_m2', 200) or 200)
-    scale = max(0.8, min(1.6, area / 200.0))
+    area     = float(plot_data.get('plot_area_m2', 200) or 200)
+    scale    = max(0.8, min(1.6, area / 200.0))
 
     if client:
         try:
@@ -85,6 +85,7 @@ Return ONLY a JSON object of this exact shape (no prose, no markdown):
     {{"name": "Kitchen",     "zone": "public", "area_m2": 10, "needs_window": true, "priority": 2}}
   ]
 }}
+
 Rules:
 - Provide exactly {n_bed} bedrooms and {n_bath} bathrooms, plus Living Room,
   Kitchen, and one Corridor / Hall.
@@ -106,6 +107,7 @@ Rules:
         except Exception as e:
             print(f"[plan_architectural_layout] AI failed, using fallback: {e}")
 
+    # Deterministic fallback
     rooms = [
         {"name": "Living Room", "zone": "public",  "area_m2": round(28 * scale, 1),
          "needs_window": True,  "priority": 1},
@@ -133,6 +135,109 @@ Rules:
         "needs_window": False, "priority": 50,
     })
     return {"rooms": rooms}
+
+
+# =====================================================================
+# Local room positioning (slice-and-dice)
+# =====================================================================
+def _position_rooms(rooms, plot_data):
+    """
+    Convert a room program (with areas/zones/priorities) into a positioned
+    layout (x, y, w, h in mm) inside the Egyptian setback footprint.
+    """
+    pw_mm = int((plot_data.get('plot_width') or 12) * 1000)
+    pl_mm = int((plot_data.get('plot_length') or 16) * 1000)
+
+    sw = plot_data.get('street_width_m', 10)
+    if sw >= 12:   front, rear, side = 2500, 2000, 1500
+    elif sw >= 8:  front, rear, side = 2200, 1800, 1500
+    else:          front, rear, side = 1800, 1800, 1200
+
+    bx = side
+    by = front
+    bw = max(6000, pw_mm - 2 * side)
+    bh = max(8000, pl_mm - front - rear)
+
+    corridor_h = 1300
+    mid_y = by + bh / 2
+    corridor = {'x': int(bx + 200), 'y': int(mid_y - corridor_h / 2),
+                'w': int(bw - 400), 'h': corridor_h}
+    core = {'x': int(bx + bw - 2800), 'y': int(mid_y - 1800),
+            'w': 2400, 'h': 3600}
+
+    lower_zone = (bx + 150, by + 150, bx + bw - 150, mid_y - corridor_h / 2 - 100)
+    upper_zone = (bx + 150, mid_y + corridor_h / 2 + 100, bx + bw - 150, by + bh - 150)
+
+    public_rooms = [r for r in rooms
+                    if r.get('zone') == 'public'
+                    and 'corridor' not in r.get('name', '').lower()]
+    private_rooms = [r for r in rooms if r.get('zone') == 'private']
+    public_rooms.sort(key=lambda r: r.get('priority', 99))
+    private_rooms.sort(key=lambda r: r.get('priority', 99))
+
+    def partition(rect, room_list):
+        if not room_list:
+            return []
+        if len(room_list) == 1:
+            return [(room_list[0], rect)]
+        x0, y0, x1, y1 = rect
+        w, h = x1 - x0, y1 - y0
+        total = sum(r.get('area_m2', 10) for r in room_list) or 1
+        frac = max(0.25, min(0.75, room_list[0].get('area_m2', 10) / total))
+        if w >= h:
+            cut = x0 + int(w * frac)
+            return ([(room_list[0], (x0, y0, cut, y1))] +
+                    partition((cut, y0, x1, y1), room_list[1:]))
+        else:
+            cut = y0 + int(h * frac)
+            return ([(room_list[0], (x0, y0, x1, cut))] +
+                    partition((x0, cut, x1, y1), room_list[1:]))
+
+    placements = []
+    if public_rooms:
+        placements += partition(lower_zone, public_rooms)
+    if private_rooms:
+        placements += partition(upper_zone, private_rooms)
+
+    positioned = []
+    for room, (x0, y0, x1, y1) in placements:
+        nm = room.get('name', '').lower()
+        if 'master' in nm:      rtype = 'bedroom_master'
+        elif 'bedroom' in nm:   rtype = 'bedroom'
+        elif 'living' in nm:    rtype = 'living'
+        elif 'kitchen' in nm:   rtype = 'kitchen'
+        elif 'bath' in nm:      rtype = 'bathroom'
+        elif 'dining' in nm:    rtype = 'dining'
+        else:                   rtype = 'bedroom'
+
+        room_cy = (y0 + y1) / 2
+        door_wall = 'N' if room_cy < mid_y else 'S'
+        door_pos = int((x1 - x0) / 2)
+
+        wins = []
+        if room.get('needs_window'):
+            if abs(y0 - by) < 400:            wins.append('S')
+            if abs(y1 - (by + bh)) < 400:     wins.append('N')
+            if abs(x0 - bx) < 400:            wins.append('W')
+            if abs(x1 - (bx + bw)) < 400:     wins.append('E')
+            if not wins:                      wins.append('S')
+
+        positioned.append({
+            'name': room.get('name', 'Room'),
+            'type': rtype,
+            'x': int(x0), 'y': int(y0),
+            'w': int(x1 - x0), 'h': int(y1 - y0),
+            'door_wall': door_wall,
+            'door_pos': door_pos,
+            'window_walls': wins,
+        })
+
+    return {
+        'building': {'x': int(bx), 'y': int(by), 'w': int(bw), 'h': int(bh)},
+        'corridor': corridor,
+        'core': core,
+        'rooms': positioned,
+    }
 
 
 # =====================================================================
@@ -298,8 +403,8 @@ def generate_autocad_pdf(info, boq_df, engineer_name, project_name, logo_bytes, 
     meta_html = f"""
     <b>Project:</b> {project_name}<br/>
     <b>Engineer:</b> {engineer_name}<br/>
-    <b>Plot:</b> {info['plot_area']} m² &nbsp;|&nbsp; <b>Street:</b> {info['street_width']} m<br/>
-    <b>Location:</b> {info['location']} &nbsp;|&nbsp; <b>Floors:</b> {info['num_floors']} of {info['max_floors']}<br/>
+    <b>Plot:</b> {info.get('plot_area', 0)} m² &nbsp;|&nbsp; <b>Street:</b> {info.get('street_width', 0)} m<br/>
+    <b>Location:</b> {info.get('location', '')} &nbsp;|&nbsp; <b>Floors:</b> {info.get('num_floors', 0)} of {info.get('max_floors', 0)}<br/>
     <b>Report UID:</b> <font color="#CC0000"><b>{unique_uid}</b></font>
     """
     right_cell = ReportLabImage(io.BytesIO(logo_bytes), width=70, height=32) if logo_bytes else ""
@@ -318,8 +423,8 @@ def generate_autocad_pdf(info, boq_df, engineer_name, project_name, logo_bytes, 
     story.append(Spacer(1, 5))
     story.append(HRFlowable(width="100%", thickness=1.3, color=colors.HexColor("#FF8C00"), spaceAfter=8))
 
-    desc = (f"Footprint: {info['footprint_area']} m², "
-            f"Building: {info['building_width']:.2f} × {info['building_length']:.2f} m")
+    desc = (f"Footprint: {info.get('footprint_area', 0)} m², "
+            f"Building: {info.get('building_width', 0):.2f} × {info.get('building_length', 0):.2f} m")
     story.append(Paragraph(desc, styles['body']))
     story.append(Spacer(1, 6))
 
@@ -344,9 +449,11 @@ def generate_autocad_pdf(info, boq_df, engineer_name, project_name, logo_bytes, 
         ]))
         story.append(t)
         story.append(Spacer(1, 10))
-        total_cost = boq_df['Total Cost (EGP)'].sum()
-        story.append(Paragraph(f"<b>Total Estimated Cost: {total_cost:,.2f} EGP</b>", styles['h2']))
-        story.append(Spacer(1, 6))
+        if 'Total Cost (EGP)' in boq_df.columns:
+            total_cost = boq_df['Total Cost (EGP)'].sum()
+            story.append(Paragraph(f"<b>Total Estimated Cost: {total_cost:,.2f} EGP</b>",
+                                   styles['h2']))
+            story.append(Spacer(1, 6))
 
     build_pdf_footer_signature_and_qr(story, styles, qr_buf, engineer_name)
     doc.build(story)
@@ -1166,8 +1273,8 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                 ui.label('🏗️ AI-Powered Home Layout Generator'
                          ).classes('text-2xl font-bold text-white mb-4')
                 ui.markdown('Describe your plot and what you want — the AI designs the layout, '
-                            'reviews it against Egyptian building code, and generates a full DXF '
-                            'with architectural + structural plans.'
+                            'positions the rooms, and generates a full DXF with architectural '
+                            '+ structural plans.'
                             ).classes('markdown-body mb-2')
 
                 with ui.row().classes('w-full gap-4 flex-wrap'):
@@ -1212,66 +1319,47 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                 autocad_data_holder = {'dxf': None, 'boq': None, 'info': None}
 
                 async def generate_enhanced_autocad():
-                    from services.ai_service import (
-                        design_layout_with_ai, refine_layout_with_ai,
-                    )
-                    from services.dxf_service import validate_layout
-
                     autocad_output.clear()
                     autocad_export.clear()
 
-                    plot_data = {
-                        'plot_area_m2': plot_area_input.value or 200,
-                        'plot_width': plot_width_input.value or 12,
-                        'plot_length': plot_length_input.value or 16,
-                        'street_width_m': street_width_input.value or 10,
-                        'street_side': 'S',
-                        'location': location_select.value or 'Cairo',
-                        'num_floors': int(num_floors_input.value or 2),
-                        'floor_height_m': floor_height_input.value or 3.0,
-                        'num_bedrooms': int(num_bedrooms_input.value or 3),
-                        'num_bathrooms': int(num_bathrooms_input.value or 2),
-                        'user_description': user_desc_input.value or 'Standard Egyptian family home',
-                        'project_name': project_name_input.value,
-                        'engineer': engineer_input.value,
-                        'date': datetime.date.today().strftime('%Y-%m-%d'),
-                    }
-
                     try:
-                        # ---------- STEP 1: AI DESIGNS ----------
                         with autocad_output:
                             ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
-                            ui.label('Step 1/3 — AI is designing the layout…'
+                            ui.label('Preparing plot data…').classes('self-center text-sm')
+
+                        plot_data = {
+                            'plot_area_m2': plot_area_input.value or 200,
+                            'plot_width': plot_width_input.value or 12,
+                            'plot_length': plot_length_input.value or 16,
+                            'street_width_m': street_width_input.value or 10,
+                            'street_side': 'S',
+                            'location': location_select.value or 'Cairo',
+                            'num_floors': int(num_floors_input.value or 2),
+                            'floor_height_m': floor_height_input.value or 3.0,
+                            'num_bedrooms': int(num_bedrooms_input.value or 3),
+                            'num_bathrooms': int(num_bathrooms_input.value or 2),
+                            'user_description': user_desc_input.value or 'Standard Egyptian family home',
+                            'project_name': project_name_input.value,
+                            'engineer': engineer_input.value,
+                            'date': datetime.date.today().strftime('%Y-%m-%d'),
+                        }
+
+                        # ---------- STEP 1: AI PLANS ROOMS ----------
+                        with autocad_output:
+                            ui.label('Step 1/3 — AI is planning the rooms…'
                                      ).classes('self-center text-sm')
 
-                        layout = await design_layout_with_ai(plot_data)
-                        if not layout:
-                            ui.notify('AI failed to produce a layout', type='negative')
-                            return
+                        room_program = await plan_architectural_layout(plot_data)
+                        rooms = room_program.get('rooms', [])
+                        if not rooms:
+                            raise Exception('AI returned no rooms')
 
-                        # ---------- STEP 2: CODE REVIEW LOOP ----------
-                        max_iters = 3
-                        for attempt in range(1, max_iters + 1):
-                            violations = validate_layout(layout, plot_data)
-                            with autocad_output:
-                                ui.label(f'Step 2/3 — Code review pass {attempt}: '
-                                         f'{len(violations)} issue(s) found'
-                                         ).classes('self-center text-sm')
-                            if not violations:
-                                break
-                            if attempt == max_iters:
-                                with autocad_output:
-                                    ui.label(f'⚠️ {len(violations)} issue(s) remain after '
-                                             f'{max_iters} passes — rendering anyway'
-                                             ).classes('self-center text-amber-400 text-sm')
-                                break
-                            with autocad_output:
-                                for v in violations[:5]:
-                                    ui.label(f'  • {v}'
-                                             ).classes('self-center text-xs text-amber-300')
-                            fixed = await refine_layout_with_ai(layout, violations, plot_data)
-                            if fixed:
-                                layout = fixed
+                        # ---------- STEP 2: POSITION ROOMS ----------
+                        with autocad_output:
+                            ui.label(f'Step 2/3 — Positioning {len(rooms)} rooms…'
+                                     ).classes('self-center text-sm')
+
+                        layout = _position_rooms(rooms, plot_data)
 
                         # ---------- STEP 3: RENDER DXF ----------
                         with autocad_output:
@@ -1280,45 +1368,46 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                         params = dict(plot_data)
                         params['layout_plan'] = layout
                         result = await asyncio.to_thread(build_complete_project, params)
+
                         autocad_data_holder['dxf'] = result['dxf']
                         autocad_data_holder['boq'] = result['boq']
                         autocad_data_holder['info'] = result['info']
 
                         autocad_output.clear()
                         with autocad_output:
-                            ui.label('✅ Layout approved by code review'
+                            ui.label('✅ Layout generated successfully'
                                      ).classes('text-xl font-bold text-green-400 mb-2')
                             info = result['info']
                             ui.markdown(f"""
-**Plot Area:** {info['plot_area']:.1f} m²  |  **Floors:** {info['num_floors']}  |  **Coverage:** {info['coverage_ratio']}  
-**Building:** {info['building_width']} m × {info['building_length']} m  |  **Footprint:** {info['footprint_area']} m²  
-**Rooms Placed:** {info['num_rooms']}  |  **Columns:** {info['num_columns']}
+**Plot Area:** {info.get('plot_area', 0):.1f} m²  |  **Floors:** {info.get('num_floors', 0)}  |  **Coverage:** {info.get('coverage_ratio', 'n/a')}  
+**Building:** {info.get('building_width', 0)} m × {info.get('building_length', 0)} m  |  **Footprint:** {info.get('footprint_area', 0)} m²  
+**Rooms Placed:** {info.get('num_rooms', 0)}  |  **Columns:** {info.get('num_columns', 0)}
 """).classes('text-white')
 
                             ui.label('📋 Bill of Quantities'
                                      ).classes('text-xl font-bold text-white mt-4 mb-2')
                             boq_df = pd.DataFrame(result['boq'])
-                            ui.table(columns=[
-                                {'name': 'Item', 'label': 'Item', 'field': 'Item', 'sortable': True},
-                                {'name': 'Quantity', 'label': 'Qty', 'field': 'Quantity', 'sortable': True},
-                                {'name': 'Unit', 'label': 'Unit', 'field': 'Unit', 'sortable': True},
-                                {'name': 'Unit Rate (EGP)', 'label': 'Rate',
-                                 'field': 'Unit Rate (EGP)', 'sortable': True},
-                                {'name': 'Total Cost (EGP)', 'label': 'Amount EGP',
-                                 'field': 'Total Cost (EGP)', 'sortable': True},
-                            ], rows=boq_df.to_dict('records'), row_key='index'
-                            ).classes('w-full text-white')
-                            total = boq_df['Total Cost (EGP)'].sum()
-                            ui.label(f'🏷️ Grand Total: {total:,.0f} EGP'
-                                     ).classes('text-2xl font-bold text-[#FF8C00] mt-2')
+                            if not boq_df.empty:
+                                cols = [{'name': c, 'label': c, 'field': c,
+                                         'sortable': True} for c in boq_df.columns]
+                                ui.table(columns=cols,
+                                         rows=boq_df.to_dict('records'),
+                                         row_key='index').classes('w-full text-white')
+                                if 'Total Cost (EGP)' in boq_df.columns:
+                                    total = boq_df['Total Cost (EGP)'].sum()
+                                    ui.label(f'🏷️ Grand Total: {total:,.0f} EGP'
+                                             ).classes('text-2xl font-bold text-[#FF8C00] mt-2')
 
                         autocad_export.clear()
                         with autocad_export:
                             def download_dxf():
                                 if autocad_data_holder.get('dxf'):
-                                    ui.download(autocad_data_holder['dxf'],
-                                                filename=f"AI_Design_{info['plot_area']:.0f}m2.dxf")
+                                    ui.download(
+                                        autocad_data_holder['dxf'],
+                                        filename=f"AI_Design_{info.get('plot_area', 0):.0f}m2.dxf")
                                     ui.notify('DXF downloaded!', type='positive')
+                                else:
+                                    ui.notify('No DXF generated.', type='warning')
 
                             def download_pdf():
                                 try:
@@ -1327,8 +1416,9 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                                         engineer_input.value, project_name_input.value,
                                         logo_bytes_holder['bytes'], ticket_input.value
                                     )
-                                    ui.download(pdf_bytes,
-                                                filename=f"AI_Report_{info['plot_area']:.0f}m2.pdf")
+                                    ui.download(
+                                        pdf_bytes,
+                                        filename=f"AI_Report_{info.get('plot_area', 0):.0f}m2.pdf")
                                     ui.notify('PDF downloaded!', type='positive')
                                 except Exception as e:
                                     ui.notify(f'PDF error: {e}', type='negative')
@@ -1341,15 +1431,17 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                     except Exception as e:
                         autocad_output.clear()
                         with autocad_output:
-                            ui.notify(f'Generation failed: {e}', type='negative')
+                            ui.label(f'❌ Generation failed: {e}'
+                                     ).classes('text-red-400 text-base font-bold')
+                            ui.label('Full traceback printed to the server log.'
+                                     ).classes('text-xs text-[#A9B6D0] mt-1')
                             traceback.print_exc()
 
                 ui.button('🚀 Generate My Home Layout (AI)',
                           on_click=generate_enhanced_autocad).classes('primary-btn mt-4')
                 with autocad_output:
-                    ui.markdown('*The AI designs the layout, the code reviews it against '
-                                'Egyptian building law, and if anything violates the code, '
-                                'the AI fixes it before rendering the DXF.*'
+                    ui.markdown('*The AI plans the rooms and they are positioned inside the '
+                                'building footprint per Egyptian setbacks.*'
                                 ).classes('text-sm text-[#A9B6D0]')
 
         # ---------------- FOOTER ----------------
