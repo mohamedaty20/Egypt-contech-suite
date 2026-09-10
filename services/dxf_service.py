@@ -41,33 +41,156 @@ def detect_dxf_layers(doc):
     return layers
 
 
+def _polyline_is_closed(entity):
+    """Check if a LWPOLYLINE or POLYLINE is effectively closed.
+    Accepts: flag bit 1, entity.closed property, OR first≈last point."""
+    try:
+        flags = entity.dxf.get('flags', 0) if hasattr(entity.dxf, 'get') else entity.dxf.flags
+        if flags & 1:
+            return True
+    except Exception:
+        pass
+    try:
+        if entity.closed:
+            return True
+    except Exception:
+        pass
+    # Fallback: check if first ≈ last point (tolerance scales with size)
+    try:
+        if entity.dxftype() == 'LWPOLYLINE':
+            pts = [(p[0], p[1]) for p in entity.get_points()]
+        else:
+            pts = [(v.dxf.location.x, v.dxf.location.y) for v in entity.vertices]
+        if len(pts) < 3:
+            return False
+        x0, y0 = pts[0]
+        x1, y1 = pts[-1]
+        span = max(abs(x0), abs(y0), abs(x1), abs(y1), 1.0)
+        return math.hypot(x1 - x0, y1 - y0) < max(1.0, span * 0.001)
+    except Exception:
+        return False
+
+
+def _extract_polyline_points(entity):
+    if entity.dxftype() == 'LWPOLYLINE':
+        return [(p[0], p[1]) for p in entity.get_points()]
+    return [(v.dxf.location.x, v.dxf.location.y) for v in entity.vertices]
+
+
+def _shoelace_area(pts):
+    if len(pts) < 3:
+        return 0.0
+    a = 0.0
+    n = len(pts)
+    for i in range(n):
+        x1, y1 = pts[i]
+        x2, y2 = pts[(i + 1) % n]
+        a += x1 * y2 - x2 * y1
+    return abs(a) / 2.0
+
+
 def extract_areas_from_dxf(doc, unit='mm', workflow='architectural'):
+    """Robust area extractor. Accepts closed polylines (flag OR coincident
+    endpoints) AND hatch boundary paths. Prints a diagnostic census."""
     scale = {'mm': 1e-6, 'cm': 1e-4, 'm': 1.0}.get(unit, 1e-6)
     results = []
     msp = doc.modelspace()
-    for entity in msp:
-        if entity.dxftype() in ('LWPOLYLINE', 'POLYLINE') and entity.closed:
+
+    # --- Diagnostics: entity type census ---
+    counts = {}
+    for e in msp:
+        counts[e.dxftype()] = counts.get(e.dxftype(), 0) + 1
+    print(f"[dxf-extract] entity census: {counts}")
+
+    # --- Pre-collect text positions for label association ---
+    text_positions = []
+    try:
+        for t in msp.query('TEXT MTEXT'):
             try:
-                pts = ([(p.x, p.y) for p in entity.get_points()]
-                       if entity.dxftype() == 'LWPOLYLINE'
-                       else [(v.dxf.location.x, v.dxf.location.y) for v in entity.vertices])
-                a = 0.0
-                for i in range(len(pts)):
-                    x1, y1 = pts[i]
-                    x2, y2 = pts[(i+1) % len(pts)]
-                    a += x1*y2 - x2*y1
-                a = abs(a) / 2.0
-                label = ""
-                cx = sum(p[0] for p in pts)/len(pts)
-                cy = sum(p[1] for p in pts)/len(pts)
-                for t in msp.query('TEXT MTEXT'):
-                    if abs(t.dxf.insert.x - cx) < 10 and abs(t.dxf.insert.y - cy) < 10:
-                        label = t.dxf.text
-                        break
-                results.append({'layer': entity.dxf.layer, 'area_m2': round(a*scale, 4),
-                                'label': label.strip() if label else '', 'vertices': len(pts)})
+                insert = t.dxf.insert
+                if t.dxftype() == 'TEXT':
+                    txt = (t.dxf.text or '').strip()
+                else:
+                    txt = (getattr(t, 'text', '') or '').strip()
+                text_positions.append((float(insert.x), float(insert.y), txt))
             except Exception:
+                pass
+    except Exception:
+        pass
+
+    def find_label(cx, cy, radius):
+        best, best_d = '', radius
+        for tx, ty, txt in text_positions:
+            d = math.hypot(tx - cx, ty - cy)
+            if d < best_d and txt:
+                best, best_d = txt, d
+        return best
+
+    # --- Polylines ---
+    poly_closed = 0
+    for entity in msp:
+        if entity.dxftype() not in ('LWPOLYLINE', 'POLYLINE'):
+            continue
+        try:
+            if not _polyline_is_closed(entity):
                 continue
+            poly_closed += 1
+            pts = _extract_polyline_points(entity)
+            if len(pts) < 3:
+                continue
+            a = _shoelace_area(pts)
+            if a < 1e-6:
+                continue
+            cx = sum(p[0] for p in pts) / len(pts)
+            cy = sum(p[1] for p in pts) / len(pts)
+            minx = min(p[0] for p in pts); maxx = max(p[0] for p in pts)
+            miny = min(p[1] for p in pts); maxy = max(p[1] for p in pts)
+            radius = max(200.0, max(maxx - minx, maxy - miny) * 0.6)
+            label = find_label(cx, cy, radius) or find_label(cx, cy, 500)
+            results.append({
+                'layer': entity.dxf.layer,
+                'area_m2': round(a * scale, 4),
+                'label': label,
+                'vertices': len(pts),
+                'entity_type': entity.dxftype(),
+            })
+        except Exception as e:
+            print(f"[dxf-extract] polyline failed: {e!r}")
+            continue
+
+    # --- HATCH boundaries ---
+    hatch_count = 0
+    try:
+        for hatch in msp.query('HATCH'):
+            try:
+                for path in hatch.paths:
+                    pts = []
+                    if hasattr(path, 'vertices') and path.vertices:
+                        pts = [(float(v[0]), float(v[1])) for v in path.vertices]
+                    if len(pts) < 3:
+                        continue
+                    a = _shoelace_area(pts)
+                    if a < 1e-6:
+                        continue
+                    cx = sum(p[0] for p in pts) / len(pts)
+                    cy = sum(p[1] for p in pts) / len(pts)
+                    label = find_label(cx, cy, 500)
+                    results.append({
+                        'layer': hatch.dxf.layer,
+                        'area_m2': round(a * scale, 4),
+                        'label': label,
+                        'vertices': len(pts),
+                        'entity_type': 'HATCH',
+                    })
+                    hatch_count += 1
+            except Exception as e:
+                print(f"[dxf-extract] hatch failed: {e!r}")
+                continue
+    except Exception:
+        pass
+
+    print(f"[dxf-extract] closed polylines={poly_closed} hatch_paths={hatch_count} "
+          f"→ {len(results)} areas returned")
     return results
 
 
