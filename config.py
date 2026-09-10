@@ -247,3 +247,164 @@ ARCH_SCHEMAS = {
         'formula': lambda data: (data.get('door_count', 0), data.get('window_count', 0))
     }
 }
+
+
+# =====================================================================
+# ADDITIVE HIGH-TRAFFIC PRIMITIVES
+# ---------------------------------------------------------------------
+# New section. Nothing above this line was changed.
+# Provides:
+#   - Async Gemini calls        (call_gemini_async, call_gemini_json_async)
+#   - CPU-bound / IO-bound gate (cpu_bound_limited, io_bound_limited)
+#   - BytesIO helpers           (bytes_to_stream, stream_to_bytes)
+#   - Global concurrency caps   (GEMINI_MAX_CONCURRENT, CPU_MAX_CONCURRENT)
+# =====================================================================
+
+import asyncio as _asyncio
+import io as _io
+
+# --- Tunables (env-overridable) ---
+GEMINI_MAX_CONCURRENT = int(os.environ.get("GEMINI_MAX_CONCURRENT", "8"))
+CPU_MAX_CONCURRENT    = int(os.environ.get(
+    "CPU_MAX_CONCURRENT",
+    str(max(1, (os.cpu_count() or 2) - 1)),
+))
+GEMINI_TIMEOUT_S      = float(os.environ.get("GEMINI_TIMEOUT_S", "240"))
+
+# --- Lazy semaphores (created inside the running event loop) ---
+_GEMINI_SEM = None
+_CPU_SEM    = None
+
+
+def _get_gemini_sem():
+    global _GEMINI_SEM
+    if _GEMINI_SEM is None:
+        _GEMINI_SEM = _asyncio.Semaphore(GEMINI_MAX_CONCURRENT)
+    return _GEMINI_SEM
+
+
+def _get_cpu_sem():
+    global _CPU_SEM
+    if _CPU_SEM is None:
+        _CPU_SEM = _asyncio.Semaphore(CPU_MAX_CONCURRENT)
+    return _CPU_SEM
+
+
+# --- BytesIO helpers (avoid disk round-trips) ---
+def bytes_to_stream(data):
+    """Wrap bytes/str in a fresh in-memory stream, cursor at 0."""
+    if isinstance(data, str):
+        data = data.encode("utf-8")
+    buf = _io.BytesIO(data)
+    buf.seek(0)
+    return buf
+
+
+def stream_to_bytes(buf):
+    """Read every byte from a stream and reset its cursor to 0."""
+    buf.seek(0)
+    return buf.getvalue()
+
+
+# --- Async Gemini calls (google-genai async client) ---
+async def call_gemini_async(contents, *, model=None, temperature=None,
+                            system_instruction=None, timeout=None,
+                            **_ignored):
+    """
+    Async Gemini call using client.aio, gated by a global semaphore and
+    wrapped with a timeout.
+
+    - `contents` may be a str, a list of str, a list mixing str with
+      types.Part (from types.Part.from_bytes), etc.
+    - `system_instruction` is passed through GenerateContentConfig.
+    - `timeout` is a hard wall-clock cap; raises asyncio.TimeoutError.
+    """
+    if client is None:
+        raise RuntimeError("GEMINI_API_KEY is not configured.")
+
+    sem = _get_gemini_sem()
+    t = timeout or GEMINI_TIMEOUT_S
+    mdl = model or GEMINI_MODEL
+
+    config_kwargs = {}
+    if temperature is not None:
+        config_kwargs["temperature"] = temperature
+    if system_instruction:
+        config_kwargs["system_instruction"] = system_instruction
+
+    cfg = types.GenerateContentConfig(**config_kwargs) if config_kwargs else None
+
+    async def _do():
+        return await client.aio.models.generate_content(
+            model=mdl, contents=contents, config=cfg,
+        )
+
+    async with sem:
+        resp = await _asyncio.wait_for(_do(), timeout=t)
+
+    text = getattr(resp, "text", None)
+    return text if text is not None else str(resp)
+
+
+async def call_gemini_json_async(prompt, *, model=None, temperature=None,
+                                 timeout=None, **_ignored):
+    """
+    Async Gemini call configured for JSON output.
+    Returns the raw string (fenced code blocks are NOT stripped here;
+    strip them in the caller since each call site may differ).
+    """
+    if client is None:
+        raise RuntimeError("GEMINI_API_KEY is not configured.")
+
+    sem = _get_gemini_sem()
+    t = timeout or GEMINI_TIMEOUT_S
+    mdl = model or GEMINI_MODEL
+
+    config_kwargs = {"response_mime_type": "application/json"}
+    if temperature is not None:
+        config_kwargs["temperature"] = temperature
+
+    cfg = types.GenerateContentConfig(**config_kwargs)
+
+    async def _do():
+        return await client.aio.models.generate_content(
+            model=mdl, contents=prompt, config=cfg,
+        )
+
+    async with sem:
+        resp = await _asyncio.wait_for(_do(), timeout=t)
+
+    text = getattr(resp, "text", None)
+    return text if text is not None else str(resp)
+
+
+# --- CPU / IO bound runners (NiceGUI process pool + thread pool) ---
+def _call_with_kwargs(fn, args, kwargs):
+    """Picklable shim so we can forward kwargs through run.cpu_bound."""
+    return fn(*args, **kwargs)
+
+
+async def cpu_bound_limited(fn, *args, **kwargs):
+    """
+    Run a module-level picklable function in NiceGUI's CPU process pool,
+    gated by a global semaphore so we never oversubscribe the worker pool.
+    """
+    from nicegui import run as _nicegui_run
+    sem = _get_cpu_sem()
+    async with sem:
+        if kwargs:
+            return await _nicegui_run.cpu_bound(_call_with_kwargs, fn, args, kwargs)
+        return await _nicegui_run.cpu_bound(fn, *args)
+
+
+async def io_bound_limited(fn, *args, **kwargs):
+    """
+    Run a blocking (I/O-bound) callable in NiceGUI's thread pool,
+    gated by the same global semaphore as CPU work.
+    """
+    from nicegui import run as _nicegui_run
+    sem = _get_cpu_sem()
+    async with sem:
+        if kwargs:
+            return await _nicegui_run.io_bound(_call_with_kwargs, fn, args, kwargs)
+        return await _nicegui_run.io_bound(fn, *args)
