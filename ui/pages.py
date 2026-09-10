@@ -151,10 +151,32 @@ async def io_bound_limited(fn, *args, **kwargs):
         return await run.io_bound(fn, *args)
 
 
-# --- DXF worker shim: pass raw bytes across the process boundary ---
+_DXF_BINARY_MAGIC = b"AutoCAD Binary DXF\r\n\x1a\n\x00"
+
+def _open_dxf_doc_from_bytes(doc_bytes):
+    """
+    Rebuild a fresh ezdxf document from raw DXF bytes.
+    - Binary DXF  -> io.BytesIO  (bytes stream)
+    - ASCII DXF   -> io.StringIO (text stream, which ezdxf requires)
+    """
+    if isinstance(doc_bytes, str):
+        doc_bytes = doc_bytes.encode("utf-8")
+
+    # Binary DXF: magic header at offset 0
+    if doc_bytes[:len(_DXF_BINARY_MAGIC)] == _DXF_BINARY_MAGIC:
+        return ezdxf.read(io.BytesIO(doc_bytes))
+
+    # ASCII DXF: decode to text and hand ezdxf a text stream
+    try:
+        text = doc_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        # Older DXF files may use a legacy codepage; Latin-1 never fails
+        text = doc_bytes.decode("latin-1", errors="replace")
+    return ezdxf.read(io.StringIO(text))
+
+
 def _extract_areas_from_dxf_bytes(doc_bytes, unit, workflow):
-    """Runs INSIDE the worker process. Rebuilds the ezdxf doc from bytes."""
-    doc = ezdxf.read(bytes_to_stream(doc_bytes))
+    doc = _open_dxf_doc_from_bytes(doc_bytes)
     return extract_areas_from_dxf(doc, unit=unit, workflow=workflow)
 
 
