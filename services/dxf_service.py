@@ -5,6 +5,7 @@ import random
 import numpy as np
 import pandas as pd
 import ezdxf
+from ezdxf import recover  # or use the lazy import inside the function
 from ezdxf.enums import TextEntityAlignment
 from shapely.geometry import Polygon, box
 from config import BOQ_RATES
@@ -934,49 +935,87 @@ def build_complete_project(params):
 
 _DXF_BINARY_MAGIC = b"AutoCAD Binary DXF\r\n\x1a\x00"
 
+def _strip_thumbnail_section(text: str) -> str:
+    """
+    Remove the THUMBNAILIMAGE section from an ASCII DXF string.
+
+    AutoCAD embeds a small PNG preview in this section as hex data under
+    tag 310. If that hex is truncated by even one character (which happens
+    when files pass through upload/download without byte-perfect handling),
+    ezdxf's unhexlify() raises 'Odd-length string'. We don't need the
+    preview, so drop the whole section before parsing.
+    """
+    lines = text.splitlines()
+    out = []
+    i = 0
+    n = len(lines)
+    while i < n:
+        if (i + 3 < n
+                and lines[i].strip() == '0'
+                and lines[i + 1].strip() == 'SECTION'
+                and lines[i + 2].strip() == '2'
+                and lines[i + 3].strip().upper() == 'THUMBNAILIMAGE'):
+            # Skip to the matching ENDSEC
+            i += 4
+            while i < n:
+                if (lines[i].strip() == '0'
+                        and i + 1 < n
+                        and lines[i + 1].strip() == 'ENDSEC'):
+                    i += 2
+                    break
+                i += 1
+            continue
+        out.append(lines[i])
+        i += 1
+    return '\n'.join(out)
+
+
 def _open_dxf_doc_from_bytes(doc_bytes):
     """
     Rebuild a fresh ezdxf document from raw DXF bytes.
 
-    Tries binary first if the header looks binary, otherwise ASCII.
-    If the first attempt fails, falls back to the other encoding.
-    Prints the first 32 bytes so we can see what the file actually is.
+    ASCII path:
+      - decode
+      - strip THUMBNAILIMAGE (avoids the odd-length hex crash)
+      - ezdxf.read on the cleaned text
+      - if that still fails, ezdxf.recover.read (ignores bad entities)
+
+    Binary path:
+      - ezdxf.read on BytesIO, ezdxf.recover.read as fallback.
     """
     if isinstance(doc_bytes, str):
-        doc_bytes = doc_bytes.encode("utf-8")
+        doc_bytes = doc_bytes.encode('utf-8')
 
-    head = doc_bytes[:64]
-    print(f"[dxf] first 32 bytes: {head[:32]!r}")
-    print(f"[dxf] contains NUL: {b'\\x00' in head}, "
-          f"contains SUB: {b'\\x1a' in head}")
+    head = doc_bytes[:32]
+    is_binary = head.startswith(b'AutoCAD Binary DXF') or (b'\x00' in head)
+    print(f"[dxf] head={head!r} binary={is_binary}")
 
-    # Strong signal: binary DXF has an ASCII magic header
-    looks_binary = (
-        head.startswith(b"AutoCAD Binary DXF")
-        or (b"\x00" in head[:32])
-    )
-
-    if looks_binary:
+    if is_binary:
         try:
             return ezdxf.read(io.BytesIO(doc_bytes))
         except Exception as e:
-            print(f"[dxf] binary path failed: {e!r} — falling back to ASCII")
+            print(f"[dxf] binary read failed: {e!r}; trying recover")
+            from ezdxf import recover as _recover
+            return _recover.read(io.BytesIO(doc_bytes))
 
     # ASCII path
     try:
-        text = doc_bytes.decode("utf-8")
+        text = doc_bytes.decode('utf-8')
     except UnicodeDecodeError:
-        try:
-            text = doc_bytes.decode("latin-1")
-        except Exception:
-            text = doc_bytes.decode("utf-8", errors="replace")
+        text = doc_bytes.decode('latin-1', errors='replace')
+
+    cleaned = _strip_thumbnail_section(text)
 
     try:
-        return ezdxf.read(io.StringIO(text))
+        return ezdxf.read(io.StringIO(cleaned))
     except Exception as e:
-        print(f"[dxf] ASCII path failed: {e!r} — falling back to binary")
-        return ezdxf.read(io.BytesIO(doc_bytes))
-
+        print(f"[dxf] ascii read failed: {e!r}; trying recover")
+        from ezdxf import recover as _recover
+        try:
+            return _recover.read(io.StringIO(cleaned))
+        except Exception as e2:
+            print(f"[dxf] recover(StringIO) failed: {e2!r}; trying raw bytes")
+            return _recover.read(io.BytesIO(doc_bytes))
 
 def _extract_areas_from_dxf_worker(doc_bytes, unit, workflow):
     """Runs INSIDE the cpu_bound worker. Plain bytes in, plain list out."""
