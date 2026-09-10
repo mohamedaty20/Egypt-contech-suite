@@ -912,3 +912,67 @@ def build_complete_project(params):
         'coverage_ratio': f"{coverage*100:.0f}%",
     }
     return {'dxf': dxf_bytes, 'boq': boq_df.to_dict('records'), 'info': layout_info}
+
+
+# ======================================================================
+# ADDITIVE HIGH-TRAFFIC LAYER
+# ---------------------------------------------------------------------
+# Nothing above this line was changed.
+# This file has NO Gemini calls — the async-Gemini part of the pattern
+# does not apply here. Only the cpu_bound + BytesIO parts do.
+#
+# What is added:
+#   - _extract_areas_from_dxf_worker(bytes, unit, workflow)
+#         Picklable worker that rebuilds the ezdxf doc inside the pool.
+#   - detect_dxf_layers_async(doc_bytes)
+#   - extract_areas_from_dxf_async(doc_bytes, unit, workflow)
+#   - build_complete_project_async(params)
+#
+# All four delegate to the UNCHANGED sync functions above via
+# config.cpu_bound_limited (which is semaphore-gated).
+# ======================================================================
+
+def _open_doc_from_bytes(doc_bytes):
+    """Rebuild a fresh ezdxf document from bytes inside a worker process."""
+    if isinstance(doc_bytes, str):
+        doc_bytes = doc_bytes.encode('utf-8')
+    return ezdxf.read(io.BytesIO(doc_bytes))
+
+
+def _extract_areas_from_dxf_worker(doc_bytes, unit, workflow):
+    """Runs INSIDE the cpu_bound worker. Plain bytes in, plain list out."""
+    doc = _open_doc_from_bytes(doc_bytes)
+    return extract_areas_from_dxf(doc, unit=unit, workflow=workflow)
+
+
+def _detect_dxf_layers_worker(doc_bytes):
+    """Runs INSIDE the cpu_bound worker. Plain bytes in, plain dict out."""
+    doc = _open_doc_from_bytes(doc_bytes)
+    result = detect_dxf_layers(doc)
+    # `types` is a set — convert to list so the result is picklable back.
+    for layer, info in result.items():
+        if isinstance(info.get('types'), set):
+            info['types'] = sorted(info['types'])
+    return result
+
+
+async def detect_dxf_layers_async(doc_bytes):
+    """Async / process-pool version of detect_dxf_layers()."""
+    from config import cpu_bound_limited
+    return await cpu_bound_limited(_detect_dxf_layers_worker, doc_bytes)
+
+
+async def extract_areas_from_dxf_async(doc_bytes, unit='mm', workflow='architectural'):
+    """Async / process-pool version of extract_areas_from_dxf()."""
+    from config import cpu_bound_limited
+    return await cpu_bound_limited(_extract_areas_from_dxf_worker,
+                                   doc_bytes, unit, workflow)
+
+
+async def build_complete_project_async(params):
+    """
+    Async / process-pool version of build_complete_project().
+    `params` must be a plain dict (it already is in every call site).
+    """
+    from config import cpu_bound_limited
+    return await cpu_bound_limited(build_complete_project, params)
