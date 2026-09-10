@@ -1674,7 +1674,9 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                             if not boq_df.empty:
                                 cols = [{'name': c, 'label': c, 'field': c,
                                          'sortable': True} for c in boq_df.columns]
-                               ui.table(columns=cols, rows=boq_df.to_dict('records'), row_key='index').classes('w-full text-white').props('dark flat bordered')
+                                _dark_table(columns=cols,
+                                            rows=boq_df.to_dict('records'),
+                                            row_key='index')
                                 if 'Total Cost (EGP)' in boq_df.columns:
                                     total = boq_df['Total Cost (EGP)'].sum()
                                     ui.label(f'🏷️ Grand Total: {total:,.0f} EGP'
