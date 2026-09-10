@@ -10,7 +10,10 @@ from config import client, GEMINI_MODEL, get_code_directive, NO_LATEX_RULE
 from utils.boq import normalize_keys
 from services.scraper_service import detect_mime_type
 
-# --- Gemini API calls ---
+
+# =====================================================================
+# Gemini API calls
+# =====================================================================
 async def call_gemini(contents, system_instruction=None, temperature=0.1, timeout=240):
     cfg_kwargs = {"temperature": temperature}
     if system_instruction:
@@ -33,6 +36,7 @@ async def call_gemini(contents, system_instruction=None, temperature=0.1, timeou
     except Exception as e:
         raise Exception(f"AI request failed: {str(e)}")
 
+
 async def call_gemini_json(contents, temperature=0.1, timeout=240):
     cfg_kwargs = {"temperature": temperature}
     config = types.GenerateContentConfig(**cfg_kwargs)
@@ -52,7 +56,10 @@ async def call_gemini_json(contents, temperature=0.1, timeout=240):
     except Exception as e:
         raise Exception(f"AI request failed: {str(e)}")
 
-# --- Architectural extraction ---
+
+# =====================================================================
+# Architectural extraction
+# =====================================================================
 async def extract_architectural_with_ai(element_type, file_bytes, file_type, user_params, code_basis, retry=True):
     contents = []
     from config import ARCH_SCHEMAS
@@ -158,7 +165,10 @@ If unclear, set values to null.
         else:
             return {}, raw_response
 
-# --- Mass (structural) extraction ---
+
+# =====================================================================
+# Mass (structural) extraction
+# =====================================================================
 async def extract_mass_with_ai(element_type, file_bytes, file_type, user_params, code_basis, retry=True):
     contents = []
     from config import MASS_SCHEMAS
@@ -258,7 +268,10 @@ If the drawing is unclear, return an empty array [].
         else:
             return []
 
-# --- Progress extraction from image ---
+
+# =====================================================================
+# Progress extraction
+# =====================================================================
 def parse_progress_from_gemini_response(raw_text):
     raw_text = raw_text.strip()
     raw_text = re.sub(r'^```json\s*', '', raw_text)
@@ -271,6 +284,7 @@ def parse_progress_from_gemini_response(raw_text):
         return json.loads(raw_text)
     except:
         return {}
+
 
 async def extract_progress_from_image(file_bytes, file_type):
     if not client:
@@ -307,6 +321,7 @@ Example: {"date": "2026-03-15", "description": "Formwork installation for slab",
     data = parse_progress_from_gemini_response(raw_response)
     return data
 
+
 async def generate_progress_overview(df, start_date, end_date, description):
     if df.empty or not client:
         return "No data available for overview."
@@ -328,10 +343,12 @@ Data (CSV format):
     except Exception as e:
         return f"Error generating overview: {str(e)}"
 
-        async def plan_architectural_layout(plot_data):
-    """
-    Use Gemini to produce a room program that follows Egyptian building code.
-    """
+
+# =====================================================================
+# AI Architectural Plan (for AutoCAD Layout Generator)
+# =====================================================================
+async def plan_architectural_layout(plot_data):
+    """Use Gemini to produce a room program that follows Egyptian building code."""
     prompt = f"""
 You are a senior Egyptian architect with 30 years of experience.
 Design a complete residential room program for the following plot, strictly following:
@@ -340,8 +357,8 @@ Design a complete residential room program for the following plot, strictly foll
 - New Cairo / Giza municipal setback rules
 
 PLOT:
-- Area: {plot_data['plot_area_m2']} m²
-- Dimensions: {plot_data.get('plot_width', '?')} m × {plot_data.get('plot_length', '?')} m
+- Area: {plot_data['plot_area_m2']} m2
+- Dimensions: {plot_data.get('plot_width', '?')} m x {plot_data.get('plot_length', '?')} m
 - Street width: {plot_data['street_width_m']} m
 - Location: {plot_data['location']}
 - Floors: {plot_data['num_floors']}
@@ -351,15 +368,15 @@ PLOT:
 - User wish: {plot_data.get('user_description', 'Standard Egyptian family home')}
 
 ROOM RULES (enforce strictly):
-- Master bedroom >= 14 m²; other bedrooms >= 10 m²
-- Living/Reception >= 20 m²
-- Kitchen >= 7 m² (must have exterior wall for window)
-- Bathroom >= 3.5 m²
+- Master bedroom >= 14 m2; other bedrooms >= 10 m2
+- Living/Reception >= 20 m2
+- Kitchen >= 7 m2 (must have exterior wall for window)
+- Bathroom >= 3.5 m2
 - Corridor width >= 1.1 m
 - Stair width >= 1.1 m
-- Manwer (light well 2x2 m min) if plot < 175 m² AND floors >= 2
+- Manwer (light well 2x2 m min) if plot < 175 m2 AND floors >= 2
 
-Return ONLY valid JSON (no markdown, no ```). Structure:
+Return ONLY valid JSON (no markdown, no code fences). Structure:
 
 {{
   "rooms": [
