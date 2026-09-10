@@ -1,5 +1,6 @@
 # ui/pages.py – Complete fixed file
 import io
+import json
 import datetime
 import os
 import uuid
@@ -107,7 +108,6 @@ Rules:
         except Exception as e:
             print(f"[plan_architectural_layout] AI failed, using fallback: {e}")
 
-    # Deterministic fallback
     rooms = [
         {"name": "Living Room", "zone": "public",  "area_m2": round(28 * scale, 1),
          "needs_window": True,  "priority": 1},
@@ -141,10 +141,6 @@ Rules:
 # Local room positioning (slice-and-dice)
 # =====================================================================
 def _position_rooms(rooms, plot_data):
-    """
-    Convert a room program (with areas/zones/priorities) into a positioned
-    layout (x, y, w, h in mm) inside the Egyptian setback footprint.
-    """
     pw_mm = int((plot_data.get('plot_width') or 12) * 1000)
     pl_mm = int((plot_data.get('plot_length') or 16) * 1000)
 
@@ -951,124 +947,127 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                     ui.button('Download Transcript PDF', on_click=download_chat_pdf
                               ).classes('primary-btn flex-1')
 
-            
+            # ============ TAB 5: HANDWRITING OCR ============
+            with ui.tab_panel(t_handwriting):
+                ui.label('Handwriting OCR').classes('text-2xl font-bold text-white mb-2')
+                ui.markdown('Upload a handwritten note (PNG / JPG / PDF). '
+                            'After transcription you can download the result as PDF or TXT.'
+                            ).classes('markdown-body mb-2')
+                ocr_file_data = {'bytes': None, 'type': None, 'name': None}
+                ocr_status_label = ui.label('Status: No file uploaded yet'
+                                            ).classes('text-xs text-amber-400 font-semibold mb-2')
 
-             # ============ TAB 5: HANDWRITING OCR ============
-    with ui.tab_panel(t_handwriting):
-    ui.label('Handwriting OCR').classes('text-2xl font-bold text-white mb-2')
-    ui.markdown('Upload a handwritten note (PNG / JPG / PDF).'
-                ).classes('markdown-body mb-2')
-    ocr_file_data = {'bytes': None, 'type': None, 'name': None}
-    ocr_status_label = ui.label('Status: No file uploaded yet'
-                                ).classes('text-xs text-amber-400 font-semibold mb-2')
-
-    async def handle_ocr_upload(e):
-        try:
-            data = await e.file.read()
-            ocr_file_data['bytes'] = data
-            ocr_file_data['type']  = detect_mime_type(e.file.name, data)
-            ocr_file_data['name']  = e.file.name
-            ocr_status_label.set_text(
-                f'Ready: {e.file.name} ({len(data)/1024/1024:.1f} MB)')
-            ocr_status_label.classes(replace='text-xs text-emerald-400 font-semibold mb-2')
-        except Exception as ex:
-            ui.notify(f'Error: {str(ex)}', type='negative')
-
-    ui.upload(label='Upload Handwriting', auto_upload=True,
-              on_upload=handle_ocr_upload).props('flat dark').classes('w-full mb-4')
-    ocr_output = ui.column().classes('w-full')
-    ocr_export = ui.row().classes('w-full gap-4 mt-4')
-    text_editor = {'widget': None}
-    transcribed_holder = {'text': ''}
-
-    async def run_ocr():
-        if not client or not ocr_file_data['bytes']:
-            ui.notify('API key or file missing!', type='negative')
-            return
-        ocr_output.clear()
-        ocr_export.clear()
-        with ocr_output:
-            ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
-            ui.label('Transcribing...').classes('self-center text-sm')
-        try:
-            prompt = """Transcribe the handwritten text. If tabular, use Markdown tables. Return only text."""
-            contents = [prompt]
-            if ocr_file_data['type'] == 'application/pdf':
-                doc = fitz.open(stream=ocr_file_data['bytes'], filetype="pdf")
-                for pnum in range(min(6, len(doc))):
-                    pix = doc.load_page(pnum).get_pixmap(matrix=fitz.Matrix(2.0, 2.0))
-                    contents.append(types.Part.from_bytes(
-                        data=pix.tobytes("png"), mime_type="image/png"))
-                doc.close()
-            else:
-                contents.append(types.Part.from_bytes(
-                    data=ocr_file_data['bytes'], mime_type=ocr_file_data['type']))
-            response_text = await call_gemini(contents, temperature=0, timeout=240)
-            transcribed = sanitize_ai_markdown(response_text)
-            transcribed_holder['text'] = transcribed
-            ocr_output.clear()
-            with ocr_output:
-                with ui.column().classes('output-card w-full'):
-                    ui.label('Transcribed Text (editable)'
-                             ).classes('text-xl font-bold text-white mb-2')
-                    text_editor['widget'] = ui.textarea(value=transcribed).classes(
-                        'w-full markdown-body').style('min-height: 300px;')
-                    ui.label('Preview:').classes('text-lg font-bold text-white mt-2')
-                    preview = ui.column().classes('w-full')
-
-                    def update_preview():
-                        preview.clear()
-                        with preview:
-                            ui.markdown(text_editor['widget'].value
-                                        ).classes('markdown-body')
-                    text_editor['widget'].on('input', update_preview)
-                    update_preview()
-
-            # ---------- DOWNLOAD BUTTONS ----------
-            ocr_export.clear()
-            with ocr_export:
-                def download_ocr_pdf():
+                async def handle_ocr_upload(e):
                     try:
-                        current_text = (text_editor['widget'].value
-                                        if text_editor['widget'] else
-                                        transcribed_holder['text'])
-                        meta = current_meta('OCR')
-                        pdf_bytes = build_report_pdf(
-                            doc_title="Handwriting Transcription",
-                            subtitle=f"Source: {ocr_file_data.get('name', '')}",
-                            body_markdown=current_text,
-                            meta=meta,
-                            logo_bytes=logo_bytes_holder['bytes'],
-                            show_ticket=False,
-                        )
-                        ui.download(pdf_bytes,
-                                    filename=f"Handwriting_Transcription_{ticket_input.value}.pdf")
-                        ui.notify('PDF downloaded!', type='positive')
+                        data = await e.file.read()
+                        ocr_file_data['bytes'] = data
+                        ocr_file_data['type']  = detect_mime_type(e.file.name, data)
+                        ocr_file_data['name']  = e.file.name
+                        ocr_status_label.set_text(
+                            f'Ready: {e.file.name} ({len(data)/1024/1024:.1f} MB)')
+                        ocr_status_label.classes(replace='text-xs text-emerald-400 font-semibold mb-2')
                     except Exception as ex:
-                        ui.notify(f'PDF Error: {str(ex)}', type='negative')
+                        ui.notify(f'Error: {str(ex)}', type='negative')
 
-                def download_ocr_txt():
+                ui.upload(label='Upload Handwriting', auto_upload=True,
+                          on_upload=handle_ocr_upload).props('flat dark').classes('w-full mb-4')
+                ocr_output = ui.column().classes('w-full')
+                ocr_export = ui.row().classes('w-full gap-4 mt-4')
+                text_editor = {'widget': None}
+                transcribed_holder = {'text': ''}
+
+                async def run_ocr():
+                    if not client or not ocr_file_data['bytes']:
+                        ui.notify('API key or file missing!', type='negative')
+                        return
+                    ocr_output.clear()
+                    ocr_export.clear()
+                    with ocr_output:
+                        ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
+                        ui.label('Transcribing...').classes('self-center text-sm')
                     try:
-                        current_text = (text_editor['widget'].value
-                                        if text_editor['widget'] else
-                                        transcribed_holder['text'])
-                        ui.download(current_text.encode('utf-8'),
-                                    filename=f"Handwriting_Transcription_{ticket_input.value}.txt")
-                        ui.notify('TXT downloaded!', type='positive')
+                        prompt = ("Transcribe the handwritten text. "
+                                  "If tabular, use Markdown tables. Return only text.")
+                        contents = [prompt]
+                        if ocr_file_data['type'] == 'application/pdf':
+                            doc = fitz.open(stream=ocr_file_data['bytes'], filetype="pdf")
+                            for pnum in range(min(6, len(doc))):
+                                pix = doc.load_page(pnum).get_pixmap(matrix=fitz.Matrix(2.0, 2.0))
+                                contents.append(types.Part.from_bytes(
+                                    data=pix.tobytes("png"), mime_type="image/png"))
+                            doc.close()
+                        else:
+                            contents.append(types.Part.from_bytes(
+                                data=ocr_file_data['bytes'], mime_type=ocr_file_data['type']))
+                        response_text = await call_gemini(contents, temperature=0, timeout=240)
+                        transcribed = sanitize_ai_markdown(response_text)
+                        transcribed_holder['text'] = transcribed
+                        ocr_output.clear()
+                        with ocr_output:
+                            with ui.column().classes('output-card w-full'):
+                                ui.label('Transcribed Text (editable)'
+                                         ).classes('text-xl font-bold text-white mb-2')
+                                text_editor['widget'] = ui.textarea(value=transcribed).classes(
+                                    'w-full markdown-body').style('min-height: 300px;')
+                                ui.label('Preview:').classes('text-lg font-bold text-white mt-2')
+                                preview = ui.column().classes('w-full')
+
+                                def update_preview():
+                                    preview.clear()
+                                    with preview:
+                                        ui.markdown(text_editor['widget'].value
+                                                    ).classes('markdown-body')
+                                text_editor['widget'].on('input', update_preview)
+                                update_preview()
+
+                        # ---------- DOWNLOAD BUTTONS ----------
+                        ocr_export.clear()
+                        with ocr_export:
+                            def download_ocr_pdf():
+                                try:
+                                    current_text = (text_editor['widget'].value
+                                                    if text_editor['widget'] else
+                                                    transcribed_holder['text'])
+                                    meta = current_meta('OCR')
+                                    pdf_bytes = build_report_pdf(
+                                        doc_title="Handwriting Transcription",
+                                        subtitle=f"Source: {ocr_file_data.get('name', '')}",
+                                        body_markdown=current_text,
+                                        meta=meta,
+                                        logo_bytes=logo_bytes_holder['bytes'],
+                                        show_ticket=False,
+                                    )
+                                    ui.download(
+                                        pdf_bytes,
+                                        filename=f"Handwriting_Transcription_{ticket_input.value}.pdf")
+                                    ui.notify('PDF downloaded!', type='positive')
+                                except Exception as ex:
+                                    ui.notify(f'PDF Error: {str(ex)}', type='negative')
+
+                            def download_ocr_txt():
+                                try:
+                                    current_text = (text_editor['widget'].value
+                                                    if text_editor['widget'] else
+                                                    transcribed_holder['text'])
+                                    ui.download(
+                                        current_text.encode('utf-8'),
+                                        filename=f"Handwriting_Transcription_{ticket_input.value}.txt")
+                                    ui.notify('TXT downloaded!', type='positive')
+                                except Exception as ex:
+                                    ui.notify(f'TXT Error: {str(ex)}', type='negative')
+
+                            ui.button('📄 Download PDF Report', on_click=download_ocr_pdf
+                                      ).classes('primary-btn flex-1')
+                            ui.button('📝 Download TXT', on_click=download_ocr_txt
+                                      ).classes('primary-btn flex-1')
+
                     except Exception as ex:
-                        ui.notify(f'TXT Error: {str(ex)}', type='negative')
+                        ocr_output.clear()
+                        with ocr_output:
+                            ui.notify(f'Failed: {str(ex)}', type='negative')
 
-                ui.button('📄 Download PDF Report', on_click=download_ocr_pdf
-                          ).classes('primary-btn flex-1')
-                ui.button('📝 Download TXT', on_click=download_ocr_txt
-                          ).classes('primary-btn flex-1')
+                ui.button('Transcribe Handwriting', on_click=run_ocr).classes('primary-btn')
 
-        except Exception as ex:
-            ocr_output.clear()
-            with ocr_output:
-                ui.notify(f'Failed: {str(ex)}', type='negative')
-
-    ui.button('Transcribe Handwriting', on_click=run_ocr).classes('primary-btn')
             # ============ TAB 6: JOB BOARD ============
             with ui.tab_panel(t_jobs):
                 ui.label('Engineering Job Board - Egypt'
@@ -1389,7 +1388,6 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                             'date': datetime.date.today().strftime('%Y-%m-%d'),
                         }
 
-                        # ---------- STEP 1: AI PLANS ROOMS ----------
                         with autocad_output:
                             ui.label('Step 1/3 — AI is planning the rooms…'
                                      ).classes('self-center text-sm')
@@ -1399,14 +1397,12 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                         if not rooms:
                             raise Exception('AI returned no rooms')
 
-                        # ---------- STEP 2: POSITION ROOMS ----------
                         with autocad_output:
                             ui.label(f'Step 2/3 — Positioning {len(rooms)} rooms…'
                                      ).classes('self-center text-sm')
 
                         layout = _position_rooms(rooms, plot_data)
 
-                        # ---------- STEP 3: RENDER DXF ----------
                         with autocad_output:
                             ui.label('Step 3/3 — Rendering DXF…').classes('self-center text-sm')
 
