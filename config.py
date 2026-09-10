@@ -3,6 +3,41 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 from reportlab.lib.pagesizes import A4
+import re   # if not already imported
+
+_LATEX_SIMPLE = {
+    r'\times': ' x ', r'\cdot': ' . ', r'\div': ' / ',
+    r'\geq': ' >= ', r'\ge': ' >= ', r'\leq': ' <= ', r'\le': ' <= ',
+    r'\pm': ' +/- ', r'\approx': ' ~= ', r'\neq': ' != ',
+    r'\infty': 'infinity', r'\text': '', r'\mathrm': '', r'\mathbf': '',
+    r'\left': '', r'\right': '', r'\,': ' ', r'\;': ' ', r'\!': '',
+    r'\Delta': 'Delta ', r'\delta': 'delta ', r'\sigma': 'sigma ', r'\Sigma': 'Sigma ',
+    r'\phi': 'phi ', r'\gamma': 'gamma ', r'\theta': 'theta ', r'\mu': 'mu ',
+    r'\pi': 'pi ', r'\alpha': 'alpha ', r'\beta': 'beta ', r'\rho': 'rho ',
+    r'\max': 'Max', r'\min': 'Min', r'\sum': 'Sum', r'\bar': '',
+}
+
+def sanitize_ai_markdown(text: str) -> str:
+    if not text:
+        return ""
+    text = str(text)
+    for macro, repl in _LATEX_SIMPLE.items():
+        text = text.replace(macro, repl)
+    for _ in range(2):
+        text = re.sub(r'\\frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}', r'(\1 / \2)', text)
+        text = re.sub(r'\\sqrt\s*\{([^{}]*)\}', r'sqrt(\1)', text)
+    text = re.sub(r'_\{([^{}]*)\}', r'_\1', text)
+    text = re.sub(r'\^\{([^{}]*)\}', r'^\1', text)
+    text = re.sub(r'\\([a-zA-Z]+)', r'\1', text)
+    text = text.replace('$$', '').replace('$', '')
+    text = re.sub(r'(?<!\w)\{([^{}]{0,40})\}(?!\w)', r'\1', text)
+    text = re.sub(r'\*{3,}', '**', text)
+    text = re.sub(r'([^\n])\n(#{1,6}\s)', r'\1\n\n\2', text)
+    text = re.sub(r'([^\n|])\n(\|)', r'\1\n\n\2', text)
+    text = re.sub(r'(?<![\w#*`|])[&$%^~?/\\]{2,}(?![\w#*`|])', '', text)
+    text = re.sub(r'[ \t]+\n', '\n', text)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
 
 load_dotenv()
 api_key = os.getenv("GEMINI_API_KEY")
