@@ -938,38 +938,44 @@ def _open_dxf_doc_from_bytes(doc_bytes):
     """
     Rebuild a fresh ezdxf document from raw DXF bytes.
 
-    Binary DXF (any variant)  -> io.BytesIO
-    ASCII  DXF (any encoding) -> io.StringIO
-
-    Detection rule:
-      * Real binary DXF always starts with the ASCII marker "AutoCAD Binary DXF".
-        That 18-byte prefix is unambiguous — ASCII DXF never starts with it.
-      * We additionally check for NUL + SUB bytes in the first 32 bytes as a
-        belt-and-suspenders fallback for non-standard writers.
+    Tries binary first if the header looks binary, otherwise ASCII.
+    If the first attempt fails, falls back to the other encoding.
+    Prints the first 32 bytes so we can see what the file actually is.
     """
     if isinstance(doc_bytes, str):
         doc_bytes = doc_bytes.encode("utf-8")
 
-    head = doc_bytes[:32]
+    head = doc_bytes[:64]
+    print(f"[dxf] first 32 bytes: {head[:32]!r}")
+    print(f"[dxf] contains NUL: {b'\\x00' in head}, "
+          f"contains SUB: {b'\\x1a' in head}")
 
-    # Print once so the Render log shows what the file actually starts with.
-    # Remove this line once binary + ASCII both work.
-    print(f"[dxf-debug] first 32 bytes: {head!r}")
-
-    is_binary = (
+    # Strong signal: binary DXF has an ASCII magic header
+    looks_binary = (
         head.startswith(b"AutoCAD Binary DXF")
-        or (b"\x00" in head and b"\x1a" in head)
+        or (b"\x00" in head[:32])
     )
 
-    if is_binary:
-        return ezdxf.read(io.BytesIO(doc_bytes))
+    if looks_binary:
+        try:
+            return ezdxf.read(io.BytesIO(doc_bytes))
+        except Exception as e:
+            print(f"[dxf] binary path failed: {e!r} — falling back to ASCII")
 
-    # ASCII DXF
+    # ASCII path
     try:
         text = doc_bytes.decode("utf-8")
     except UnicodeDecodeError:
-        text = doc_bytes.decode("latin-1", errors="replace")
-    return ezdxf.read(io.StringIO(text))
+        try:
+            text = doc_bytes.decode("latin-1")
+        except Exception:
+            text = doc_bytes.decode("utf-8", errors="replace")
+
+    try:
+        return ezdxf.read(io.StringIO(text))
+    except Exception as e:
+        print(f"[dxf] ASCII path failed: {e!r} — falling back to binary")
+        return ezdxf.read(io.BytesIO(doc_bytes))
 
 
 def _extract_areas_from_dxf_worker(doc_bytes, unit, workflow):
