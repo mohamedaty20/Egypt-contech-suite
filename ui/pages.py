@@ -151,7 +151,7 @@ async def io_bound_limited(fn, *args, **kwargs):
         return await run.io_bound(fn, *args)
 
 
-_DXF_BINARY_MAGIC = b"AutoCAD Binary DXF\r\n\x1a\n\x00"
+_DXF_BINARY_MAGIC = b"AutoCAD Binary DXF\r\n\x1a\x00"
 
 def _open_dxf_doc_from_bytes(doc_bytes):
     """
