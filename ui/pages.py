@@ -1608,6 +1608,7 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                 async def generate_enhanced_autocad():
                     autocad_output.clear()
                     autocad_export.clear()
+                    import random as _rnd
 
                     try:
                         with autocad_output:
@@ -1631,27 +1632,69 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                             'date': datetime.date.today().strftime('%Y-%m-%d'),
                         }
 
+                        # ---- Try sophisticated AI design first ----
+                        from services.ai_service import (
+                            design_layout_with_ai_enhanced, validate_layout,
+                            refine_layout_with_ai, _LAYOUT_STYLES,
+                        )
+
+                        style = _rnd.choice(_LAYOUT_STYLES)
                         with autocad_output:
-                            ui.label('Step 1/3 — AI is planning the rooms…'
+                            ui.label(f'Step 1/4 — AI designing ({style[0]})…'
                                      ).classes('self-center text-sm')
 
-                        room_program = await plan_architectural_layout_async(plot_data)  # [HT]
-                        rooms = room_program.get('rooms', [])
-                        if not rooms:
-                            raise Exception('AI returned no rooms')
+                        layout_design = None
+                        try:
+                            layout_design = await gemini_limited(
+                                lambda: design_layout_with_ai_enhanced(
+                                    plot_data, style_hint=style, temperature=0.95),
+                                timeout=300,
+                            )
+                        except Exception as e:
+                            print(f"[autocad] enhanced design failed: {e!r}")
+
+                        # Validate + refine loop (max 2 refinements)
+                        if layout_design:
+                            for attempt in range(2):
+                                violations = validate_layout(layout_design, plot_data)
+                                if not violations:
+                                    break
+                                with autocad_output:
+                                    ui.label(
+                                        f'Step 2/4 — Refining (pass {attempt+1}, '
+                                        f'{len(violations)} issues)…'
+                                    ).classes('self-center text-sm')
+                                try:
+                                    refined = await gemini_limited(
+                                        lambda: refine_layout_with_ai(
+                                            layout_design, violations, plot_data),
+                                        timeout=300,
+                                    )
+                                    if refined and refined.get('rooms'):
+                                        layout_design = refined
+                                    else:
+                                        break
+                                except Exception as e:
+                                    print(f"[autocad] refine failed: {e!r}")
+                                    break
+
+                        # ---- Fallback to legacy slice-and-dice ----
+                        if not layout_design or not layout_design.get('rooms'):
+                            with autocad_output:
+                                ui.label('Step 1/4 — Fallback positioning…'
+                                         ).classes('self-center text-sm')
+                            room_program = await plan_architectural_layout_async(plot_data)
+                            layout_design = _position_rooms(
+                                room_program.get('rooms', []), plot_data)
 
                         with autocad_output:
-                            ui.label(f'Step 2/3 — Positioning {len(rooms)} rooms…'
+                            ui.label('Step 3/4 — Rendering DXF (sophisticated)…'
                                      ).classes('self-center text-sm')
-
-                        layout = _position_rooms(rooms, plot_data)
-
-                        with autocad_output:
-                            ui.label('Step 3/3 — Rendering DXF…').classes('self-center text-sm')
 
                         params = dict(plot_data)
-                        params['layout_plan'] = layout
-                        result = await build_complete_project_async(params)  # [HT]
+                        params['layout_plan'] = layout_design
+                        params['variation_seed'] = _rnd.randint(1, 999_999)
+                        result = await build_complete_project_async(params)
 
                         autocad_data_holder['dxf'] = result['dxf']
                         autocad_data_holder['boq'] = result['boq']
@@ -1663,6 +1706,7 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                                      ).classes('text-xl font-bold text-green-400 mb-2')
                             info = result['info']
                             ui.markdown(f"""
+**Style:** {layout_design.get('_style', 'Custom')}  
 **Plot Area:** {info.get('plot_area', 0):.1f} m²  |  **Floors:** {info.get('num_floors', 0)}  |  **Coverage:** {info.get('coverage_ratio', 'n/a')}  
 **Building:** {info.get('building_width', 0)} m × {info.get('building_length', 0)} m  |  **Footprint:** {info.get('footprint_area', 0)} m²  
 **Rooms Placed:** {info.get('num_rooms', 0)}  |  **Columns:** {info.get('num_columns', 0)}
