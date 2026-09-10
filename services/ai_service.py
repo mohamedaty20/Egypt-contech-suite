@@ -327,3 +327,74 @@ Data (CSV format):
         return overview
     except Exception as e:
         return f"Error generating overview: {str(e)}"
+
+        async def plan_architectural_layout(plot_data):
+    """
+    Use Gemini to produce a room program that follows Egyptian building code.
+    """
+    prompt = f"""
+You are a senior Egyptian architect with 30 years of experience.
+Design a complete residential room program for the following plot, strictly following:
+- Egyptian Building Law 119/2008 (setbacks, heights, manwer)
+- ECP 203 for structural spans (max 5 m clear span for typical RC)
+- New Cairo / Giza municipal setback rules
+
+PLOT:
+- Area: {plot_data['plot_area_m2']} m²
+- Dimensions: {plot_data.get('plot_width', '?')} m × {plot_data.get('plot_length', '?')} m
+- Street width: {plot_data['street_width_m']} m
+- Location: {plot_data['location']}
+- Floors: {plot_data['num_floors']}
+- Units per floor: {plot_data.get('num_units_per_floor', 1)}
+- Bedrooms wanted: {plot_data.get('num_bedrooms', 3)}
+- Bathrooms wanted: {plot_data.get('num_bathrooms', 2)}
+- User wish: {plot_data.get('user_description', 'Standard Egyptian family home')}
+
+ROOM RULES (enforce strictly):
+- Master bedroom >= 14 m²; other bedrooms >= 10 m²
+- Living/Reception >= 20 m²
+- Kitchen >= 7 m² (must have exterior wall for window)
+- Bathroom >= 3.5 m²
+- Corridor width >= 1.1 m
+- Stair width >= 1.1 m
+- Manwer (light well 2x2 m min) if plot < 175 m² AND floors >= 2
+
+Return ONLY valid JSON (no markdown, no ```). Structure:
+
+{{
+  "rooms": [
+    {{"name": "Living Room", "type": "living", "area_m2": 28, "priority": 1, "zone": "public", "needs_window": true}},
+    {{"name": "Kitchen", "type": "kitchen", "area_m2": 9, "priority": 2, "zone": "public", "needs_window": true}},
+    {{"name": "Master Bedroom", "type": "bedroom_master", "area_m2": 16, "priority": 3, "zone": "private", "needs_window": true}},
+    {{"name": "Bedroom 2", "type": "bedroom", "area_m2": 12, "priority": 4, "zone": "private", "needs_window": true}},
+    {{"name": "Bathroom", "type": "bathroom", "area_m2": 4, "priority": 5, "zone": "private", "needs_window": false}}
+  ],
+  "core": {{"type": "staircase", "position": "center"}},
+  "manwer_required": false,
+  "manwer_size_m": 0,
+  "compliance_notes": "Front setback 3 m (street > 12 m). Max height 4 floors."
+}}
+"""
+    try:
+        text = await call_gemini_json([prompt], temperature=0.3, timeout=180)
+        text = re.sub(r'^```json\s*', '', text.strip())
+        text = re.sub(r'\s*```$', '', text)
+        s, e = text.find('{'), text.rfind('}')
+        if s != -1 and e != -1:
+            text = text[s:e+1]
+        return json.loads(text)
+    except Exception as ex:
+        print(f"[AI plan] fallback: {ex}")
+        return {
+            "rooms": [
+                {"name": "Living Room", "type": "living", "area_m2": 25, "priority": 1, "zone": "public", "needs_window": True},
+                {"name": "Kitchen", "type": "kitchen", "area_m2": 9, "priority": 2, "zone": "public", "needs_window": True},
+                {"name": "Master Bedroom", "type": "bedroom_master", "area_m2": 16, "priority": 3, "zone": "private", "needs_window": True},
+                {"name": "Bedroom 2", "type": "bedroom", "area_m2": 12, "priority": 4, "zone": "private", "needs_window": True},
+                {"name": "Bathroom", "type": "bathroom", "area_m2": 4, "priority": 5, "zone": "private", "needs_window": False},
+            ],
+            "core": {"type": "staircase", "position": "center"},
+            "manwer_required": False,
+            "manwer_size_m": 0,
+            "compliance_notes": "Fallback layout."
+        }
