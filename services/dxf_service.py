@@ -934,18 +934,37 @@ def build_complete_project(params):
 
 _DXF_BINARY_MAGIC = b"AutoCAD Binary DXF\r\n\x1a\x00"
 
-def _open_doc_from_bytes(doc_bytes):
-    """Rebuild a fresh ezdxf document from bytes inside a worker process.
+def _open_dxf_doc_from_bytes(doc_bytes):
+    """
+    Rebuild a fresh ezdxf document from raw DXF bytes.
 
-    Binary DXF  -> bytes stream  (io.BytesIO)
-    ASCII  DXF  -> text stream   (io.StringIO), which is what ezdxf requires.
+    Binary DXF (any variant)  -> io.BytesIO
+    ASCII  DXF (any encoding) -> io.StringIO
+
+    Detection rule:
+      * Real binary DXF always starts with the ASCII marker "AutoCAD Binary DXF".
+        That 18-byte prefix is unambiguous — ASCII DXF never starts with it.
+      * We additionally check for NUL + SUB bytes in the first 32 bytes as a
+        belt-and-suspenders fallback for non-standard writers.
     """
     if isinstance(doc_bytes, str):
         doc_bytes = doc_bytes.encode("utf-8")
 
-    if doc_bytes[:len(_DXF_BINARY_MAGIC)] == _DXF_BINARY_MAGIC:
+    head = doc_bytes[:32]
+
+    # Print once so the Render log shows what the file actually starts with.
+    # Remove this line once binary + ASCII both work.
+    print(f"[dxf-debug] first 32 bytes: {head!r}")
+
+    is_binary = (
+        head.startswith(b"AutoCAD Binary DXF")
+        or (b"\x00" in head and b"\x1a" in head)
+    )
+
+    if is_binary:
         return ezdxf.read(io.BytesIO(doc_bytes))
 
+    # ASCII DXF
     try:
         text = doc_bytes.decode("utf-8")
     except UnicodeDecodeError:
