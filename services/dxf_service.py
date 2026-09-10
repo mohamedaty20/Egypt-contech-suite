@@ -447,10 +447,13 @@ def build_complete_project(params):
         'num_columns': num_columns,
     }
 
-    dxf_buffer = io.BytesIO()
-    doc.write(dxf_buffer)
+    # ----- 13. Write DXF to bytes (ASCII text → encode to utf-8 bytes) -----
+    dxf_buffer = io.StringIO()
+    doc.write(dxf_buffer, fmt='asc')
+    dxf_bytes = dxf_buffer.getvalue().encode('utf-8')
+
     return {
-        'dxf': dxf_buffer.getvalue(),
+        'dxf': dxf_bytes,
         'boq': boq_df.to_dict('records'),
         'info': layout_info
     }
