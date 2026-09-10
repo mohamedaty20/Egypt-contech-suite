@@ -1451,8 +1451,6 @@ You are an expert OCR system. Transcribe the handwritten text from the provided 
                 ui.button('Process DXF', on_click=process_dxf).classes('primary-btn mt-4')
                 with dxf_output:
                     ui.markdown('*Upload a DXF and click "Process DXF" to extract areas.*').classes('text-sm text-[#A9B6D0]')
-
-            # ===== TAB 9: AUTOCAD LAYOUT GENERATOR (UPGRADED) =====
 with ui.tab_panel(t_autocad):
     ui.label('🏗️ AI-Powered Home Layout Generator').classes('text-2xl font-bold text-white mb-4')
     ui.markdown('Describe your plot and what you want — the AI designs the layout, applies Egyptian building code, and derives the structural system automatically.').classes('markdown-body mb-2')
@@ -1583,66 +1581,6 @@ with ui.tab_panel(t_autocad):
     ui.button('🚀 Generate My Home Layout (AI)', on_click=generate_enhanced_autocad).classes('primary-btn mt-4')
     with autocad_output:
         ui.markdown('*Just describe your plot and what you want. The AI does the rest — architectural layout, structural grid, and BOQ per Egyptian code.*').classes('text-sm text-[#A9B6D0]')
-                            info = result['info']
-                            ui.markdown(f"""
-                            **Plot Area:** {info['plot_area']:.2f} m²  
-                            **Street Width:** {info['street_width']} m  
-                            **Location:** {info['location']}  
-                            **Max Allowed Floors:** {info['max_floors']} (used {info['num_floors']})  
-                            **Footprint Area:** {info['footprint_area']} m²  
-                            **Building Dimensions:** {info['building_width']:.2f} m x {info['building_length']:.2f} m
-                            """).classes('text-white')
-                            ui.label('📋 Bill of Quantities (with Grand Total)').classes('text-xl font-bold text-white mt-4 mb-2')
-                            boq_df = pd.DataFrame(result['boq'])
-                            columns = [
-                                {'name': 'Item', 'label': 'Item', 'field': 'Item', 'sortable': True},
-                                {'name': 'Quantity', 'label': 'Quantity', 'field': 'Quantity', 'sortable': True},
-                                {'name': 'Unit', 'label': 'Unit', 'field': 'Unit', 'sortable': True},
-                                {'name': 'Unit Rate (EGP)', 'label': 'Unit Rate (EGP)', 'field': 'Unit Rate (EGP)', 'sortable': True},
-                                {'name': 'Total Cost (EGP)', 'label': 'Total Cost (EGP)', 'field': 'Total Cost (EGP)', 'sortable': True},
-                            ]
-                            ui.table(columns=columns, rows=boq_df.to_dict('records'), row_key='index').classes('w-full text-white')
-                            total_cost = boq_df['Total Cost (EGP)'].sum()
-                            ui.label(f'🏷️ Grand Total Cost: {total_cost:,.2f} EGP').classes('text-2xl font-bold text-[#FF8C00] mt-2')
-
-                        autocad_export.clear()
-                        with autocad_export:
-                            def download_dxf():
-                                if autocad_data_holder['dxf']:
-                                    ui.download(autocad_data_holder['dxf'], filename=f"Enhanced_Layout_{info['plot_area']:.0f}m2.dxf")
-                                    ui.notify('DXF downloaded!', type='positive')
-                                else:
-                                    ui.notify('No DXF generated.', type='warning')
-                            def download_pdf():
-                                try:
-                                    pdf_bytes = generate_autocad_pdf(
-                                        info,
-                                        boq_df,
-                                        engineer_input.value,
-                                        project_name_input.value,
-                                        logo_bytes_holder['bytes'],
-                                        ticket_input.value
-                                    )
-                                    ui.download(pdf_bytes, filename=f"Layout_Report_{info['plot_area']:.0f}m2.pdf")
-                                    ui.notify('PDF downloaded!', type='positive')
-                                except Exception as e:
-                                    ui.notify(f'PDF error: {str(e)}', type='negative')
-                                    traceback.print_exc()
-
-                            ui.button('Download DXF', on_click=download_dxf).classes('primary-btn')
-                            ui.button('Download PDF Report', on_click=download_pdf).classes('primary-btn')
-
-                    except Exception as e:
-                        autocad_output.clear()
-                        with autocad_output:
-                            ui.notify(f'Generation failed: {str(e)}', type='negative')
-                            ui.label(f'Error: {str(e)}').classes('text-red-400')
-                            traceback.print_exc()
-
-                ui.button('Generate Enhanced Layout & BOQ', on_click=generate_enhanced_autocad).classes('primary-btn mt-4')
-                with autocad_output:
-                    ui.markdown('*Enter plot details and click to generate a high‑quality DXF with architectural, structural, and reinforcement layers.*').classes('text-sm text-[#A9B6D0]')
-
         # ---------------- FOOTER ----------------
         ui.html('''
         <div class="app-footer">
