@@ -61,19 +61,13 @@ from utils.boq import (
 
 
 # =====================================================================
-# AI layout planner  (fallback version — used if ai_service lacks it)
+# AI layout planner  (fallback version)
 # =====================================================================
 async def plan_architectural_layout(plot_data):
-    """
-    Ask the AI to plan rooms for the given plot. If the AI is unavailable,
-    return a deterministic fallback plan (typical Egyptian family home).
-    """
     n_bed   = int(plot_data.get('num_bedrooms', 3) or 3)
     n_bath  = int(plot_data.get('num_bathrooms', 2) or 2)
     user_req = (plot_data.get('user_description') or '').strip()
     area    = float(plot_data.get('plot_area_m2', 200) or 200)
-
-    # Scale a bit: bigger plot = bigger rooms
     scale = max(0.8, min(1.6, area / 200.0))
 
     if client:
@@ -88,20 +82,16 @@ Return ONLY a JSON object of this exact shape (no prose, no markdown):
 {{
   "rooms": [
     {{"name": "Living Room", "zone": "public", "area_m2": 25, "needs_window": true, "priority": 1}},
-    {{"name": "Kitchen",     "zone": "public", "area_m2": 10, "needs_window": true, "priority": 2}},
-    ...
+    {{"name": "Kitchen",     "zone": "public", "area_m2": 10, "needs_window": true, "priority": 2}}
   ]
 }}
-
 Rules:
 - Provide exactly {n_bed} bedrooms and {n_bath} bathrooms, plus Living Room,
   Kitchen, and one Corridor / Hall.
 - zone must be "public" or "private".
 - areas must sum to roughly 75% of the plot area.
-- keep aspect ratios practical (no room narrower than 2.0 m).
 """
             raw = await call_gemini_json(prompt, temperature=0.2, timeout=120)
-            # strip code fences
             raw = raw.strip()
             if raw.startswith('```'):
                 raw = raw.split('```')[1]
@@ -116,7 +106,6 @@ Rules:
         except Exception as e:
             print(f"[plan_architectural_layout] AI failed, using fallback: {e}")
 
-    # ---------- deterministic fallback ----------
     rooms = [
         {"name": "Living Room", "zone": "public",  "area_m2": round(28 * scale, 1),
          "needs_window": True,  "priority": 1},
@@ -335,7 +324,7 @@ def generate_autocad_pdf(info, boq_df, engineer_name, project_name, logo_bytes, 
     story.append(Spacer(1, 6))
 
     if not boq_df.empty:
-        cols_to_show = [c for c in ['Code', 'Item', 'Quantity', 'Unit',
+        cols_to_show = [c for c in ['Item', 'Quantity', 'Unit',
                                      'Unit Rate (EGP)', 'Total Cost (EGP)']
                         if c in boq_df.columns]
         table_data = [cols_to_show]
@@ -366,10 +355,9 @@ def generate_autocad_pdf(info, boq_df, engineer_name, project_name, logo_bytes, 
 
 
 # =====================================================================
-# Utility: dark Quasar table
+# Dark table helper
 # =====================================================================
 def _dark_table(**kwargs):
-    """Convenience wrapper that returns a properly themed ui.table."""
     return ui.table(**kwargs).classes('w-full text-white').props('dark flat bordered')
 
 
@@ -576,7 +564,7 @@ f_cu target: {target_fcu} N/mm2
 {stage_data_text}
 Cement = {cement_input.value} kg/m3 | Water = {water_input.value} kg/m3
 Truck: {truck_input.value} | Ticket: {ticket_input.value}
-Provide: per-stage table (Specimen, Strength, Deviation, Check), statistical commentary, final PASS/FAIL with ECP clause.
+Provide: per-stage table, statistical commentary, final PASS/FAIL with ECP clause.
 """
                         res_text = await call_gemini(prompt)
                         ai_cube_result_holder['text'] = res_text
@@ -673,7 +661,6 @@ Provide: per-stage table (Specimen, Strength, Deviation, Check), statistical com
                 ui.upload(label='Select PDF or Image File', auto_upload=True,
                           on_upload=handle_audit_upload).props('flat dark').classes('w-full mb-4')
                 audit_output_container = ui.column().classes('w-full')
-                audit_result_text_holder = {'text': ''}
 
                 async def run_ai_audit():
                     if not client or not uploaded_file_data['bytes']:
@@ -700,7 +687,6 @@ Perform a comprehensive technical audit."""
                                 data=uploaded_file_data['bytes'],
                                 mime_type=uploaded_file_data['type']))
                         audit_result_text = await call_gemini(contents, timeout=240)
-                        audit_result_text_holder['text'] = audit_result_text
                         audit_output_container.clear()
                         with audit_output_container:
                             with ui.column().classes('output-card w-full'):
@@ -723,7 +709,6 @@ Perform a comprehensive technical audit."""
                 defect_status_label = ui.label('Status: No file uploaded yet'
                                                ).classes('text-xs text-amber-400 font-semibold mb-2')
                 defect_file_data = {'bytes': None, 'type': None}
-                defect_result_holder = {'text': ''}
                 defect_user_message = ui.input(
                     label='Describe the defect (optional)',
                     placeholder='e.g., "Cracks near column base with spalling concrete"'
@@ -768,7 +753,6 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                                 data=defect_file_data['bytes'],
                                 mime_type=defect_file_data['type']))
                         res_text = await call_gemini(contents, timeout=240)
-                        defect_result_holder['text'] = res_text
                         defect_output.clear()
                         with defect_output:
                             with ui.column().classes('output-card w-full'):
@@ -884,7 +868,6 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                 ui.upload(label='Upload Handwriting', auto_upload=True,
                           on_upload=handle_ocr_upload).props('flat dark').classes('w-full mb-4')
                 ocr_output = ui.column().classes('w-full')
-                transcribed_text_holder = {'text': ''}
                 text_editor = {'widget': None}
 
                 async def run_ocr():
@@ -910,7 +893,6 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                                 data=ocr_file_data['bytes'], mime_type=ocr_file_data['type']))
                         response_text = await call_gemini(contents, temperature=0, timeout=240)
                         transcribed = sanitize_ai_markdown(response_text)
-                        transcribed_text_holder['text'] = transcribed
                         ocr_output.clear()
                         with ocr_output:
                             with ui.column().classes('output-card w-full'):
@@ -1179,6 +1161,56 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
 
                 ui.button('Process DXF', on_click=process_dxf).classes('primary-btn mt-4')
 
+            # ============ TAB 9: AUTOCAD LAYOUT GENERATOR ============
+            with ui.tab_panel(t_autocad):
+                ui.label('🏗️ AI-Powered Home Layout Generator'
+                         ).classes('text-2xl font-bold text-white mb-4')
+                ui.markdown('Describe your plot and what you want — the AI designs the layout, '
+                            'reviews it against Egyptian building code, and generates a full DXF '
+                            'with architectural + structural plans.'
+                            ).classes('markdown-body mb-2')
+
+                with ui.row().classes('w-full gap-4 flex-wrap'):
+                    with ui.column().classes('input-card flex-1'):
+                        ui.label('Your Plot').classes('font-bold text-white')
+                        plot_area_input = ui.number(label='Plot Area (m²)',
+                                                     value=200, min=50, max=2000).classes('w-full')
+                        plot_width_input = ui.number(label='Plot Width (m)',
+                                                      value=12, step=0.5).classes('w-full')
+                        plot_length_input = ui.number(label='Plot Length (m)',
+                                                       value=16, step=0.5).classes('w-full')
+                        street_width_input = ui.number(label='Street Width (m)',
+                                                        value=10, min=4, max=60).classes('w-full')
+                        location_select = ui.select(
+                            label='Location',
+                            options=['Cairo', 'Giza', 'Alexandria', 'New Cairo',
+                                     '6th of October', 'Delta', 'Other'],
+                            value='Cairo'
+                        ).classes('w-full')
+
+                    with ui.column().classes('input-card flex-1'):
+                        ui.label('Your Home').classes('font-bold text-white')
+                        num_floors_input = ui.number(label='Number of Floors',
+                                                      value=2, min=1, max=6).classes('w-full')
+                        floor_height_input = ui.number(label='Floor Height (m)',
+                                                        value=3.0, step=0.1).classes('w-full')
+                        num_bedrooms_input = ui.number(label='Bedrooms',
+                                                        value=3, min=1, max=8).classes('w-full')
+                        num_bathrooms_input = ui.number(label='Bathrooms',
+                                                         value=2, min=1, max=5).classes('w-full')
+
+                    with ui.column().classes('input-card flex-1'):
+                        ui.label('Special Requests (optional)').classes('font-bold text-white')
+                        user_desc_input = ui.textarea(
+                            label='Tell the AI what you want',
+                            placeholder='e.g., "Large open living room, big kitchen with island, '
+                                        'master bedroom with en-suite"'
+                        ).classes('w-full').style('min-height: 140px;')
+
+                autocad_output = ui.column().classes('w-full')
+                autocad_export = ui.row().classes('w-full gap-4 mt-4')
+                autocad_data_holder = {'dxf': None, 'boq': None, 'info': None}
+
                 async def generate_enhanced_autocad():
                     from services.ai_service import (
                         design_layout_with_ai, refine_layout_with_ai,
@@ -1209,7 +1241,8 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                         # ---------- STEP 1: AI DESIGNS ----------
                         with autocad_output:
                             ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
-                            ui.label('Step 1/3 — AI is designing the layout…').classes('self-center text-sm')
+                            ui.label('Step 1/3 — AI is designing the layout…'
+                                     ).classes('self-center text-sm')
 
                         layout = await design_layout_with_ai(plot_data)
                         if not layout:
@@ -1222,18 +1255,20 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                             violations = validate_layout(layout, plot_data)
                             with autocad_output:
                                 ui.label(f'Step 2/3 — Code review pass {attempt}: '
-                                         f'{len(violations)} issue(s) found').classes('self-center text-sm')
+                                         f'{len(violations)} issue(s) found'
+                                         ).classes('self-center text-sm')
                             if not violations:
                                 break
                             if attempt == max_iters:
                                 with autocad_output:
-                                    ui.label(f'⚠️ {len(violations)} issue(s) remain after {max_iters} passes '
-                                             f'— rendering anyway').classes('self-center text-amber-400 text-sm')
+                                    ui.label(f'⚠️ {len(violations)} issue(s) remain after '
+                                             f'{max_iters} passes — rendering anyway'
+                                             ).classes('self-center text-amber-400 text-sm')
                                 break
-                            # Send violations back to AI to fix
                             with autocad_output:
                                 for v in violations[:5]:
-                                    ui.label(f'  • {v}').classes('self-center text-xs text-amber-300')
+                                    ui.label(f'  • {v}'
+                                             ).classes('self-center text-xs text-amber-300')
                             fixed = await refine_layout_with_ai(layout, violations, plot_data)
                             if fixed:
                                 layout = fixed
@@ -1251,7 +1286,8 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
 
                         autocad_output.clear()
                         with autocad_output:
-                            ui.label('✅ Layout approved by code review').classes('text-xl font-bold text-green-400 mb-2')
+                            ui.label('✅ Layout approved by code review'
+                                     ).classes('text-xl font-bold text-green-400 mb-2')
                             info = result['info']
                             ui.markdown(f"""
 **Plot Area:** {info['plot_area']:.1f} m²  |  **Floors:** {info['num_floors']}  |  **Coverage:** {info['coverage_ratio']}  
@@ -1259,17 +1295,22 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
 **Rooms Placed:** {info['num_rooms']}  |  **Columns:** {info['num_columns']}
 """).classes('text-white')
 
-                            ui.label('📋 Bill of Quantities').classes('text-xl font-bold text-white mt-4 mb-2')
+                            ui.label('📋 Bill of Quantities'
+                                     ).classes('text-xl font-bold text-white mt-4 mb-2')
                             boq_df = pd.DataFrame(result['boq'])
                             ui.table(columns=[
-                                {'name':'Item','label':'Item','field':'Item','sortable':True},
-                                {'name':'Quantity','label':'Qty','field':'Quantity','sortable':True},
-                                {'name':'Unit','label':'Unit','field':'Unit','sortable':True},
-                                {'name':'Unit Rate (EGP)','label':'Rate','field':'Unit Rate (EGP)','sortable':True},
-                                {'name':'Total Cost (EGP)','label':'Amount EGP','field':'Total Cost (EGP)','sortable':True},
-                            ], rows=boq_df.to_dict('records'), row_key='index').classes('w-full text-white')
+                                {'name': 'Item', 'label': 'Item', 'field': 'Item', 'sortable': True},
+                                {'name': 'Quantity', 'label': 'Qty', 'field': 'Quantity', 'sortable': True},
+                                {'name': 'Unit', 'label': 'Unit', 'field': 'Unit', 'sortable': True},
+                                {'name': 'Unit Rate (EGP)', 'label': 'Rate',
+                                 'field': 'Unit Rate (EGP)', 'sortable': True},
+                                {'name': 'Total Cost (EGP)', 'label': 'Amount EGP',
+                                 'field': 'Total Cost (EGP)', 'sortable': True},
+                            ], rows=boq_df.to_dict('records'), row_key='index'
+                            ).classes('w-full text-white')
                             total = boq_df['Total Cost (EGP)'].sum()
-                            ui.label(f'🏷️ Grand Total: {total:,.0f} EGP').classes('text-2xl font-bold text-[#FF8C00] mt-2')
+                            ui.label(f'🏷️ Grand Total: {total:,.0f} EGP'
+                                     ).classes('text-2xl font-bold text-[#FF8C00] mt-2')
 
                         autocad_export.clear()
                         with autocad_export:
@@ -1286,19 +1327,31 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                                         engineer_input.value, project_name_input.value,
                                         logo_bytes_holder['bytes'], ticket_input.value
                                     )
-                                    ui.download(pdf_bytes, filename=f"AI_Report_{info['plot_area']:.0f}m2.pdf")
+                                    ui.download(pdf_bytes,
+                                                filename=f"AI_Report_{info['plot_area']:.0f}m2.pdf")
                                     ui.notify('PDF downloaded!', type='positive')
                                 except Exception as e:
                                     ui.notify(f'PDF error: {e}', type='negative')
 
-                            ui.button('📥 Download DXF', on_click=download_dxf).classes('primary-btn')
-                            ui.button('📄 Download PDF Report', on_click=download_pdf).classes('primary-btn')
+                            ui.button('📥 Download DXF', on_click=download_dxf
+                                      ).classes('primary-btn')
+                            ui.button('📄 Download PDF Report', on_click=download_pdf
+                                      ).classes('primary-btn')
 
                     except Exception as e:
                         autocad_output.clear()
                         with autocad_output:
                             ui.notify(f'Generation failed: {e}', type='negative')
                             traceback.print_exc()
+
+                ui.button('🚀 Generate My Home Layout (AI)',
+                          on_click=generate_enhanced_autocad).classes('primary-btn mt-4')
+                with autocad_output:
+                    ui.markdown('*The AI designs the layout, the code reviews it against '
+                                'Egyptian building law, and if anything violates the code, '
+                                'the AI fixes it before rendering the DXF.*'
+                                ).classes('text-sm text-[#A9B6D0]')
+
         # ---------------- FOOTER ----------------
         ui.html('''
         <div class="app-footer">
