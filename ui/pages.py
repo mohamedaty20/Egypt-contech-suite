@@ -3,6 +3,7 @@ import io
 import json
 import datetime
 import os
+from ezdxf import recover  # or use the lazy import inside the function
 import uuid
 import traceback
 import asyncio
