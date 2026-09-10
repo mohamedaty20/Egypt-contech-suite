@@ -62,6 +62,103 @@ from utils.boq import (
 
 
 # =====================================================================
+# ADDITIVE HIGH-TRAFFIC LAYER — PART 1
+# ---------------------------------------------------------------------
+# Semaphores, gates, BytesIO helpers, and process-pool shims.
+# Nothing here modifies or shadows any existing symbol.
+# =====================================================================
+
+# --- Tunables (env-overridable) ---
+_GEMINI_MAX_CONCURRENT = int(os.environ.get("GEMINI_MAX_CONCURRENT", "8"))
+_CPU_MAX_CONCURRENT    = int(os.environ.get(
+    "CPU_MAX_CONCURRENT",
+    str(max(1, (os.cpu_count() or 2) - 1)),
+))
+_GEMINI_TIMEOUT_S      = float(os.environ.get("GEMINI_TIMEOUT_S", "240"))
+
+# --- Lazy semaphores (created inside the running event loop) ---
+_GEMINI_SEM = None
+_CPU_SEM    = None
+
+
+def _get_gemini_sem():
+    global _GEMINI_SEM
+    if _GEMINI_SEM is None:
+        _GEMINI_SEM = asyncio.Semaphore(_GEMINI_MAX_CONCURRENT)
+    return _GEMINI_SEM
+
+
+def _get_cpu_sem():
+    global _CPU_SEM
+    if _CPU_SEM is None:
+        _CPU_SEM = asyncio.Semaphore(_CPU_MAX_CONCURRENT)
+    return _CPU_SEM
+
+
+# --- BytesIO helpers (avoid disk round-trips) ---
+def bytes_to_stream(data):
+    """Wrap bytes/str in a fresh in-memory stream, cursor at 0."""
+    if isinstance(data, str):
+        data = data.encode("utf-8")
+    buf = io.BytesIO(data)
+    buf.seek(0)
+    return buf
+
+
+def stream_to_bytes(buf):
+    buf.seek(0)
+    return buf.getvalue()
+
+
+# --- Picklable shim for kwargs (nicegui.run.cpu_bound has no kwargs) ---
+def _call_with_kwargs(fn, args, kwargs):
+    return fn(*args, **kwargs)
+
+
+# --- CPU-bound runner gated by a global semaphore ---
+async def cpu_bound_limited(fn, *args, **kwargs):
+    """
+    Run a MODULE-LEVEL picklable function in NiceGUI's cpu_bound process
+    pool, but never spawn more concurrent workers than CPU_MAX_CONCURRENT.
+    """
+    sem = _get_cpu_sem()
+    async with sem:
+        if kwargs:
+            return await run.cpu_bound(_call_with_kwargs, fn, args, kwargs)
+        return await run.cpu_bound(fn, *args)
+
+
+# --- Async Gemini runner gated by a global semaphore + timeout ---
+async def gemini_limited(coro_factory, timeout=None):
+    """
+    Run an async Gemini call under a global concurrency cap + timeout.
+    Pass a ZERO-ARG CALLABLE that returns a coroutine, so the coroutine
+    is only created once we actually hold a slot.
+    """
+    sem = _get_gemini_sem()
+    t = timeout or _GEMINI_TIMEOUT_S
+    async with sem:
+        return await asyncio.wait_for(coro_factory(), timeout=t)
+
+
+# --- Blocking-I/O runner (sync SDKs, requests, disk) ---
+async def io_bound_limited(fn, *args, **kwargs):
+    """Run blocking I/O in a thread pool, gated by the CPU semaphore."""
+    sem = _get_cpu_sem()
+    async with sem:
+        if kwargs:
+            return await run.io_bound(_call_with_kwargs, fn, args, kwargs)
+        return await run.io_bound(fn, *args)
+
+
+# --- DXF worker shim: pass raw bytes across the process boundary ---
+def _extract_areas_from_dxf_bytes(doc_bytes, unit, workflow):
+    """Runs INSIDE the worker process. Rebuilds the ezdxf doc from bytes."""
+    doc = ezdxf.read(bytes_to_stream(doc_bytes))
+    return extract_areas_from_dxf(doc, unit=unit, workflow=workflow)
+
+
+# =====================================================================
 # AI layout planner  (fallback version, uses Gemini if available)
 # =====================================================================
 async def plan_architectural_layout(plot_data):
@@ -465,6 +562,69 @@ def _dark_table(**kwargs):
 
 
 # =====================================================================
+# ADDITIVE HIGH-TRAFFIC LAYER — PART 2
+# ---------------------------------------------------------------------
+# Async wrappers around the ORIGINAL functions above. Each wrapper
+# delegates straight to the untouched original — no logic is
+# reimplemented, only offloaded/gated.
+# =====================================================================
+
+async def process_excel_file_async(file_bytes, filename):
+    return await cpu_bound_limited(process_excel_file, file_bytes, filename)
+
+
+async def generate_progress_pdf_async(pdf_data, engineer_name,
+                                      project_name, logo_bytes,
+                                      ticket_id):
+    return await cpu_bound_limited(
+        generate_progress_pdf,
+        pdf_data, engineer_name, project_name, logo_bytes, ticket_id,
+    )
+
+
+async def generate_autocad_pdf_async(info, boq_df, engineer_name,
+                                     project_name, logo_bytes,
+                                     ticket_id):
+    return await cpu_bound_limited(
+        generate_autocad_pdf,
+        info, boq_df, engineer_name, project_name, logo_bytes, ticket_id,
+    )
+
+
+async def extract_areas_from_dxf_async(doc_bytes, unit, workflow):
+    return await cpu_bound_limited(
+        _extract_areas_from_dxf_bytes, doc_bytes, unit, workflow,
+    )
+
+
+async def build_complete_project_async(params):
+    return await cpu_bound_limited(build_complete_project, params)
+
+
+async def plan_architectural_layout_async(plot_data):
+    """plan_architectural_layout() is already async; just gate it."""
+    sem = _get_gemini_sem()
+    async with sem:
+        return await plan_architectural_layout(plot_data)
+
+
+async def call_gemini_limited(contents, timeout=None, **kwargs):
+    t = timeout or _GEMINI_TIMEOUT_S
+    return await gemini_limited(
+        lambda: call_gemini(contents, timeout=t, **kwargs),
+        timeout=t,
+    )
+
+
+async def call_gemini_json_limited(prompt, timeout=None, **kwargs):
+    t = timeout or _GEMINI_TIMEOUT_S
+    return await gemini_limited(
+        lambda: call_gemini_json(prompt, timeout=t, **kwargs),
+        timeout=t,
+    )
+
+
+# =====================================================================
 # Main page
 # =====================================================================
 @ui.page('/')
@@ -669,7 +829,7 @@ Cement = {cement_input.value} kg/m3 | Water = {water_input.value} kg/m3
 Truck: {truck_input.value} | Ticket: {ticket_input.value}
 Provide: per-stage table, statistical commentary, final PASS/FAIL with ECP clause.
 """
-                        res_text = await call_gemini(prompt)
+                        res_text = await call_gemini_limited(prompt)  # [HT]
                         ai_cube_result_holder['text'] = res_text
                         result_output_area.clear()
                         with result_output_area:
@@ -789,7 +949,7 @@ Perform a comprehensive technical audit."""
                             contents.append(types.Part.from_bytes(
                                 data=uploaded_file_data['bytes'],
                                 mime_type=uploaded_file_data['type']))
-                        audit_result_text = await call_gemini(contents, timeout=240)
+                        audit_result_text = await call_gemini_limited(contents, timeout=240)  # [HT]
                         audit_output_container.clear()
                         with audit_output_container:
                             with ui.column().classes('output-card w-full'):
@@ -855,7 +1015,7 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                             contents.append(types.Part.from_bytes(
                                 data=defect_file_data['bytes'],
                                 mime_type=defect_file_data['type']))
-                        res_text = await call_gemini(contents, timeout=240)
+                        res_text = await call_gemini_limited(contents, timeout=240)  # [HT]
                         defect_output.clear()
                         with defect_output:
                             with ui.column().classes('output-card w-full'):
@@ -913,8 +1073,8 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                             f"{get_code_directive(basis)}\n{NO_LATEX_RULE}\n"
                             "Use strictly METRIC (SI) units."
                         )
-                        answer = await call_gemini(q, system_instruction=system_prompt,
-                                                    timeout=240)
+                        answer = await call_gemini_limited(  # [HT]
+                            q, system_instruction=system_prompt, timeout=240)
                         chat_messages.append({"role": "assistant", "content": answer})
                     except Exception as e:
                         chat_messages.append({"role": "assistant", "content": f"Error: {e}"})
@@ -999,7 +1159,8 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                         else:
                             contents.append(types.Part.from_bytes(
                                 data=ocr_file_data['bytes'], mime_type=ocr_file_data['type']))
-                        response_text = await call_gemini(contents, temperature=0, timeout=240)
+                        response_text = await call_gemini_limited(  # [HT]
+                            contents, temperature=0, timeout=240)
                         transcribed = sanitize_ai_markdown(response_text)
                         transcribed_holder['text'] = transcribed
                         ocr_output.clear()
@@ -1188,7 +1349,7 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                         for f in uploaded_files:
                             ext = os.path.splitext(f['name'])[1].lower()
                             if ext in ['.xlsx', '.xls']:
-                                df = process_excel_file(f['bytes'], f['name'])
+                                df = await process_excel_file_async(f['bytes'], f['name'])  # [HT]
                                 if not df.empty:
                                     df['source'] = f['name']
                                     all_rows.append(df)
@@ -1282,10 +1443,9 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                         data = dxf_file_data['bytes']
                         if isinstance(data, str):
                             data = data.encode('utf-8')
-                        doc = ezdxf.read(io.BytesIO(data))
-                        areas = extract_areas_from_dxf(
-                            doc, unit=unit_select.value,
-                            workflow=workflow_select.value.lower().split()[0])
+                        areas = await extract_areas_from_dxf_async(  # [HT]
+                            data, unit_select.value,
+                            workflow_select.value.lower().split()[0])
                         if not areas:
                             ui.notify('No closed polylines found.', type='warning')
                             return
@@ -1392,7 +1552,7 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                             ui.label('Step 1/3 — AI is planning the rooms…'
                                      ).classes('self-center text-sm')
 
-                        room_program = await plan_architectural_layout(plot_data)
+                        room_program = await plan_architectural_layout_async(plot_data)  # [HT]
                         rooms = room_program.get('rooms', [])
                         if not rooms:
                             raise Exception('AI returned no rooms')
@@ -1408,7 +1568,7 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
 
                         params = dict(plot_data)
                         params['layout_plan'] = layout
-                        result = await asyncio.to_thread(build_complete_project, params)
+                        result = await build_complete_project_async(params)  # [HT]
 
                         autocad_data_holder['dxf'] = result['dxf']
                         autocad_data_holder['boq'] = result['boq']
