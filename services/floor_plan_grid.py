@@ -1,21 +1,21 @@
 """
 services/floor_plan_grid.py
 
-Pre-computes a valid floor plan structure: building envelope, corridor,
-and a set of non-overlapping cells arranged below and above the corridor.
-The AI then assigns rooms to cells. Geometry is owned by Python.
+Pre-computes a valid floor plan structure with SEEDED VARIATION.
 """
+import random
 
 MIN_CELL_W_MM = 1400
 
 
 def build_grid(plot_data):
-    """
-    Envelope = OUTER face of exterior walls.
-    Cells live inside the INNER face so rooms don't overlap the walls.
-    """
+    seed = int(plot_data.get('variation_seed') or 0)
+    rng = random.Random(seed)
+
     pw_mm = int((plot_data.get('plot_width') or 12) * 1000)
     pl_mm = int((plot_data.get('plot_length') or 16) * 1000)
+    nb  = int(plot_data.get('num_bedrooms', 3) or 3)
+    nba = int(plot_data.get('num_bathrooms', 2) or 2)
 
     sw = plot_data.get('street_width_m', 10)
     if sw >= 12:   front, rear, side = 3000, 2000, 1500
@@ -36,8 +36,12 @@ def build_grid(plot_data):
     iw = ix1 - ix0
     ih = iy1 - iy0
 
-    corridor_h = 1300
-    mid_y = iy0 + ih / 2
+    # --- VARIATION 1: corridor height ---
+    corridor_h = rng.choice([1200, 1300, 1400, 1500])
+
+    # --- VARIATION 2: corridor vertical bias ---
+    mid_bias = rng.choice([0.0, 0.0, 0.0, -0.03, 0.03])
+    mid_y = iy0 + ih * (0.5 + mid_bias)
     corridor_y = int(mid_y - corridor_h / 2)
 
     corridor_x = int(ix0)
@@ -65,33 +69,54 @@ def build_grid(plot_data):
             n -= 1
         return n
 
-    def split_row(y0, y1, target_n, x0, w, prefix, side):
-        n = _pick_n(target_n, w)
+    # --- VARIATION 3: cell counts ---
+    min_cells = nb + nba + 2
+    lower_n = rng.choice([2, 3, 3, 4])
+    upper_n = rng.choice([3, 4, 4, 5])
+    guard = 0
+    while lower_n + upper_n < min_cells and guard < 20:
+        if rng.random() > 0.5:
+            lower_n += 1
+        else:
+            upper_n += 1
+        guard += 1
+
+    # --- VARIATION 4: mirror left-right ---
+    mirror = rng.random() > 0.5
+
+    def _build_row(y0, y1, n, side_tag):
+        n = _pick_n(n, iw)
+        base_w = iw // n
+        remainder = iw - base_w * n
+        widths = [base_w + (1 if i < remainder else 0) for i in range(n)]
+        if mirror:
+            widths = list(reversed(widths))
+        door_wall = 'top' if side_tag == 'lower' else 'bottom'
+        x_cursor = ix0
         cells = []
-        base_w = w // n
-        remainder = w - base_w * n
-        x_cursor = x0
-        door_wall = 'top' if side == 'lower' else 'bottom'
         for i in range(n):
-            cw = base_w + (1 if i < remainder else 0)
+            cw = widths[i]
             cells.append({
-                'id':     f'{prefix}{i+1}',
+                'id':     f"{'L' if side_tag == 'lower' else 'U'}{i+1}",
                 'x':      int(x_cursor),
                 'y':      int(y0),
                 'w':      int(cw),
                 'h':      int(y1 - y0),
-                'side':   side,
+                'side':   side_tag,
                 'faces_corridor': True,
                 'door_wall':      door_wall,
             })
             x_cursor += cw
         return cells
 
-    lower = split_row(lower_y0, lower_y1, 3, ix0, iw, 'L', 'lower')
-    upper = split_row(upper_y0, upper_y1, 4, ix0, iw, 'U', 'upper')
+    lower = _build_row(lower_y0, lower_y1, lower_n, 'lower')
+    upper = _build_row(upper_y0, upper_y1, upper_n, 'upper')
 
+    # --- VARIATION 5: stair position ---
     if len(upper) >= 3:
-        stair_idx = len(upper) // 2
+        mid_i = len(upper) // 2
+        stair_idx = rng.choice([max(1, mid_i - 1), mid_i,
+                                min(len(upper) - 1, mid_i + 1)])
         upper[stair_idx]['is_stair'] = True
         upper[stair_idx]['faces_corridor'] = False
         upper[stair_idx]['door_wall'] = None
