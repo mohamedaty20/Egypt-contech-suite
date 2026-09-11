@@ -852,7 +852,7 @@ def build_complete_project(params):
     door_specs = {}
     win_specs = {}
 
-        for room, (rx0, ry0, rx1, ry1) in placements:
+    for room, (rx0, ry0, rx1, ry1) in placements:
         if not room.get('needs_window'):
             continue
         room_w = rx1 - rx0
