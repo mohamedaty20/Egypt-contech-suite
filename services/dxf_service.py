@@ -832,7 +832,28 @@ def build_complete_project(params):
     for wy, ww in ext_openings['right']:
         draw_window(msp, x1, wy, ww, wall_ext_t, is_horizontal=False)
 
+        # Interior walls — collect door gaps first
     door_gaps_per_seg = []
+    DOOR_W = 900
+    placed_doors = []  # list of (x0, y0, x1, y1) bounding boxes for collision checks
+
+    def _door_bbox(cx, cy, w, wt, horiz, flip):
+        """Bounding box of a door assembly (frame + swing arc)."""
+        hw = w / 2
+        ht = wt / 2
+        if horiz:
+            if flip:
+                return (cx - hw, cy - w, cx + hw, cy + ht)
+            return (cx - hw, cy - ht, cx + hw, cy + w)
+        else:
+            if flip:
+                return (cx - w, cy - hw, cx + ht, cy + hw)
+            return (cx - ht, cy - hw, cx + w, cy + hw)
+
+    def _boxes_overlap(a, b, margin=50):
+        return not (a[2] + margin < b[0] or b[2] + margin < a[0]
+                    or a[3] + margin < b[1] or b[3] + margin < a[1])
+
     for room, (rx0, ry0, rx1, ry1) in placements:
         segs = []
         if rx0 > x0 + wall_ext_t:
@@ -844,6 +865,7 @@ def build_complete_project(params):
         if ry1 < y1 - wall_ext_t:
             segs.append(((rx0, ry1), (rx1, ry1), 'H'))
 
+        # Door on the wall facing corridor
         room_cy = (ry0 + ry1) / 2
         if room_cy < mid_y:
             wall_p1, wall_p2 = (rx0, ry1), (rx1, ry1)
@@ -852,17 +874,54 @@ def build_complete_project(params):
             wall_p1, wall_p2 = (rx0, ry0), (rx1, ry0)
             door_flip = True
 
-        t_best = best_opening_position(wall_p1, wall_p2, cols, 900, col_size)
-        if t_best is not None:
-            wall_L = math.hypot(wall_p2[0]-wall_p1[0], wall_p2[1]-wall_p1[1])
-            ux = (wall_p2[0]-wall_p1[0]) / wall_L
-            uy = (wall_p2[1]-wall_p1[1]) / wall_L
-            door_cx = wall_p1[0] + ux*t_best
-            door_cy = wall_p1[1] + uy*t_best
-            draw_door(msp, door_cx, door_cy, 900, int_t, is_horizontal=True, flip=door_flip)
-            d_idx += 1
-            mark = f"D{d_idx}"
-            door_marks.append((mark, "Single Leaf", 900, 2100, 1, room['name']))
+        t_best = best_opening_position(wall_p1, wall_p2, cols, DOOR_W, col_size)
+        if t_best is None:
+            continue
+
+        wall_L = math.hypot(wall_p2[0] - wall_p1[0], wall_p2[1] - wall_p1[1])
+        if wall_L < DOOR_W + 100:
+            continue
+
+        ux = (wall_p2[0] - wall_p1[0]) / wall_L
+        uy = (wall_p2[1] - wall_p1[1]) / wall_L
+
+        # Try the desired position first, then shift along the wall
+        # by whole door widths until we find a non-colliding spot.
+        half = DOOR_W / 2 + 50
+        shifts = (0,
+                  DOOR_W + 150, -(DOOR_W + 150),
+                  2 * (DOOR_W + 150), -2 * (DOOR_W + 150),
+                  3 * (DOOR_W + 150), -3 * (DOOR_W + 150))
+
+        chosen = None
+        for delta in shifts:
+            t_try = t_best + delta
+            if t_try < half or t_try > wall_L - half:
+                continue
+            cx = wall_p1[0] + ux * t_try
+            cy = wall_p1[1] + uy * t_try
+            bbox = _door_bbox(cx, cy, DOOR_W, int_t, True, door_flip)
+            collision = False
+            for prev in placed_doors:
+                if _boxes_overlap(bbox, prev):
+                    collision = True
+                    break
+            if not collision:
+                chosen = (cx, cy, bbox)
+                break
+
+        if chosen is None:
+            # Could not place this door without overlapping an existing
+            # one — skip it rather than draw a broken swing.
+            continue
+
+        door_cx, door_cy, bbox = chosen
+        placed_doors.append(bbox)
+        draw_door(msp, door_cx, door_cy, DOOR_W, int_t,
+                  is_horizontal=True, flip=door_flip)
+        d_idx += 1
+        mark = f"D{d_idx}"
+        door_marks.append((mark, "Single Leaf", DOOR_W, 2100, 1, room['name']))
 
     wall_segments = []
     for room, (rx0, ry0, rx1, ry1) in placements:
