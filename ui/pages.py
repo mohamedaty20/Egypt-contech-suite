@@ -210,7 +210,8 @@ def _extract_areas_from_dxf_bytes(doc_bytes, unit, workflow):
 # BOQ WORKERS (module-level, picklable)
 # =====================================================================
 def _boq_run_dxf(doc_bytes, units, ext_t_mm, int_t_mm,
-                 floor_h_m, door_h_m, win_h_m, wet_tile_m):
+                 floor_h_m, door_h_m, win_h_m, wet_tile_m,
+                 layer_overrides=None):
     import io as _io
     import ezdxf as _ezdxf
     from services.boq import (
@@ -220,7 +221,7 @@ def _boq_run_dxf(doc_bytes, units, ext_t_mm, int_t_mm,
         compute_boq as _cb,
     )
     doc = _ezdxf.read(_io.BytesIO(doc_bytes))
-    records, _stats = _ex(doc, units=units)
+    records, _stats = _ex(doc, units=units, layer_overrides=layer_overrides)
     walls = _pw(records, ext_thick=ext_t_mm, int_thick=int_t_mm)
     rooms = _pr(records)
     params = {
@@ -257,6 +258,13 @@ def _pdf_first_page_to_png_bytes(pdf_bytes, zoom=2.0):
         return pix.tobytes("png")
     finally:
         doc.close()
+def _probe_unknown_layers_dxf(doc_bytes):
+    """Return sorted list of layer names the taxonomy could not classify."""
+    import io as _io
+    import ezdxf as _ezdxf
+    from services.boq import collect_unknown_layers as _cu
+    doc = _ezdxf.read(_io.BytesIO(doc_bytes))
+    return _cu(doc)
 
 
 # =====================================================================
@@ -1662,11 +1670,39 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
 
                         if is_dxf:
                             units = boq_units.value or 'mm'
+
+                            # --- Pass 1: probe for layers the taxonomy can't classify ---
+                            layer_overrides = None
+                            try:
+                                unknown = await cpu_bound_limited(
+                                    _probe_unknown_layers_dxf,
+                                    boq_state['bytes'],
+                                )
+                                if unknown:
+                                    print(f"[boq] unknown layers: {unknown}")
+                                    with boq_results:
+                                        ui.label(
+                                            f'🔎 Asking AI to classify '
+                                            f'{len(unknown)} unknown layer(s)…'
+                                        ).classes('self-center text-xs text-[#A9B6D0]')
+                                    from services.boq import classify_unknown_layers as _cu
+                                    layer_overrides = await gemini_limited(
+                                        lambda: _cu(unknown, call_gemini_json_limited),
+                                        timeout=60,
+                                    )
+                                    _ok = sum(1 for v in (layer_overrides or {}).values()
+                                              if v.get('category'))
+                                    print(f"[boq] AI classified {_ok}/{len(unknown)} layers")
+                            except Exception as _ce:
+                                print(f"[boq] AI layer classifier failed (continuing): {_ce!r}")
+
+                            # --- Pass 2: full extraction with overrides ---
                             payload = await cpu_bound_limited(
                                 _boq_run_dxf,
                                 boq_state['bytes'], units,
                                 ext_t_mm, int_t_mm,
                                 floor_h_m, door_h_m, win_h_m, wet_tile_m,
+                                layer_overrides,
                             )
                         else:
                             if is_pdf:
@@ -1760,9 +1796,34 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                     rooms = payload['rooms']['rooms']
                     walls = payload['walls']['walls']
 
+                    # --- confidence scan ---
+                    all_records = payload.get('records') or []
+                    n_low = sum(1 for r in all_records if r.get('confidence') == 'low')
+                    n_total = len(all_records)
+                    n_unknown_layer = sum(1 for r in all_records
+                                          if not r.get('category'))
+
                     with boq_results:
                         ui.label('✅ BOQ generated'
                                  ).classes('text-xl font-bold text-green-400 mb-2')
+
+                        if n_low > 0 or n_unknown_layer > 0:
+                            with ui.column().classes(
+                                'w-full bg-yellow-900/30 border border-yellow-500 '
+                                'rounded-lg p-3 mb-3'
+                            ):
+                                ui.label('⚠️ Review recommended'
+                                         ).classes('text-yellow-300 font-bold text-sm')
+                                if n_unknown_layer > 0:
+                                    ui.label(
+                                        f'• {n_unknown_layer} element(s) had no '
+                                        f'recognisable category (unknown layer).'
+                                    ).classes('text-yellow-200 text-xs')
+                                if n_low > 0:
+                                    ui.label(
+                                        f'• {n_low}/{n_total} element(s) matched with '
+                                        f'low confidence — verify in the Walls / Rooms tables.'
+                                    ).classes('text-yellow-200 text-xs')
 
                         with ui.row().classes('w-full gap-3 flex-wrap mb-3'):
                             for label, val, unit in [
@@ -1855,18 +1916,75 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                     with boq_exports:
                         def export_excel():
                             try:
+                                # Sheet 1: BOQ
                                 items_df = pd.DataFrame(boq_items)
+
+                                # Sheet 2: Summary
                                 summary_df = pd.DataFrame(
                                     [{'metric': k, 'value': v}
                                      for k, v in summary.items()])
+
+                                # Sheet 3: Elements (all raw records)
+                                elem_rows = []
+                                for r in (payload.get('records') or []):
+                                    g = r.get('geometry') or {}
+                                    elem_rows.append({
+                                        'id':         r.get('id'),
+                                        'category':   r.get('category'),
+                                        'subtype':    r.get('subtype'),
+                                        'layer':      r.get('layer'),
+                                        'source':     r.get('source'),
+                                        'confidence': r.get('confidence'),
+                                        'geom_type':  g.get('type'),
+                                        'length_mm':  g.get('length_mm'),
+                                        'width_mm':   g.get('width_mm'),
+                                        'area_mm2':   g.get('area_mm2'),
+                                        'text':       r.get('text'),
+                                    })
+                                elem_df = pd.DataFrame(elem_rows)
+
+                                # Sheet 4: Walls
+                                wall_rows = []
+                                for w in (payload.get('walls') or {}).get('walls', []):
+                                    g = w['geometry']
+                                    wall_rows.append({
+                                        'id':           w['id'],
+                                        'type':         w['subtype'],
+                                        'length_m':     round(g['length_mm'] / 1000.0, 3),
+                                        'thickness_mm': round(g['width_mm'], 0),
+                                        'method':       w['meta'].get('method'),
+                                        'confidence':   w['confidence'],
+                                    })
+                                walls_df = pd.DataFrame(wall_rows)
+
+                                # Sheet 5: Rooms
+                                room_rows = []
+                                for r in (payload.get('rooms') or {}).get('rooms', []):
+                                    room_rows.append({
+                                        'id':         r['id'],
+                                        'type':       r['subtype'],
+                                        'area_m2':    round(r['geometry']['area_mm2'] / 1e6, 3),
+                                        'perimeter_m':round(r['geometry']['length_mm'] / 1000.0, 3),
+                                        'confidence': r['confidence'],
+                                        'detected_by': ', '.join(r['meta'].get('reasons', [])) or '—',
+                                        'labels':     ', '.join(r['meta'].get('labels', [])) or '',
+                                    })
+                                rooms_df = pd.DataFrame(room_rows)
+
                                 bio = io.BytesIO()
                                 with pd.ExcelWriter(bio, engine='openpyxl') as writer:
                                     items_df.to_excel(writer, sheet_name='BOQ', index=False)
                                     summary_df.to_excel(writer, sheet_name='Summary', index=False)
+                                    if not walls_df.empty:
+                                        walls_df.to_excel(writer, sheet_name='Walls', index=False)
+                                    if not rooms_df.empty:
+                                        rooms_df.to_excel(writer, sheet_name='Rooms', index=False)
+                                    if not elem_df.empty:
+                                        elem_df.to_excel(writer, sheet_name='Elements', index=False)
                                 bio.seek(0)
                                 ui.download(bio.read(),
                                             filename=f"BOQ_{boq_state['name']}.xlsx")
-                                ui.notify('Excel downloaded!', type='positive')
+                                ui.notify('Excel downloaded! (5 sheets)', type='positive')
                             except Exception as ex:
                                 ui.notify(f'Excel error: {ex}', type='negative')
 
