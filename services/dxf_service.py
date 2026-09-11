@@ -852,22 +852,44 @@ def build_complete_project(params):
     door_specs = {}
     win_specs = {}
 
-    for room, (rx0, ry0, rx1, ry1) in placements:
+        for room, (rx0, ry0, rx1, ry1) in placements:
         if not room.get('needs_window'):
             continue
-        if abs(ry0 - y0) < wall_ext_t:
-            t = best_opening_position((x0, y0), (x1, y0), cols, 1400, col_size)
+        room_w = rx1 - rx0
+        room_h = ry1 - ry0
+        win_h = max(900, min(1400, room_w * 0.45))
+        win_v = max(900, min(1200, room_h * 0.45))
+        if abs(ry0 - y0) < wall_ext_t + 60:
             wx = (rx0 + rx1) / 2
-            ext_openings['bottom'].append((wx, 1400))
-        if abs(ry1 - y1) < wall_ext_t:
+            ext_openings['bottom'].append((wx, win_h))
+        if abs(ry1 - y1) < wall_ext_t + 60:
             wx = (rx0 + rx1) / 2
-            ext_openings['top'].append((wx, 1400))
-        if abs(rx0 - x0) < wall_ext_t:
+            ext_openings['top'].append((wx, win_h))
+        if abs(rx0 - x0) < wall_ext_t + 60:
             wy = (ry0 + ry1) / 2
-            ext_openings['left'].append((wy, 1200))
-        if abs(rx1 - x1) < wall_ext_t:
+            ext_openings['left'].append((wy, win_v))
+        if abs(rx1 - x1) < wall_ext_t + 60:
             wy = (ry0 + ry1) / 2
-            ext_openings['right'].append((wy, 1200))
+            ext_openings['right'].append((wy, win_v))
+
+    # ---- Apartment entrance door ----
+    # Reserve a 1100 mm gap in the bottom exterior wall, ideally
+    # at the entry hall's centre.
+    entry_door_cx = None
+    for room, (rx0, ry0, rx1, ry1) in placements:
+        nm = (room.get('name') or '').lower()
+        if 'entry' in nm or 'hall' in nm or 'foyer' in nm:
+            if abs(ry0 - y0) < wall_ext_t + 60:
+                entry_door_cx = (rx0 + rx1) / 2
+                break
+    if entry_door_cx is None and placements:
+        lower_centres = [(rx0 + rx1) / 2
+                         for _r, (rx0, ry0, rx1, ry1) in placements
+                         if (ry0 + ry1) / 2 < mid_y]
+        if lower_centres:
+            entry_door_cx = lower_centres[len(lower_centres) // 2]
+    if entry_door_cx is not None:
+        ext_openings['bottom'].append((entry_door_cx, 1100))
 
     half_ext = wall_ext_t / 2
     _add_wall_rect_from_line((x0 + half_ext, y0), (x0 + half_ext, y1),
@@ -878,8 +900,9 @@ def build_complete_project(params):
                              wall_ext_t, gaps=ext_openings['bottom'])
     _add_wall_rect_from_line((x0, y1 - half_ext), (x1, y1 - half_ext),
                              wall_ext_t, gaps=ext_openings['top'])
-
     for wx, ww in ext_openings['bottom']:
+        if entry_door_cx is not None and abs(wx - entry_door_cx) < 10:
+            continue  # this gap is the entry door, not a window
         draw_window(msp, wx, y0 + half_ext, ww, wall_ext_t, is_horizontal=True)
     for wx, ww in ext_openings['top']:
         draw_window(msp, wx, y1 - half_ext, ww, wall_ext_t, is_horizontal=True)
@@ -888,7 +911,7 @@ def build_complete_project(params):
     for wy, ww in ext_openings['right']:
         draw_window(msp, x1 - half_ext, wy, ww, wall_ext_t, is_horizontal=False)
 
-            # Interior walls — collect door gaps first
+    # Interior walls — collect door gaps first
     DOOR_W = 900
     placed_doors = []
 
@@ -986,7 +1009,7 @@ def build_complete_project(params):
         if chosen is None:
             continue
 
-        door_cx, door_cy, bbox = chosen
+         door_cx, door_cy, bbox = chosen
         placed_doors.append(bbox)
 
         # Swing needs ~door_width + 200 mm clearance in the swing direction.
@@ -1003,7 +1026,12 @@ def build_complete_project(params):
         mark = f"D{d_idx}"
         door_marks.append((mark, door_type, DOOR_W, 2100, 1, room['name']))
 
-          # ---- Interior walls: cluster coords with tolerance, merge, draw once ----
+    # ---- Draw the entry door symbol ----
+    if entry_door_cx is not None:
+        draw_door(msp, entry_door_cx, y0 + wall_ext_t / 2, 1100, wall_ext_t,
+                  is_horizontal=True, flip=True)
+
+    # ---- Interior walls: cluster coords with tolerance, merge, draw once ----
     TOL = 150.0  # mm — anything within this distance is "the same wall line"
 
     def _cluster(values):
