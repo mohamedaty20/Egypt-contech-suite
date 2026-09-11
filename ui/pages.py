@@ -212,15 +212,13 @@ def _extract_areas_from_dxf_bytes(doc_bytes, unit, workflow):
 def _boq_run_dxf(doc_bytes, units, ext_t_mm, int_t_mm,
                  floor_h_m, door_h_m, win_h_m, wet_tile_m,
                  layer_overrides=None):
-    import io as _io
-    import ezdxf as _ezdxf
     from services.boq import (
         extract_elements as _ex,
         process_walls as _pw,
         process_rooms as _pr,
         compute_boq as _cb,
     )
-    doc = _ezdxf.read(_io.BytesIO(doc_bytes))
+    doc = _open_dxf_doc_from_bytes(doc_bytes)
     records, _stats = _ex(doc, units=units, layer_overrides=layer_overrides)
     walls = _pw(records, ext_thick=ext_t_mm, int_thick=int_t_mm)
     rooms = _pr(records)
@@ -260,10 +258,8 @@ def _pdf_first_page_to_png_bytes(pdf_bytes, zoom=2.0):
         doc.close()
 def _probe_unknown_layers_dxf(doc_bytes):
     """Return sorted list of layer names the taxonomy could not classify."""
-    import io as _io
-    import ezdxf as _ezdxf
     from services.boq import collect_unknown_layers as _cu
-    doc = _ezdxf.read(_io.BytesIO(doc_bytes))
+    doc = _open_dxf_doc_from_bytes(doc_bytes)
     return _cu(doc)
 
 
