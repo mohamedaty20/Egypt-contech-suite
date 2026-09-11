@@ -684,6 +684,7 @@ def build_complete_project(params):
     # ----- 3. Room program -----
     layout_plan = params.get('layout_plan') or {}
     ai_rooms = layout_plan.get('rooms', [])
+    stair_cell = layout_plan.get('stair_cell')
     nb = params.get('num_bedrooms', 3)
     nba = params.get('num_bathrooms', 2)
 
@@ -1072,7 +1073,7 @@ def build_complete_project(params):
 
     # Core (stairs) — drawn inside the reserved grid cell if one was
     # provided, otherwise at a sensible default inside the building.
-    stair_cell = layout_plan.get('stair_cell') if isinstance(layout_plan, dict) else None
+    
     if stair_cell:
         core_x = float(stair_cell['x'])
         core_y = float(stair_cell['y'])
