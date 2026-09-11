@@ -1571,9 +1571,9 @@ def build_complete_project(params):
     # WRITE DXF — ASCII for maximum AutoCAD compatibility
     # ==================================================================
     dxf_buf = io.BytesIO()
-    doc.write(dxf_buf, fmt='asc')
+    doc.write(dxf_buf, fmt='bin')
     dxf_bytes = dxf_buf.getvalue()
-    print(f"[build] DXF written, size={len(dxf_bytes)} bytes, fmt=ASC")
+    print(f"[build] DXF written, size={len(dxf_bytes)} bytes, fmt=BIN")
 
     boq_df = pd.DataFrame([{'Item': n, 'Quantity': round(q, 2), 'Unit': u,
                             'Unit Rate (EGP)': r, 'Total Cost (EGP)': round(q*r, 2)}
