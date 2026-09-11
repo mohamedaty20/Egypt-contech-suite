@@ -1031,16 +1031,13 @@ def build_complete_project(params):
             if r:
                 msp.add_lwpolyline(r, dxfattribs={'layer': 'A-WALL-INT', 'color': 8})
 
-    # Vertical interior walls — one merged rectangle per collinear run
-    for x, ranges in vert_by_x.items():
-        for ya, yb in _merge_ranges(ranges):
-            if yb - ya < 60:
-                continue
-            r = _wall_rect((x, ya), (x, yb), int_t)
-            if r:
-                msp.add_lwpolyline(r, dxfattribs={'layer': 'A-WALL-INT', 'color': 8})
-
-            inset = int_t / 2 + 20
+    # Furniture + room labels
+    room_schedule = []
+    for i, (room, (rx0, ry0, rx1, ry1)) in enumerate(placements):
+        w = rx1 - rx0
+        h = ry1 - ry0
+        area_m2 = (w * h) / 1_000_000
+        inset = int_t / 2 + 20
         place_furniture(msp, rx0 + inset, ry0 + inset,
                         w - 2 * inset, h - 2 * inset,
                         room.get('type', 'bedroom'))
