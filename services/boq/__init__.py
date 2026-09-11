@@ -20,7 +20,7 @@ from .geometry import (
     polygon_inside_polygon, polygon_centroid,
     angle_bucket,
 )
-from .extractor_dxf import extract_elements
+from .extractor_dxf import extract_elements, collect_unknown_layers
 from .wall_processor import process_walls
 from .room_processor import process_rooms
 from .engine import compute_boq, PARAM_DEFAULTS
@@ -40,7 +40,8 @@ __all__ = [
     "polygon_inside_polygon", "polygon_centroid",
     "angle_bucket",
     # pipeline
-    "extract_elements", "process_walls", "process_rooms",
+    "extract_elements", "collect_unknown_layers",
+    "process_walls", "process_rooms",
     # engine
     "compute_boq", "PARAM_DEFAULTS",
     # batch 4
