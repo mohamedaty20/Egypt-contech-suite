@@ -889,6 +889,16 @@ def build_complete_project(params):
                          dxfattribs={'layer': 'A-DOOR', 'color': 3})
 
     for room, (rx0, ry0, rx1, ry1) in placements:
+        # Skip rooms sitting on the reserved stair cell — no door onto treads
+        if stair_cell:
+            scx0 = float(stair_cell['x'])
+            scy0 = float(stair_cell['y'])
+            scx1 = scx0 + float(stair_cell['w'])
+            scy1 = scy0 + float(stair_cell['h'])
+            if (abs(rx0 - scx0) < 50 and abs(ry0 - scy0) < 50
+                    and abs(rx1 - scx1) < 50 and abs(ry1 - scy1) < 50):
+                continue
+
         room_cy = (ry0 + ry1) / 2
         room_depth = ry1 - ry0  # perpendicular to the horizontal door wall
 
@@ -1060,14 +1070,24 @@ def build_complete_project(params):
         room_schedule.append((i+1, room['name'], "Ground", f"{area_m2:.1f}",
                               f"{perimeter:.1f}", "Tiles", "Paint"))
 
-    core_w, core_d = 2400, 3600
-    core_x = x1 - wall_ext_t - core_w - 400
-    core_y = mid_y - core_d/2
+    # Core (stairs) — drawn inside the reserved grid cell if one was
+    # provided, otherwise at a sensible default inside the building.
+    stair_cell = layout_plan.get('stair_cell') if isinstance(layout_plan, dict) else None
+    if stair_cell:
+        core_x = float(stair_cell['x'])
+        core_y = float(stair_cell['y'])
+        core_w = float(stair_cell['w'])
+        core_d = float(stair_cell['h'])
+    else:
+        core_w, core_d = 2400, 3600
+        core_x = x1 - wall_ext_t - core_w - 400
+        core_y = mid_y - core_d/2
     msp.add_lwpolyline([(core_x, core_y), (core_x+core_w, core_y),
                         (core_x+core_w, core_y+core_d), (core_x, core_y+core_d)],
                        dxfattribs={'layer': 'A-CORE', 'color': 4}, close=True)
-    for i in range(1, 12):
-        ty = core_y + (core_d/12) * i
+    n_steps = 10
+    for i in range(1, n_steps):
+        ty = core_y + (core_d / n_steps) * i
         msp.add_line((core_x, ty), (core_x+core_w, ty),
                      dxfattribs={'layer': 'A-CORE', 'color': 4})
     draw_label(msp, core_x + core_w/2, core_y - 300, "STAIR", 'A-ROOM-TEXT', 180, 4)
