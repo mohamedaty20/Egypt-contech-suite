@@ -95,6 +95,7 @@ def extract_areas_from_dxf(doc, unit='mm', workflow='architectural'):
     scale = {'mm': 1e-6, 'cm': 1e-4, 'm': 1.0}.get(unit, 1e-6)
     results = []
     msp = doc.modelspace()
+  
 
     # --- Diagnostics: entity type census ---
     counts = {}
@@ -753,6 +754,13 @@ def build_complete_project(params):
     }
     for n, p in layers_def.items():
         create_dxf_layer(doc, n, p['color'], lineweight=p['lineweight'])
+          # Plot boundary — dashed rectangle at plot extents so the building
+    # can be visually verified to fit inside it.
+    msp.add_lwpolyline(
+        [(0, 0), (L, 0), (L, W), (0, W)],
+        dxfattribs={'layer': 'ANNO-BORDER', 'color': 1, 'linetype': 'DASHED'},
+        close=True,
+    )
 
     # ==================================================================
     # SHEET 1 — ARCHITECTURAL PLAN (at origin)
@@ -938,31 +946,62 @@ def build_complete_project(params):
         mark = f"D{d_idx}"
         door_marks.append((mark, door_type, DOOR_W, 2100, 1, room['name']))
 
-       # ---- Interior walls: collinear merge, draw each shared segment once ----
-    horiz_by_y = {}   # y -> list of (x_start, x_end)
-    vert_by_x  = {}   # x -> list of (y_start, y_end)
+          # ---- Interior walls: cluster coords with tolerance, merge, draw once ----
+    TOL = 150.0  # mm — anything within this distance is "the same wall line"
 
-    def _add_h(y, xa, xb):
-        if xb < xa:
-            xa, xb = xb, xa
-        horiz_by_y.setdefault(round(y), []).append((xa, xb))
+    def _cluster(values):
+        """Group coordinates within TOL and return {original: cluster_center}."""
+        if not values:
+            return {}
+        s = sorted(set(values))
+        clusters = [[s[0]]]
+        for v in s[1:]:
+            if v - clusters[-1][-1] <= TOL:
+                clusters[-1].append(v)
+            else:
+                clusters.append([v])
+        out = {}
+        for c in clusters:
+            center = sum(c) / len(c)
+            for v in c:
+                out[v] = center
+        return out
 
-    def _add_v(x, ya, yb):
-        if yb < ya:
-            ya, yb = yb, ya
-        vert_by_x.setdefault(round(x), []).append((ya, yb))
+    # Collect every room edge coordinate first
+    all_vx = []   # vertical walls (x coordinate)
+    all_hy = []   # horizontal walls (y coordinate)
+    for room, (rx0, ry0, rx1, ry1) in placements:
+        if rx0 > x0 + wall_ext_t:
+            all_vx.append(rx0)
+        if rx1 < x1 - wall_ext_t:
+            all_vx.append(rx1)
+        if ry0 > y0 + wall_ext_t:
+            all_hy.append(ry0)
+        if ry1 < y1 - wall_ext_t:
+            all_hy.append(ry1)
+
+    x_cluster = _cluster(all_vx)
+    y_cluster = _cluster(all_hy)
+
+    # Bucket edges by their cluster center
+    vert_by_x = {}  # cluster_x -> list of (y_start, y_end)
+    horiz_by_y = {} # cluster_y -> list of (x_start, x_end)
 
     for room, (rx0, ry0, rx1, ry1) in placements:
         if rx0 > x0 + wall_ext_t:
-            _add_v(rx0, ry0, ry1)
+            cx = x_cluster[rx0]
+            vert_by_x.setdefault(cx, []).append((ry0, ry1))
         if rx1 < x1 - wall_ext_t:
-            _add_v(rx1, ry0, ry1)
+            cx = x_cluster[rx1]
+            vert_by_x.setdefault(cx, []).append((ry0, ry1))
         if ry0 > y0 + wall_ext_t:
-            _add_h(ry0, rx0, rx1)
+            cy = y_cluster[ry0]
+            horiz_by_y.setdefault(cy, []).append((rx0, rx1))
         if ry1 < y1 - wall_ext_t:
-            _add_h(ry1, rx0, rx1)
+            cy = y_cluster[ry1]
+            horiz_by_y.setdefault(cy, []).append((rx0, rx1))
 
-    def _merge_ranges(ranges, tol=60):
+    def _merge_ranges(ranges, tol=60.0):
         if not ranges:
             return []
         ranges = sorted(ranges)
@@ -974,12 +1013,21 @@ def build_complete_project(params):
                 merged.append([a, b])
         return [(a, b) for a, b in merged]
 
-    # Horizontal interior walls — one merged rectangle per collinear run
+    # Horizontal walls — one merged rectangle per collinear run
     for y, ranges in horiz_by_y.items():
         for xa, xb in _merge_ranges(ranges):
             if xb - xa < 60:
                 continue
             r = _wall_rect((xa, y), (xb, y), int_t)
+            if r:
+                msp.add_lwpolyline(r, dxfattribs={'layer': 'A-WALL-INT', 'color': 8})
+
+    # Vertical walls — one merged rectangle per collinear run
+    for x, ranges in vert_by_x.items():
+        for ya, yb in _merge_ranges(ranges):
+            if yb - ya < 60:
+                continue
+            r = _wall_rect((x, ya), (x, yb), int_t)
             if r:
                 msp.add_lwpolyline(r, dxfattribs={'layer': 'A-WALL-INT', 'color': 8})
 
@@ -992,12 +1040,10 @@ def build_complete_project(params):
             if r:
                 msp.add_lwpolyline(r, dxfattribs={'layer': 'A-WALL-INT', 'color': 8})
 
-    room_schedule = []
-    for i, (room, (rx0, ry0, rx1, ry1)) in enumerate(placements):
-        w = rx1 - rx0
-        h = ry1 - ry0
-        area_m2 = (w * h) / 1_000_000
-        place_furniture(msp, rx0, ry0, w, h, room.get('type', 'bedroom'))
+            inset = int_t / 2 + 20
+        place_furniture(msp, rx0 + inset, ry0 + inset,
+                        w - 2 * inset, h - 2 * inset,
+                        room.get('type', 'bedroom'))
         draw_label(msp, (rx0+rx1)/2, (ry0+ry1)/2 + 100,
                    room['name'], 'A-ROOM-TEXT', 180, 4)
         draw_label(msp, (rx0+rx1)/2, (ry0+ry1)/2 - 200,
