@@ -208,7 +208,30 @@ def _read_insert(entity, scale):
 # =====================================================================
 # MAIN ENTRY
 # =====================================================================
-def extract_elements(doc, units="mm", max_block_depth=1):
+def collect_unknown_layers(doc):
+    """
+    Fast pass: return the set of layer names in the DXF that the taxonomy
+    could NOT classify. Used to ask Gemini to classify them before the
+    full extraction pass.
+    """
+    seen = set()
+    unknown = set()
+    msp = doc.modelspace()
+    for entity in msp:
+        try:
+            layer = entity.dxf.layer or "0"
+        except Exception:
+            continue
+        if layer in seen:
+            continue
+        seen.add(layer)
+        r = classify_layer(layer)
+        if not r["category"]:
+            unknown.add(layer)
+    return sorted(unknown)
+
+
+def extract_elements(doc, units="mm", max_block_depth=1, layer_overrides=None):
     """
     Extract every meaningful entity from doc.modelspace() into a flat
     list of records. Returns (records, stats).
@@ -219,8 +242,10 @@ def extract_elements(doc, units="mm", max_block_depth=1):
     scale = _scale_for(units)
     msp = doc.modelspace()
     records = []
-    stats = {"by_category": {}, "by_dxftype": {}, "skipped": 0}
+    stats = {"by_category": {}, "by_dxftype": {}, "skipped": 0,
+             "ai_overrides_used": 0}
     idx = 0
+    layer_overrides = layer_overrides or {}
 
     for entity in msp:
         dxftype = entity.dxftype()
@@ -230,6 +255,20 @@ def extract_elements(doc, units="mm", max_block_depth=1):
         tx = classify_layer(layer)
         category = tx["category"]
         subtype = tx["subtype"]
+
+        # If taxonomy failed and an AI override exists for this layer, use it.
+        if not category and layer in layer_overrides:
+            ov = layer_overrides[layer]
+            category = ov.get("category")
+            subtype = ov.get("subtype")
+            if category:
+                tx = {
+                    "category": category, "subtype": subtype,
+                    "confidence": ov.get("confidence", "medium"),
+                    "matched": f"ai:{layer}", "raw": layer,
+                    "normalized": layer.lower(),
+                }
+                stats["ai_overrides_used"] += 1
 
         # -------- LINE --------
         if dxftype == "LINE":
