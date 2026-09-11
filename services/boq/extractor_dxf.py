@@ -229,6 +229,33 @@ def collect_unknown_layers(doc):
         if not r["category"]:
             unknown.add(layer)
     return sorted(unknown)
+def list_all_layers(doc):
+    """
+    Return a census of every layer in the DXF with entity counts and the
+    taxonomy's best guess. Used to build the manual layer-mapping UI.
+    """
+    from collections import Counter
+    counts = Counter()
+    msp = doc.modelspace()
+    for entity in msp:
+        try:
+            layer = entity.dxf.layer or "0"
+        except Exception:
+            continue
+        counts[layer] += 1
+
+    rows = []
+    for layer, n in sorted(counts.items(), key=lambda kv: -kv[1]):
+        tx = classify_layer(layer)
+        rows.append({
+            "layer":       layer,
+            "count":       n,
+            "category":    tx["category"],
+            "subtype":     tx["subtype"],
+            "confidence":  tx["confidence"],
+            "matched":     tx["matched"],
+        })
+    return rows
 
 
 def extract_elements(doc, units="mm", max_block_depth=1, layer_overrides=None):
