@@ -694,16 +694,18 @@ def main_page():
 
     # ---------------- MAIN ----------------
     with ui.column().classes('w-full min-h-screen p-4 bg-[#031338]'):
-        with ui.column().classes('w-full bg-[#0d1a35] px-6 py-4 rounded-xl border '
-                                  'border-[#FF8C00] shadow-lg mb-4'):
-            ui.label('SMART EGY-CIVIL AI AUDITOR').classes('main-title text-white')
+        with ui.column().classes('w-full bg-[#0d1a35] px-6 py-3 rounded-xl border '
+                                  'border-[#FF8C00] shadow-lg mb-3'):
+            ui.label('SMART EGY-CIVIL AI AUDITOR').classes(
+                'text-white font-bold leading-tight'
+            ).style('font-size: 26px; letter-spacing: 0.02em;')
             ui.label('Intelligent General Civil, Geotechnical & Structural Compliance Engine'
-                     ).classes('sub-title text-lg font-medium mt-1')
+                     ).classes('text-sm font-medium text-[#A9B6D0] mt-0')
             ui.label('Lead Technical Auditor: Eng. Mohamed Abd Al Aty'
-                     ).classes('text-base text-[#A9B6D0] font-semibold mt-1')
+                     ).classes('text-xs text-[#A9B6D0] font-semibold mt-0')
             ui.label('Next-generation automated civil engineering and quality intelligence, '
                      'precision-calibrated for the Egyptian Code of Practice.'
-                     ).classes('text-sm text-[#A9B6D0] mt-1 italic')
+                     ).classes('text-xs text-[#A9B6D0] mt-0 italic')
 
         ui.add_head_html('''<style>@keyframes marquee{0%{transform:translate(0,0);}100%{transform:translate(-100%,0);}}</style>''')
         ui.html('''
@@ -714,7 +716,7 @@ def main_page():
         </div>
         ''')
 
-        with ui.tabs().classes('w-full text-white bg-[#0d1a35] rounded-lg') as tabs:
+        with ui.tabs().classes('w-full text-white bg-[#060f22] rounded-lg') as tabs:
             t_dash       = ui.tab('Concrete Cube Verifier').classes('text-white font-bold')
             t_audit      = ui.tab('AI Multi-Standard Auditor').classes('text-white font-bold')
             t_defect     = ui.tab('Defect Diagnostic').classes('text-white font-bold')
@@ -722,7 +724,7 @@ def main_page():
             t_handwriting= ui.tab('Handwriting OCR').classes('text-white font-bold')
             t_jobs       = ui.tab('Job Board').classes('text-white font-bold')
             t_progress   = ui.tab('Progress Tracker').classes('text-white font-bold')
-            t_dxf        = ui.tab('DXF Area Extractor').classes('text-white font-bold')
+            t_dxf= ui.tab('DXF Area Extractor').classes('text-white font-bold')
             
 
         with ui.tab_panels(tabs, value=t_dash).classes('w-full bg-transparent mt-4'):
