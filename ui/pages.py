@@ -1528,7 +1528,7 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                         # If DXF, probe layers and build the mapping UI
                         if boq_state['is_dxf']:
                             try:
-                                rows = await cpu_bound_limited(
+                                rows = await asyncio.to_thread(
                                     _list_layers_dxf, boq_state['bytes'])
                                 _render_layer_mapping(rows)
                             except Exception as le:
@@ -1801,7 +1801,7 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                             # --- Pass 1: AI classifies layers the taxonomy missed ---
                             layer_overrides = {}
                             try:
-                                unknown = await cpu_bound_limited(
+                                unknown = await asyncio.to_thread(
                                     _probe_unknown_layers_dxf,
                                     boq_state['bytes'],
                                 )
@@ -1834,7 +1834,7 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                                 layer_overrides.update(manual)
 
                             # --- Pass 2: full extraction ---
-                            payload = await cpu_bound_limited(
+                            payload = await asyncio.to_thread(
                                 _boq_run_dxf,
                                 boq_state['bytes'], units,
                                 ext_t_mm, int_t_mm,
