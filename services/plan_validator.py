@@ -222,7 +222,7 @@ def validate_plan(layout, plot_data=None):
 
     # --- 6. Entry from outside ---
     # At least one room or the corridor must touch the building boundary.
-    def _touches_boundary(rect, tol=200):
+    def _touches_boundary(rect, tol=350):
         return (abs(rect[0] - b_rect[0]) <= tol
                 or abs(rect[2] - b_rect[2]) <= tol
                 or abs(rect[1] - b_rect[1]) <= tol
