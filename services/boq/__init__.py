@@ -3,6 +3,7 @@ services.boq — Architectural BOQ engine.
 
 Batch 1: taxonomy + geometry primitives.
 Batch 2: DXF extractor + wall pair processor.
+Batch 3: room classifier + BOQ engine + rates.
 """
 
 from .taxonomy import (
@@ -20,6 +21,9 @@ from .geometry import (
 )
 from .extractor_dxf import extract_elements
 from .wall_processor import process_walls
+from .room_processor import process_rooms
+from .rates import DEFAULT_RATES, RATE_LABELS, RATE_UNITS
+from .engine import compute_boq, PARAM_DEFAULTS
 
 __all__ = [
     # taxonomy
@@ -34,5 +38,8 @@ __all__ = [
     "polygon_inside_polygon", "polygon_centroid",
     "angle_bucket",
     # pipeline
-    "extract_elements", "process_walls",
+    "extract_elements", "process_walls", "process_rooms",
+    # engine
+    "compute_boq", "PARAM_DEFAULTS",
+    "DEFAULT_RATES", "RATE_LABELS", "RATE_UNITS",
 ]
