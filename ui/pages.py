@@ -487,88 +487,75 @@ def generate_progress_pdf(pdf_data, engineer_name, project_name, logo_bytes, tic
 
 
 def generate_autocad_pdf(info, boq_df, engineer_name, project_name, logo_bytes, ticket_id):
+    """Simple, bulletproof layout PDF. No BOQ table."""
     from reportlab.platypus import (
-        SimpleDocTemplate, Spacer, Table, TableStyle, Paragraph,
-        HRFlowable, Image as ReportLabImage,
+        SimpleDocTemplate, Spacer, Paragraph, HRFlowable,
+        Image as ReportLabImage,
     )
     from reportlab.lib import colors
     from reportlab.lib.styles import ParagraphStyle
 
     buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=PAGE_WIDTH, rightMargin=MARGIN, leftMargin=MARGIN,
-                             topMargin=MARGIN, bottomMargin=MARGIN)
+    doc = SimpleDocTemplate(buffer, pagesize=PAGE_WIDTH, rightMargin=MARGIN,
+                             leftMargin=MARGIN, topMargin=MARGIN, bottomMargin=MARGIN)
     styles = build_pdf_styles()
     story = []
     unique_uid = f"LAYOUT-{uuid.uuid4().hex[:8].upper()}"
-    qr_buf = generate_qr_code(f"UID: {unique_uid} | Layout Report - {project_name}")
 
-    title_style = ParagraphStyle("DocTitle", fontSize=14, textColor=colors.HexColor("#1B2A4A"),
+    def _safe(k, default=''):
+        try:
+            v = info.get(k, default)
+            return v if v is not None else default
+        except Exception:
+            return default
+
+    title_style = ParagraphStyle("DocTitle", fontSize=14,
+                                  textColor=colors.HexColor("#1B2A4A"),
                                   spaceAfter=3, fontName="Helvetica-Bold", leading=17)
-    sub_style = ParagraphStyle("DocSub", fontSize=9, textColor=colors.HexColor("#B45309"),
+    sub_style = ParagraphStyle("DocSub", fontSize=9,
+                                textColor=colors.HexColor("#B45309"),
                                 spaceAfter=6, fontName="Helvetica-Bold")
-    meta_style = ParagraphStyle("MetaStyle", fontSize=8, textColor=colors.HexColor("#334155"),
+    meta_style = ParagraphStyle("MetaStyle", fontSize=8,
+                                 textColor=colors.HexColor("#334155"),
                                  leading=11.5, fontName="Helvetica")
 
-    meta_html = f"""
-    <b>Project:</b> {project_name}<br/>
-    <b>Engineer:</b> {engineer_name}<br/>
-    <b>Plot:</b> {info.get('plot_area', 0)} m² &nbsp;|&nbsp; <b>Street:</b> {info.get('street_width', 0)} m<br/>
-    <b>Location:</b> {info.get('location', '')} &nbsp;|&nbsp; <b>Floors:</b> {info.get('num_floors', 0)} of {info.get('max_floors', 0)}<br/>
-    <b>Report UID:</b> <font color="#CC0000"><b>{unique_uid}</b></font>
-    """
-    right_cell = ReportLabImage(io.BytesIO(logo_bytes), width=70, height=32) if logo_bytes else ""
-    try:
-        t_head = Table([[Paragraph("<b>AUTOCAD LAYOUT REPORT</b>", title_style), right_cell],
-                        [Paragraph("Generated Floor Plan & BOQ", sub_style), ""],
-                        [Paragraph(meta_html, meta_style), ""]],
-                       colWidths=[USABLE_WIDTH - 100, 100])
-        t_head.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'TOP'),
-                                    ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
-                                    ('BOTTOMPADDING', (0, 0), (-1, -1), 0)]))
-        story.append(t_head)
-    except Exception:
-        story.append(Paragraph("AUTOCAD LAYOUT REPORT", title_style))
+    meta_html = (
+        f"<b>Project:</b> {project_name}<br/>"
+        f"<b>Engineer:</b> {engineer_name}<br/>"
+        f"<b>Plot Area:</b> {_safe('plot_area', 0)} m2 &nbsp;|&nbsp; "
+        f"<b>Street:</b> {_safe('street_width', 0)} m<br/>"
+        f"<b>Location:</b> {_safe('location', '')} &nbsp;|&nbsp; "
+        f"<b>Floors:</b> {_safe('num_floors', 0)} of {_safe('max_floors', 0)}<br/>"
+        f"<b>Footprint:</b> {_safe('footprint_area', 0)} m2 &nbsp;|&nbsp; "
+        f"<b>Building:</b> {_safe('building_width', 0)} x {_safe('building_length', 0)} m<br/>"
+        f"<b>Coverage:</b> {_safe('coverage_ratio', 'n/a')} &nbsp;|&nbsp; "
+        f"<b>Rooms:</b> {_safe('num_rooms', 0)}<br/>"
+        f"<b>Report UID:</b> <font color='#CC0000'><b>{unique_uid}</b></font>"
+    )
 
+    story.append(Paragraph("AUTOCAD LAYOUT REPORT", title_style))
+    story.append(Paragraph("Generated Floor Plan", sub_style))
+    story.append(Paragraph(meta_html, meta_style))
     story.append(Spacer(1, 5))
-    story.append(HRFlowable(width="100%", thickness=1.3, color=colors.HexColor("#FF8C00"), spaceAfter=8))
+    story.append(HRFlowable(width="100%", thickness=1.3,
+                            color=colors.HexColor("#FF8C00"), spaceAfter=8))
 
-    desc = (f"Footprint: {info.get('footprint_area', 0)} m², "
-            f"Building: {info.get('building_width', 0):.2f} × {info.get('building_length', 0):.2f} m")
-    story.append(Paragraph(desc, styles['body']))
-    story.append(Spacer(1, 6))
-
-    if not boq_df.empty:
-        cols_to_show = [c for c in ['Item', 'Quantity', 'Unit',
-                                     'Unit Rate (EGP)', 'Total Cost (EGP)']
-                        if c in boq_df.columns]
-        table_data = [cols_to_show]
-        for _, row in boq_df.iterrows():
-            table_data.append([str(row[col]) for col in cols_to_show])
-        col_widths = [USABLE_WIDTH / len(cols_to_show)] * len(cols_to_show)
-        t = Table(table_data, colWidths=col_widths, repeatRows=1)
-        t.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1B2A4A')),
-            ('TEXTCOLOR',  (0, 0), (-1, 0), colors.white),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#94A3B8')),
-            ('FONTSIZE', (0, 0), (-1, -1), 8),
-            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F1F5F9')]),
-            ('TOPPADDING', (0, 0), (-1, -1), 3),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
-        ]))
-        story.append(t)
-        story.append(Spacer(1, 10))
-        if 'Total Cost (EGP)' in boq_df.columns:
-            total_cost = boq_df['Total Cost (EGP)'].sum()
-            story.append(Paragraph(f"<b>Total Estimated Cost: {total_cost:,.2f} EGP</b>",
-                                   styles['h2']))
+    try:
+        if logo_bytes:
+            story.append(ReportLabImage(io.BytesIO(logo_bytes), width=70, height=32))
             story.append(Spacer(1, 6))
+    except Exception as _e:
+        print(f"[pdf] logo embed failed: {_e!r}")
 
-    build_pdf_footer_signature_and_qr(story, styles, qr_buf, engineer_name)
+    try:
+        qr_buf = generate_qr_code(f"UID: {unique_uid} | Layout - {project_name}")
+        build_pdf_footer_signature_and_qr(story, styles, qr_buf, engineer_name)
+    except Exception as _e:
+        print(f"[pdf] footer failed: {_e!r}")
+
     doc.build(story)
     buffer.seek(0)
     return buffer.getvalue()
-
 
 def _dark_table(**kwargs):
     return ui.table(**kwargs).classes('w-full text-white').props('dark flat bordered')
@@ -642,20 +629,7 @@ def main_page():
     sidebar = ui.left_drawer().classes('sidebar-container').style('width: 380px;')
     with sidebar:
         with ui.row().classes('w-full items-center justify-between mb-4 p-2'):
-            ui.label('📋 PROJECT METADATA').classes('text-white font-bold text-base tracking-wide')
-            ui.button('✕', on_click=sidebar.toggle).classes(
-                'bg-transparent text-white text-xl hover:text-[#FF8C00] p-1 min-w-[36px] '
-                '!shadow-none !rounded-full !bg-transparent'
-            ).style('font-size: 20px; line-height: 1;')
-
-        project_name_input = ui.input(label='Project Name',
-                                       value='Highway Expansion Project').classes('w-full mb-3')
-        pour_location_input = ui.input(label='Structural Element / Chainage',
-                                        value='Highway Section Ch. 12+500').classes('w-full mb-4')
-
-        ui.label('Governing Design Code Basis').classes('text-white font-bold text-sm mb-1')
-        ui.markdown('By default every AI output is generated strictly per **ECP 203 / ECP 202 / ECP 104**.'
-                    ).classes('text-xs text-[#A9B6D0] mb-2')
+           
         code_basis_select = ui.select(label='Code Type (applies app-wide)',
                                        options=CODE_BASIS_OPTIONS,
                                        value=CODE_BASIS_OPTIONS[0]).classes('w-full mb-4')
