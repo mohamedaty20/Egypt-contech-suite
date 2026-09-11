@@ -77,20 +77,24 @@ def build_grid(plot_data):
     def split_row(y0, y1, target_n, x0, w, prefix, side):
         n = _pick_n(target_n, w)
         cells = []
-        cell_w = w / n
+        # Integer cells that tile exactly — no 1mm shifts between neighbours.
+        base_w = w // n
+        remainder = w - base_w * n
+        x_cursor = x0
         door_wall = 'top' if side == 'lower' else 'bottom'
         for i in range(n):
+            cw = base_w + (1 if i < remainder else 0)
             cells.append({
                 'id':     f'{prefix}{i+1}',
-                'x':      int(x0 + i * cell_w),
+                'x':      int(x_cursor),
                 'y':      int(y0),
-                'w':      int(cell_w),
+                'w':      int(cw),
                 'h':      int(y1 - y0),
                 'side':   side,
-                # --- new corridor hints (additive, do not remove old keys) ---
                 'faces_corridor': True,
                 'door_wall':      door_wall,
             })
+            x_cursor += cw
         return cells
 
     lower = split_row(lower_y0, lower_y1, 3, ix0, iw, 'L', 'lower')
