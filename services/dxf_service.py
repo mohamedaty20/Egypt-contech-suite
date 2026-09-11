@@ -1282,13 +1282,26 @@ def build_complete_project(params):
     draw_table(msp, tb_x, win_y, [700, 1500, 800, 800, 500, 2000], win_rows)
 
     # ==================================================================
-    # BOQ SHEET (below schedule)
+    # GENERAL NOTES (BOQ removed from DXF per user request)
     # ==================================================================
     bx = 0
     by = win_y - (len(win_rows) + 2) * 350 - 2000
 
-    draw_label(msp, bx + 5000, by + 500, "BILL OF QUANTITIES (EGP)",
+    draw_label(msp, bx + 3000, by + 500, "GENERAL NOTES",
                'ANNO-TITLE', 300, 7)
+    notes = [
+        "1. All dimensions are in millimetres unless noted otherwise.",
+        "2. Concrete grade: C30/37 for columns & beams, C25/30 for slabs.",
+        f"3. Column size: {col_size} x {col_size} mm.",
+        "4. Reinforcement: Grade 400/600 per ECP 203.",
+        "5. Setbacks per Egyptian Building Law 119/2008.",
+        f"6. Total plot area: {plot_area:.1f} m2. Coverage: {coverage*100:.0f}%.",
+        f"7. Max permitted floors: {max_floors} (street width {sw} m).",
+    ]
+    notes_rows = [("Note",)] + [(n,) for n in notes]
+    draw_table(msp, bx, by, [9000], notes_rows, row_h=400)
+
+    # BOQ numbers still returned for the on-page / PDF report if needed.
     num_cols = len(cols)
     slab_vol = (L/1000)*(W/1000)*(0.14)*num_floors
     col_vol = num_cols * (col_size/1000)**2 * floor_h_m * num_floors
@@ -1309,8 +1322,6 @@ def build_complete_project(params):
     brick_count = wall_area * 50
     flooring_area = (L/1000)*(W/1000)*num_floors
     paint_area = wall_area * 2
-
-    boq_rows = [("Item", "Unit", "Qty", "Rate", "Amount EGP")]
     rates = [("Concrete C30/37", "m3", total_concrete, 2500),
              ("Reinforcement Steel", "ton", rebar_ton, 15000),
              ("Formwork", "m2", formwork, 300),
@@ -1319,28 +1330,6 @@ def build_complete_project(params):
              ("Wall Painting", "m2", paint_area, 30),
              ("Windows Aluminum", "nos", max(0, len(win_rows)-1), 2000),
              ("Doors Wood", "nos", max(0, len(door_rows)-1), 3000)]
-    grand = 0
-    for name, unit, qty, rate in rates:
-        amount = qty * rate
-        grand += amount
-        boq_rows.append((name, unit, f"{qty:.1f}", f"{rate:,.0f}", f"{amount:,.0f}"))
-    boq_rows.append(("GRAND TOTAL", "", "", "", f"{grand:,.0f}"))
-    draw_table(msp, bx, by, [2600, 800, 900, 1000, 1600], boq_rows)
-
-    ny_y = by - (len(boq_rows) + 2) * 350 - 500
-    draw_label(msp, bx + 3000, ny_y + 500, "GENERAL NOTES",
-               'ANNO-TITLE', 300, 7)
-    notes = [
-        "1. All dimensions are in millimetres unless noted otherwise.",
-        "2. Concrete grade: C30/37 for columns & beams, C25/30 for slabs.",
-        f"3. Column size: {col_size} x {col_size} mm.",
-        "4. Reinforcement: Grade 400/600 per ECP 203.",
-        "5. Setbacks per Egyptian Building Law 119/2008.",
-        f"6. Total plot area: {plot_area:.1f} m2. Coverage: {coverage*100:.0f}%.",
-        f"7. Max permitted floors: {max_floors} (street width {sw} m).",
-    ]
-    notes_rows = [("Note",)] + [(n,) for n in notes]
-    draw_table(msp, bx, ny_y, [9000], notes_rows, row_h=400)
 
     # ==================================================================
     # TITLE BLOCK
