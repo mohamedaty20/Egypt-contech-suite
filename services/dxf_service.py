@@ -42,8 +42,6 @@ def detect_dxf_layers(doc):
 
 
 def _polyline_is_closed(entity):
-    """Check if a LWPOLYLINE or POLYLINE is effectively closed.
-    Accepts: flag bit 1, entity.closed property, OR first≈last point."""
     try:
         flags = entity.dxf.get('flags', 0) if hasattr(entity.dxf, 'get') else entity.dxf.flags
         if flags & 1:
@@ -55,7 +53,6 @@ def _polyline_is_closed(entity):
             return True
     except Exception:
         pass
-    # Fallback: check if first ≈ last point (tolerance scales with size)
     try:
         if entity.dxftype() == 'LWPOLYLINE':
             pts = [(p[0], p[1]) for p in entity.get_points()]
@@ -90,19 +87,15 @@ def _shoelace_area(pts):
 
 
 def extract_areas_from_dxf(doc, unit='mm', workflow='architectural'):
-    """Robust area extractor. Accepts closed polylines (flag OR coincident
-    endpoints) AND hatch boundary paths. Prints a diagnostic census."""
     scale = {'mm': 1e-6, 'cm': 1e-4, 'm': 1.0}.get(unit, 1e-6)
     results = []
     msp = doc.modelspace()
 
-    # --- Diagnostics: entity type census ---
     counts = {}
     for e in msp:
         counts[e.dxftype()] = counts.get(e.dxftype(), 0) + 1
     print(f"[dxf-extract] entity census: {counts}")
 
-    # --- Pre-collect text positions for label association ---
     text_positions = []
     try:
         for t in msp.query('TEXT MTEXT'):
@@ -126,7 +119,6 @@ def extract_areas_from_dxf(doc, unit='mm', workflow='architectural'):
                 best, best_d = txt, d
         return best
 
-    # --- Polylines ---
     poly_closed = 0
     for entity in msp:
         if entity.dxftype() not in ('LWPOLYLINE', 'POLYLINE'):
@@ -158,7 +150,6 @@ def extract_areas_from_dxf(doc, unit='mm', workflow='architectural'):
             print(f"[dxf-extract] polyline failed: {e!r}")
             continue
 
-    # --- HATCH boundaries ---
     hatch_count = 0
     try:
         for hatch in msp.query('HATCH'):
@@ -213,60 +204,6 @@ def _wall_rect(p1, p2, thickness):
             (x1-nx, y1-ny), (x1+nx, y1+ny)]
 
 
-def _wall_rect_with_gap(p1, p2, thickness, gap_center, gap_width):
-    """Wall rectangle broken around a gap (for doors/windows)."""
-    x1, y1 = p1; x2, y2 = p2
-    dx, dy = x2-x1, y2-y1
-    L = math.hypot(dx, dy)
-    if L < 1:
-        return []
-    ux, uy = dx/L, dy/L
-    nx, ny = -uy * thickness/2, ux * thickness/2
-    g0 = max(0, gap_center - gap_width/2)
-    g1 = min(L, gap_center + gap_width/2)
-    parts = []
-    if g0 > 20:
-        a = (x1, y1); b = (x1 + ux*g0, y1 + uy*g0)
-        parts.append([(a[0]+nx, a[1]+ny), (b[0]+nx, b[1]+ny),
-                      (b[0]-nx, b[1]-ny), (a[0]-nx, a[1]-ny), (a[0]+nx, a[1]+ny)])
-    if g1 < L - 20:
-        a = (x1 + ux*g1, y1 + uy*g1); b = (x2, y2)
-        parts.append([(a[0]+nx, a[1]+ny), (b[0]+nx, b[1]+ny),
-                      (b[0]-nx, b[1]-ny), (a[0]-nx, a[1]-ny), (a[0]+nx, a[1]+ny)])
-    return parts
-
-
-def draw_wall_seg(msp, p1, p2, t, layer='A-WALL-EXT', color=7, gaps=None):
-    """Draw wall with optional list of (center_along, width) openings."""
-    if not gaps:
-        r = _wall_rect(p1, p2, t)
-        if r:
-            msp.add_lwpolyline(r, dxfattribs={'layer': layer, 'color': color})
-        return
-    x1, y1 = p1; x2, y2 = p2
-    L = math.hypot(x2-x1, y2-y1)
-    if L < 1:
-        return
-    # Sort gaps
-    gaps_sorted = sorted(gaps, key=lambda g: g[0])
-    cursor = 0.0
-    for gc, gw in gaps_sorted:
-        seg_start = cursor
-        seg_end = max(cursor, gc - gw/2)
-        if seg_end - seg_start > 20:
-            a = (x1 + (x2-x1)*seg_start/L, y1 + (y2-y1)*seg_start/L)
-            b = (x1 + (x2-x1)*seg_end/L, y1 + (y2-y1)*seg_end/L)
-            r = _wall_rect(a, b, t)
-            if r:
-                msp.add_lwpolyline(r, dxfattribs={'layer': layer, 'color': color})
-        cursor = max(cursor, gc + gw/2)
-    if cursor < L - 20:
-        a = (x1 + (x2-x1)*cursor/L, y1 + (y2-y1)*cursor/L)
-        r = _wall_rect(a, (x2, y2), t)
-        if r:
-            msp.add_lwpolyline(r, dxfattribs={'layer': layer, 'color': color})
-
-
 def draw_door(msp, cx, cy, width, wall_thickness, is_horizontal=True, flip=False):
     if is_horizontal:
         msp.add_line((cx-width/2, cy-wall_thickness/2), (cx-width/2, cy+wall_thickness/2),
@@ -319,19 +256,18 @@ def draw_window(msp, cx, cy, width, wall_thickness, is_horizontal=True):
                          dxfattribs={'layer': 'A-WINDOW', 'color': 5})
         msp.add_line((cx-wall_thickness/2, cy), (cx+wall_thickness/2, cy),
                      dxfattribs={'layer': 'A-WINDOW', 'color': 5})
+
+
 def _draw_balcony(msp, x_left, x_right, outer_y, side,
                   depth=1200, layer='A-BALCONY'):
-    """Balcony protruding outward from the building envelope.
-    side is 'S' (bottom wall) or 'N' (top wall)."""
     if side == 'S':
         y_out = outer_y - depth
-    else:  # 'N'
+    else:
         y_out = outer_y + depth
     pts = [(x_left, outer_y), (x_right, outer_y),
            (x_right, y_out),   (x_left, y_out)]
     msp.add_lwpolyline(pts, close=True,
                        dxfattribs={'layer': layer, 'color': 5})
-    # Railing line on the outer edge
     msp.add_line((x_left, y_out), (x_right, y_out),
                  dxfattribs={'layer': layer, 'color': 5})
 
@@ -372,27 +308,21 @@ def draw_label(msp, x, y, text, layer='A-ROOM-TEXT', height=180, color=4, align=
 
 def draw_table(msp, x, y, col_widths, rows, row_h=350, header=True,
                layer='ANNO-TABLE', color=7):
-    """Draw a rectangular table with text rows."""
     ncols = len(col_widths)
     total_w = sum(col_widths)
-    # header row + data rows
     nrows = len(rows)
     total_h = nrows * row_h
-    # Outer rectangle
     msp.add_lwpolyline([(x, y), (x+total_w, y), (x+total_w, y-total_h),
                         (x, y-total_h)], dxfattribs={'layer': layer, 'color': color}, close=True)
-    # Column separators
     cx = x
     for cw in col_widths[:-1]:
         cx += cw
         msp.add_line((cx, y), (cx, y-total_h),
                      dxfattribs={'layer': layer, 'color': color})
-    # Row separators
     for r in range(1, nrows):
         yy = y - r*row_h
         msp.add_line((x, yy), (x+total_w, yy),
                      dxfattribs={'layer': layer, 'color': color})
-    # Text
     for r, row in enumerate(rows):
         yy = y - r*row_h - row_h/2
         cx = x
@@ -405,15 +335,11 @@ def draw_table(msp, x, y, col_widths, rows, row_h=350, header=True,
 
 
 def draw_column_grid_bubbles(msp, x0, y0, L, W, xs, ys, col_size, layer='S-GRID'):
-    """Draw grid lines with bubble labels."""
-    # Vertical grid lines (numbered 1, 2, ...)
     for i, cx in enumerate(xs):
         msp.add_line((cx, y0 - 1500), (cx, y0 + W + 1500),
                      dxfattribs={'layer': layer, 'color': 2, 'linetype': 'DASHED'})
-        # Bubble at bottom
         msp.add_circle((cx, y0 - 1800), radius=400, dxfattribs={'layer': layer, 'color': 2})
         draw_label(msp, cx, y0 - 1800, str(i+1), layer, 250, 2)
-    # Horizontal grid lines (lettered A, B, ...)
     letters = "ABCDEFGHJKLMNPQRSTUVWXYZ"
     for j, cy in enumerate(ys):
         msp.add_line((x0 - 1500, cy), (x0 + L + 1500, cy),
@@ -423,12 +349,10 @@ def draw_column_grid_bubbles(msp, x0, y0, L, W, xs, ys, col_size, layer='S-GRID'
 
 
 # ======================================================================
-# Sophisticated drawing helpers (module level — must be defined
-# before build_complete_project uses them)
+# Sophisticated drawing helpers
 # ======================================================================
 def _draw_dimension_chain(msp, x0, y_ref, grid_positions, offset_mm, label=None,
                            layer='ANNO-DIM', color=2):
-    """Draw a chain of dimension segments between grid_positions, offset from y_ref."""
     if len(grid_positions) < 2:
         return
     y_dim = y_ref + offset_mm
@@ -447,41 +371,53 @@ def _draw_dimension_chain(msp, x0, y_ref, grid_positions, offset_mm, label=None,
     if label:
         mid = (grid_positions[0] + grid_positions[-1]) / 2
         draw_label(msp, mid, y_dim + 700, label, layer, height=220, color=color)
+
+
 def _draw_native_dims(msp, xs, ys, x0, y0, offset=7500, layer='ANNO-DIM'):
-    """Add real AutoCAD linear DIMENSION entities so DIST / DIM tools
-    return true mm values. Uses the 'Standard' dimstyle (dimlfac=1,
-    dimscale=100) so text shows the actual mm measurement."""
+    """Real AutoCAD DIMENSION entities so DIST / properties show true mm."""
+    ok = 0
+    fail = 0
     try:
         y_base = y0 - offset
         for i in range(len(xs) - 1):
-            d = msp.add_linear_dim(
-                base=(xs[i], y_base),
-                p1=(xs[i], y0),
-                p2=(xs[i + 1], y0),
-                dimstyle='Standard',
-                dxfattribs={'layer': layer},
-            )
-            d.render()
+            try:
+                d = msp.add_linear_dim(
+                    base=(xs[i], y_base),
+                    p1=(xs[i], y0),
+                    p2=(xs[i + 1], y0),
+                    dimstyle='Standard',
+                    dxfattribs={'layer': layer},
+                )
+                d.render()
+                ok += 1
+            except Exception as e:
+                fail += 1
+                print(f"[dims-x] seg {i} failed: {e!r}")
     except Exception as e:
-        print(f"[dims-x] failed: {e!r}")
+        print(f"[dims-x] outer failed: {e!r}")
     try:
         x_base = x0 - offset
         for i in range(len(ys) - 1):
-            d = msp.add_linear_dim(
-                base=(x_base, ys[i]),
-                p1=(x0, ys[i]),
-                p2=(x0, ys[i + 1]),
-                angle=90,
-                dimstyle='Standard',
-                dxfattribs={'layer': layer},
-            )
-            d.render()
+            try:
+                d = msp.add_linear_dim(
+                    base=(x_base, ys[i]),
+                    p1=(x0, ys[i]),
+                    p2=(x0, ys[i + 1]),
+                    angle=90,
+                    dimstyle='Standard',
+                    dxfattribs={'layer': layer},
+                )
+                d.render()
+                ok += 1
+            except Exception as e:
+                fail += 1
+                print(f"[dims-y] seg {i} failed: {e!r}")
     except Exception as e:
-        print(f"[dims-y] failed: {e!r}")
+        print(f"[dims-y] outer failed: {e!r}")
+    print(f"[dims-native] created ok={ok} fail={fail}")
 
 
 def _draw_north_arrow(msp, x, y, size=1200, layer='ANNO-SYMBOL'):
-    """North arrow: circle, filled triangle, 'N' label."""
     msp.add_circle((x, y), radius=size / 2,
                    dxfattribs={'layer': layer, 'color': 7})
     half = size * 0.22
@@ -492,7 +428,6 @@ def _draw_north_arrow(msp, x, y, size=1200, layer='ANNO-SYMBOL'):
 
 
 def _draw_section_marker(msp, x, y, tag, direction='down', layer='ANNO-SECTION'):
-    """Section cut marker: circle with tag + a short cut line."""
     arrow_len = 1200
     if direction == 'down':
         msp.add_line((x, y), (x, y - arrow_len),
@@ -511,7 +446,6 @@ def _draw_section_marker(msp, x, y, tag, direction='down', layer='ANNO-SECTION')
 
 def _draw_column_section_detail(msp, x, y, col_w, col_h, n_bars, bar_dia,
                                  stirrup_dia, cover=40, layer='S-DETAIL'):
-    """Draw a typical column cross-section detail at (x,y) bottom-left."""
     msp.add_lwpolyline([(x, y), (x + col_w, y), (x + col_w, y + col_h),
                         (x, y + col_h)],
                        dxfattribs={'layer': layer, 'color': 7}, close=True)
@@ -571,7 +505,6 @@ def _draw_footing_section_detail(msp, x, y, foot_w, foot_h, col_w,
 
 def _draw_sheet_border(msp, x, y, w, h, sheet_title, sheet_code,
                         layer='ANNO-BORDER'):
-    """Outer border + inner frame + title strip at bottom-right."""
     msp.add_lwpolyline([(x, y), (x + w, y), (x + w, y + h), (x, y + h)],
                        dxfattribs={'layer': layer, 'color': 7}, close=True)
     margin = 1000
@@ -585,19 +518,17 @@ def _draw_sheet_border(msp, x, y, w, h, sheet_title, sheet_code,
 
 
 # ======================================================================
-# Layout engine — snap cuts to column grid lines
+# Layout engine
 # ======================================================================
 def _partition_rect_grid(rect, rooms, grid_xs, grid_ys):
     if not rooms:
         return []
     if len(rooms) == 1:
         return [(rooms[0], rect)]
-
     x0, y0, x1, y1 = rect
     w, h = x1 - x0, y1 - y0
     total = sum(r.get('area_m2', 10) for r in rooms) or 1
     frac = max(0.22, min(0.78, rooms[0].get('area_m2', 10) / total))
-
     if w >= h:
         ideal = x0 + w * frac
         candidates = [g for g in grid_xs if x0 + 3000 < g < x1 - 3000]
@@ -612,11 +543,7 @@ def _partition_rect_grid(rect, rooms, grid_xs, grid_ys):
                 _partition_rect_grid((x0, cut, x1, y1), rooms[1:], grid_xs, grid_ys))
 
 
-# ======================================================================
-# Free span detection for openings
-# ======================================================================
 def _columns_along_wall(p1, p2, columns, tolerance=200):
-    """Return list of distances t (0..L) where a column lies on the wall."""
     x1, y1 = p1; x2, y2 = p2
     dx, dy = x2-x1, y2-y1
     L = math.hypot(dx, dy)
@@ -635,7 +562,6 @@ def _columns_along_wall(p1, p2, columns, tolerance=200):
 
 
 def _free_spans(L, col_positions, col_block=400, clearance=250):
-    """Given wall length L and column positions, return list of (t0, t1) free spans."""
     blocks = []
     for t in col_positions:
         blocks.append((t - col_block/2 - clearance, t + col_block/2 + clearance))
@@ -658,7 +584,6 @@ def _free_spans(L, col_positions, col_block=400, clearance=250):
 
 
 def best_opening_position(p1, p2, columns, opening_width, col_size=300):
-    """Return distance t along wall for the best opening center, or None."""
     x1, y1 = p1; x2, y2 = p2
     L = math.hypot(x2-x1, y2-y1)
     if L < opening_width + 400:
@@ -676,6 +601,10 @@ def best_opening_position(p1, p2, columns, opening_width, col_size=300):
 # MAIN GENERATOR
 # ======================================================================
 def build_complete_project(params):
+    print("[build] === build_complete_project START ===")
+    print(f"[build] params keys: {list(params.keys())}")
+    print(f"[build] has layout_plan: {'layout_plan' in params}")
+
     seed = params.get('variation_seed') or hash((
         params.get('plot_area_m2', 200),
         params.get('street_width_m', 10),
@@ -732,16 +661,17 @@ def build_complete_project(params):
     stair_cell = layout_plan.get('stair_cell')
     nb = params.get('num_bedrooms', 3)
     nba = params.get('num_bathrooms', 2)
-    # Wall collection — every wall goes into this list as a shapely polygon.
-    # At the end we union them all and draw the merged outline, so corners
-    # and T-junctions render as solid connections, not crossing rectangles.
+
+    print(f"[build] layout_plan keys: {list(layout_plan.keys())}")
+    print(f"[build] rooms in layout_plan: {len(ai_rooms)}")
+    if ai_rooms:
+        print(f"[build] first room: {ai_rooms[0]}")
+
     from shapely.geometry import Polygon as _ShPoly
     from shapely.ops import unary_union as _sh_union
     wall_polys = []
 
     def _add_wall_rect_from_line(p1, p2, thickness, gaps=None):
-        """Split a wall line into rects (with optional gaps) and add them.
-        gaps = list of (center_along_from_p1, width)."""
         x1, y1 = p1; x2, y2 = p2
         L = math.hypot(x2 - x1, y2 - y1)
         if L < 1:
@@ -785,14 +715,12 @@ def build_complete_project(params):
                              "type": "bathroom", "area_m2": 4.5,
                              "priority": 10+i, "zone": "private", "needs_window": False})
 
-    # ----- 3b. Detect pre-positioned rooms -----
     _pre_positioned = bool(ai_rooms) and all(
         ('x' in r and 'y' in r and 'w' in r and 'h' in r) for r in ai_rooms
     )
+    print(f"[build] _pre_positioned = {_pre_positioned}")
 
     # ----- 4. Sizes in mm -----
-    # Prefer the grid's building envelope if the caller provided one,
-    # so DXF coordinates match the AI layout exactly.
     if layout_plan.get('building'):
         b = layout_plan['building']
         x0 = float(b['x'])
@@ -807,7 +735,9 @@ def build_complete_project(params):
         x0, y0 = 0.0, 0.0
         x1, y1 = L, W
 
-    # ----- 5. Structural grid FIRST (so rooms snap to it) -----
+    print(f"[build] envelope: x0={x0} y0={y0} x1={x1} y1={y1} L={L} W={W} (mm)")
+
+    # ----- 5. Structural grid -----
     span_max = 5000
     nx = max(3, math.ceil(L / span_max) + 1)
     ny = max(2, math.ceil(W / span_max) + 1)
@@ -823,23 +753,20 @@ def build_complete_project(params):
     doc = ezdxf.new(dxfversion='R2000', setup=True)
     msp = doc.modelspace()
 
-    # --- Metric header + dimstyle so AutoCAD shows mm values, not weird ones ---
-    doc.header['$INSUNITS']  = 4      # millimetres
-    doc.header['$MEASUREMENT'] = 1    # metric
-    print(f"[dxf-units] INSUNITS={doc.header.get('$INSUNITS')} "
-          f"MEASUREMENT={doc.header.get('$MEASUREMENT')} "
-          f"LUNITS={doc.header.get('$LUNITS')} "
-          f"DIMLFAC={doc.header.get('$DIMLFAC')} DIMSCALE={doc.header.get('$DIMSCALE')}")
-    doc.header['$LUNITS']    = 2      # decimal
-    doc.header['$LUPREC']    = 0      # integer display
-    doc.header['$AUNITS']    = 0
-    doc.header['$AUPREC']    = 0
-    doc.header['$DIMSCALE']  = 100    # 1:100 drawing scale
-    doc.header['$DIMLFAC']   = 1.0    # measurement factor 1:1 (mm -> mm)
-    doc.header['$DIMTXT']    = 2.5    # 2.5 mm text on paper (= 250 mm model)
-    doc.header['$DIMASZ']    = 2.5
-    doc.header['$DIMDEC']    = 0
-    doc.header['$DIMZIN']    = 8
+    # ---- Metric units ----
+    doc.header['$INSUNITS']    = 4
+    doc.header['$MEASUREMENT'] = 1
+    doc.header['$LUNITS']      = 2
+    doc.header['$LUPREC']      = 0
+    doc.header['$AUNITS']      = 0
+    doc.header['$AUPREC']      = 0
+    doc.header['$DIMSCALE']    = 100
+    doc.header['$DIMLFAC']     = 1.0
+    doc.header['$DIMTXT']      = 3.5
+    doc.header['$DIMASZ']      = 3.5
+    doc.header['$DIMDEC']      = 0
+    doc.header['$DIMZIN']      = 8
+
     try:
         _ds = doc.dimstyles.get('Standard')
     except Exception:
@@ -853,10 +780,10 @@ def build_complete_project(params):
         try:
             _ds.dxf.dimscale = 100
             _ds.dxf.dimlfac  = 1.0
-            _ds.dxf.dimtxt   = 2.5
-            _ds.dxf.dimasz   = 2.5
-            _ds.dxf.dimexe   = 1.25
-            _ds.dxf.dimexo   = 0.625
+            _ds.dxf.dimtxt   = 3.5
+            _ds.dxf.dimasz   = 3.5
+            _ds.dxf.dimexe   = 1.5
+            _ds.dxf.dimexo   = 1.0
             _ds.dxf.dimdec   = 0
             _ds.dxf.dimzin   = 8
             _ds.dxf.dimtad   = 1
@@ -865,6 +792,11 @@ def build_complete_project(params):
             _ds.dxf.dimtix   = 1
         except Exception as _e:
             print(f"[dimstyle] could not fully configure Standard: {_e!r}")
+
+    print(f"[dxf-units] INSUNITS={doc.header.get('$INSUNITS')} "
+          f"MEASUREMENT={doc.header.get('$MEASUREMENT')} "
+          f"LUNITS={doc.header.get('$LUNITS')} "
+          f"DIMLFAC={doc.header.get('$DIMLFAC')} DIMSCALE={doc.header.get('$DIMSCALE')}")
 
     layers_def = {
         'A-WALL-EXT': {'color': 7, 'lineweight': 50},
@@ -891,8 +823,6 @@ def build_complete_project(params):
     for n, p in layers_def.items():
         create_dxf_layer(doc, n, p['color'], lineweight=p['lineweight'])
 
-    # Plot boundary — dashed rectangle at plot extents so the building
-    # can be visually verified to fit inside it.
     msp.add_lwpolyline(
         [(0, 0), (L, 0), (L, W), (0, W)],
         dxfattribs={'layer': 'ANNO-BORDER', 'color': 1, 'linetype': 'DASHED'},
@@ -900,7 +830,7 @@ def build_complete_project(params):
     )
 
     # ==================================================================
-    # SHEET 1 — ARCHITECTURAL PLAN (at origin)
+    # SHEET 1 — ARCHITECTURAL PLAN
     # ==================================================================
     wall_ext_t = 250
     int_t = 150
@@ -930,12 +860,15 @@ def build_complete_project(params):
                                key=lambda r: r.get('priority', 99))
         if random.random() > 0.5:
             private_rooms = list(reversed(private_rooms))
-
         pub_pl = _partition_rect_grid(public_zone, public_rooms, xs, ys) if public_rooms else []
         priv_pl = _partition_rect_grid(private_zone, private_rooms, xs, ys) if private_rooms else []
         placements = pub_pl + priv_pl
-    # Split bathroom cells so bathrooms never take a full bedroom footprint.
+
+    print(f"[build] placements before bathroom-split: {len(placements)}")
+
+    # ---- Split bathrooms in half, give the extra to a Store ----
     _expanded = []
+    _n_bath_split = 0
     for _room, (_rx0, _ry0, _rx1, _ry1) in placements:
         _rt = (_room.get('type') or '').lower()
         if _rt == 'bathroom' and (_rx1 - _rx0) >= 2400:
@@ -946,20 +879,17 @@ def build_complete_project(params):
                 {'name': 'Store', 'type': 'store', 'needs_window': False},
                 (_rx0 + _bath_w, _ry0, _rx1, _ry1),
             ))
+            _n_bath_split += 1
         else:
             _expanded.append((_room, (_rx0, _ry0, _rx1, _ry1)))
     placements = _expanded
+    print(f"[build] bathrooms split: {_n_bath_split} → total placements now {len(placements)}")
 
     ext_openings = {'bottom': [], 'top': [], 'left': [], 'right': []}
     door_marks = []
     win_marks = []
     d_idx = 0; w_idx = 0
-    door_specs = {}
-    win_specs = {}
 
-    # NOTE: gap centers appended below are DISTANCES ALONG THE WALL from p1
-    # (p1 is x0 / y0 corner of the wall). Previously absolute coords were
-    # passed, which only worked when x0 == y0 == 0.
     for room, (rx0, ry0, rx1, ry1) in placements:
         if not room.get('needs_window'):
             continue
@@ -980,9 +910,7 @@ def build_complete_project(params):
             wy = (ry0 + ry1) / 2
             ext_openings['right'].append((wy - y0, win_v))
 
-    # ---- Apartment entrance door ----
-    # Reserve a 1100 mm gap in the bottom exterior wall, ideally
-    # at the entry hall's centre.
+    # ---- ALWAYS reserve a 1100 mm entrance door ----
     entry_door_cx = None
     for room, (rx0, ry0, rx1, ry1) in placements:
         nm = (room.get('name') or '').lower()
@@ -996,12 +924,11 @@ def build_complete_project(params):
                          if (ry0 + ry1) / 2 < mid_y]
         if lower_centres:
             entry_door_cx = lower_centres[len(lower_centres) // 2]
-        # ALWAYS reserve a 1100 mm entry door on the bottom exterior wall.
     if entry_door_cx is None:
         entry_door_cx = (x0 + x1) / 2
+
     _door_c = entry_door_cx - x0
     _door_w = 1100
-    # Shift the door if it would collide with a window gap.
     _shift_deltas = (0, 800, -800, 1600, -1600, 2400, -2400, 3200, -3200)
     _final_c = _door_c
     for _d in _shift_deltas:
@@ -1014,6 +941,7 @@ def build_complete_project(params):
             break
     entry_door_cx = x0 + _final_c
     ext_openings['bottom'].append((_final_c, _door_w))
+    print(f"[build] entry door placed at x={entry_door_cx:.0f} width={_door_w}")
 
     half_ext = wall_ext_t / 2
     _add_wall_rect_from_line((x0 + half_ext, y0), (x0 + half_ext, y1),
@@ -1024,10 +952,10 @@ def build_complete_project(params):
                              wall_ext_t, gaps=ext_openings['bottom'])
     _add_wall_rect_from_line((x0, y1 - half_ext), (x1, y1 - half_ext),
                              wall_ext_t, gaps=ext_openings['top'])
+
     for wx, ww in ext_openings['bottom']:
-        # entry-door check below must compare along-wall values, not absolute
-        if entry_door_cx is not None and abs(wx - (entry_door_cx - x0)) < 10:
-            continue  # this gap is the entry door, not a window
+        if abs(wx - (entry_door_cx - x0)) < 10:
+            continue
         draw_window(msp, wx + x0, y0 + half_ext, ww, wall_ext_t, is_horizontal=True)
     for wx, ww in ext_openings['top']:
         draw_window(msp, wx + x0, y1 - half_ext, ww, wall_ext_t, is_horizontal=True)
@@ -1036,12 +964,10 @@ def build_complete_project(params):
     for wy, ww in ext_openings['right']:
         draw_window(msp, x1 - half_ext, wy + y0, ww, wall_ext_t, is_horizontal=False)
 
-    # Interior walls — collect door gaps first
+    # ---- Interior doors ----
     DOOR_W = 900
     placed_doors = []
-    # Every interior door we actually place here is remembered so that
-    # the merged interior wall outline can have real gaps cut into it.
-    interior_door_gaps = []  # list of (cx, cy, width) — horizontal doors
+    interior_door_gaps = []
 
     def _door_bbox(cx, cy, w, wt, horiz, flip):
         hw = w / 2
@@ -1077,10 +1003,9 @@ def build_complete_project(params):
 
     corridor_bot = mid_y - corridor_h / 2
     corridor_top = mid_y + corridor_h / 2
-    DOOR_WALL_TOL = 250.0  # mm
+    DOOR_WALL_TOL = 250.0
 
     for room, (rx0, ry0, rx1, ry1) in placements:
-        # Skip rooms sitting on the reserved stair cell — no door onto treads
         if stair_cell:
             scx0 = float(stair_cell['x'])
             scy0 = float(stair_cell['y'])
@@ -1091,22 +1016,17 @@ def build_complete_project(params):
                 continue
 
         room_cy = (ry0 + ry1) / 2
-        room_depth = ry1 - ry0  # perpendicular to the horizontal door wall
+        room_depth = ry1 - ry0
 
         faces_corridor_bottom = abs(ry1 - corridor_bot) < DOOR_WALL_TOL
         faces_corridor_top    = abs(ry0 - corridor_top) < DOOR_WALL_TOL
 
         if room_cy < mid_y:
-            # Public room, must face the corridor from below.
-            # If it doesn't reach the corridor, skip — do not open a door
-            # into a neighbouring room (this is what put bathroom doors
-            # inside kitchens).
             if not faces_corridor_bottom:
                 continue
             wall_p1, wall_p2 = (rx0, ry1), (rx1, ry1)
             door_flip = True
         else:
-            # Private room, must face the corridor from above.
             if not faces_corridor_top:
                 continue
             wall_p1, wall_p2 = (rx0, ry0), (rx1, ry0)
@@ -1151,10 +1071,8 @@ def build_complete_project(params):
 
         door_cx, door_cy, bbox = chosen
         placed_doors.append(bbox)
-        # Remember for interior-wall gap cutting
         interior_door_gaps.append((door_cx, door_cy, DOOR_W))
 
-        # Swing needs ~door_width + 200 mm clearance in the swing direction.
         if room_depth >= DOOR_W + 200:
             draw_door(msp, door_cx, door_cy, DOOR_W, int_t,
                       is_horizontal=True, flip=door_flip)
@@ -1168,16 +1086,15 @@ def build_complete_project(params):
         mark = f"D{d_idx}"
         door_marks.append((mark, door_type, DOOR_W, 2100, 1, room['name']))
 
-    # ---- Draw the entry door symbol ----
+    # ---- Entry door symbol ----
     if entry_door_cx is not None:
         draw_door(msp, entry_door_cx, y0 + wall_ext_t / 2, 1100, wall_ext_t,
                   is_horizontal=True, flip=True)
 
-    # ---- Interior walls: cluster coords with tolerance, merge, draw once ----
-    TOL = 400.0  # mm — anything within this distance is "the same wall line"
+    # ---- Interior walls: cluster, merge, draw ----
+    TOL = 400.0
 
     def _cluster(values):
-        """Group coordinates within TOL and return {original: cluster_center}."""
         if not values:
             return {}
         s = sorted(set(values))
@@ -1194,9 +1111,8 @@ def build_complete_project(params):
                 out[v] = center
         return out
 
-    # Collect every room edge coordinate first
-    all_vx = []   # vertical walls (x coordinate)
-    all_hy = []   # horizontal walls (y coordinate)
+    all_vx = []
+    all_hy = []
     for room, (rx0, ry0, rx1, ry1) in placements:
         if rx0 > x0 + wall_ext_t:
             all_vx.append(rx0)
@@ -1210,9 +1126,8 @@ def build_complete_project(params):
     x_cluster = _cluster(all_vx)
     y_cluster = _cluster(all_hy)
 
-    # Bucket edges by their cluster center
-    vert_by_x = {}  # cluster_x -> list of (y_start, y_end)
-    horiz_by_y = {} # cluster_y -> list of (x_start, x_end)
+    vert_by_x = {}
+    horiz_by_y = {}
 
     for room, (rx0, ry0, rx1, ry1) in placements:
         if rx0 > x0 + wall_ext_t:
@@ -1240,9 +1155,6 @@ def build_complete_project(params):
                 merged.append([a, b])
         return [(a, b) for a, b in merged]
 
-    # Interior walls — collect into wall_polys for the union step.
-    # Horizontal walls get door gaps cut into them; vertical walls don't
-    # (all our doors swing across horizontal walls).
     door_match_tol = TOL + 100.0
     for y, ranges in horiz_by_y.items():
         for xa, xb in _merge_ranges(ranges):
@@ -1267,7 +1179,7 @@ def build_complete_project(params):
             if r:
                 wall_polys.append(_ShPoly(r))
 
-    # ---- Union all walls and draw the merged outline ----
+    # ---- Union all walls ----
     if wall_polys:
         try:
             merged = _sh_union(wall_polys)
@@ -1290,7 +1202,7 @@ def build_complete_project(params):
         except Exception as e:
             print(f"[walls] union failed: {e!r}")
 
-    # Furniture + room labels
+    # ---- Room labels + furniture + schedules ----
     room_schedule = []
     for i, (room, (rx0, ry0, rx1, ry1)) in enumerate(placements):
         w = rx1 - rx0
@@ -1307,27 +1219,31 @@ def build_complete_project(params):
         perimeter = 2*((rx1-rx0)+(ry1-ry0)) / 1000
         room_schedule.append((i+1, room['name'], "Ground", f"{area_m2:.1f}",
                               f"{perimeter:.1f}", "Tiles", "Paint"))
-    # Balconies on exterior walls of Living Room and Master Bedroom.
+
+    # ---- Balconies ----
+    balconies_drawn = 0
     for room, (rx0, ry0, rx1, ry1) in placements:
         rt = (room.get('type') or '').lower()
         if rt not in ('living', 'bedroom_master'):
             continue
         balcony_w = min(rx1 - rx0 - 800, 3000)
         if balcony_w < 1500:
+            print(f"[balcony] skip {room['name']}: width too small ({balcony_w:.0f})")
             continue
         bcx = (rx0 + rx1) / 2
-        if abs(ry0 - (y0 + wall_ext_t)) < 300:
+        if abs(ry0 - (y0 + wall_ext_t)) < 400:
             _draw_balcony(msp, bcx - balcony_w/2, bcx + balcony_w/2,
                           y0, 'S', depth=1200)
-        elif abs(ry1 - (y1 - wall_ext_t)) < 300:
+            balconies_drawn += 1
+            print(f"[balcony] S drawn for {room['name']}")
+        elif abs(ry1 - (y1 - wall_ext_t)) < 400:
             _draw_balcony(msp, bcx - balcony_w/2, bcx + balcony_w/2,
                           y1, 'N', depth=1200)
+            balconies_drawn += 1
+            print(f"[balcony] N drawn for {room['name']}")
+    print(f"[balcony] total drawn: {balconies_drawn}")
 
-    # Core (stairs) — drawn inside the reserved grid cell if one was
-    # provided, otherwise at a sensible default inside the building.
-    # The stair rectangle is clamped to the interior face of the walls
-    # and inset by half the interior wall thickness, so it can never be
-    # wider than the room it sits in.
+    # ---- Stair core ----
     stair_inset = int_t / 2 + 20
     inner_x0 = x0 + wall_ext_t
     inner_y0 = y0 + wall_ext_t
@@ -1338,7 +1254,6 @@ def build_complete_project(params):
         scy0 = float(stair_cell['y']) + stair_inset
         scx1 = float(stair_cell['x']) + float(stair_cell['w']) - stair_inset
         scy1 = float(stair_cell['y']) + float(stair_cell['h']) - stair_inset
-        # clamp into the interior face of the walls
         scx0 = max(scx0, inner_x0)
         scy0 = max(scy0, inner_y0)
         scx1 = min(scx1, inner_x1)
@@ -1380,7 +1295,6 @@ def build_complete_project(params):
     draw_label(msp, x0 + L/2, y1 + 3000, "GROUND FLOOR PLAN  —  SCALE 1:100",
                'ANNO-TITLE', 350, 7)
 
-    # --- Enhanced architectural sheet: dimension chains + markers ---
     off_chain = off + 3500
     _draw_dimension_chain(msp, x0, y0, xs, -off_chain, label=f"Overall {L/1000:.2f} m")
     _draw_dimension_chain(msp, x0, y0, xs, -(off_chain + 900))
@@ -1400,7 +1314,7 @@ def build_complete_project(params):
     _draw_north_arrow(msp, x0 + L + 2500, y1 - 1000, size=1400)
 
     # ==================================================================
-    # SHEET 2 — STRUCTURAL PLAN (below)
+    # SHEET 2 — STRUCTURAL PLAN
     # ==================================================================
     sy = -40000
     sx = 0
@@ -1459,24 +1373,12 @@ def build_complete_project(params):
                 dxfattribs={'layer': 'S-FOOTING', 'color': 9, 'linetype': 'DASHED'}, close=True)
             draw_label(msp, sx+cx+foot/2+400, sy+cy, label, 'S-FOOTING', 140, 9)
 
-    msp.add_line((sx+x0, sy+y0-off-2000), (sx+x1, sy+y0-off-2000),
-                 dxfattribs={'layer': 'ANNO-DIM', 'color': 2})
-    for px in [x0, x1]:
-        msp.add_line((sx+px, sy+y0-off-2100), (sx+px, sy+y0-off-1900),
-                     dxfattribs={'layer': 'ANNO-DIM', 'color': 2})
-    draw_label(msp, sx+(x0+x1)/2, sy+y0-off-2500, f"{L/1000:.2f} m",
-               'ANNO-TEXT', 220, 2)
-    msp.add_line((sx+x0-off-2000, sy+y0), (sx+x0-off-2000, sy+y1),
-                 dxfattribs={'layer': 'ANNO-DIM', 'color': 2})
-    draw_label(msp, sx+x0-off-2600, sy+(y0+y1)/2, f"{W/1000:.2f} m",
-               'ANNO-TEXT', 220, 2)
-
     draw_label(msp, sx + x0 + L/2, sy + y1 + 3000,
                "FOUNDATION & ROOF FRAMING PLAN  —  SCALE 1:100",
                'ANNO-TITLE', 350, 7)
 
     # ==================================================================
-    # SHEET 3 — ROOM / DOOR / WINDOW SCHEDULES
+    # SHEET 3 — SCHEDULES
     # ==================================================================
     tb_x = x0 + L + 6000
     tb_y = y1
@@ -1573,7 +1475,7 @@ def build_complete_project(params):
     draw_table(msp, bx, ny_y, [9000], notes_rows, row_h=400)
 
     # ==================================================================
-    # SHEET 5 — COLUMN / BEAM / FOOTING SCHEDULES + TYPICAL DETAILS
+    # SHEET 5 — STRUCTURAL SCHEDULES
     # ==================================================================
     sch_x = bx
     sch_y = ny_y - (len(notes_rows) + 3) * 350 - 1500
@@ -1589,27 +1491,23 @@ def build_complete_project(params):
         ))
     draw_table(msp, sch_x, sch_y, [1200, 1600, 1400, 1400, 800], col_sched)
 
-    beam_y = sch_y - (len(col_sched) + 3) * 350 - 1000
-    draw_label(msp, sch_x + 4000, beam_y + 500, "BEAM SCHEDULE",
+    beam_y2 = sch_y - (len(col_sched) + 3) * 350 - 1000
+    draw_label(msp, sch_x + 4000, beam_y2 + 500, "BEAM SCHEDULE",
                'ANNO-TITLE', 300, 7)
     beam_sched = [("Mark", "Size (mm)", "Top Bars", "Bottom Bars", "Stirrups", "Span (m)")]
     for i in range(min(12, len(beam_labels))):
         bsize = f"{beam_b}x{beam_d}"
-        beam_sched.append((
-            f"B{i+1}", bsize, "2D16", "3D16", "D8@150", "5.00",
-        ))
-    draw_table(msp, sch_x, beam_y,
+        beam_sched.append((f"B{i+1}", bsize, "2D16", "3D16", "D8@150", "5.00"))
+    draw_table(msp, sch_x, beam_y2,
                [1000, 1500, 1300, 1300, 1400, 1100], beam_sched)
 
-    foot_y = beam_y - (len(beam_sched) + 3) * 350 - 1000
+    foot_y = beam_y2 - (len(beam_sched) + 3) * 350 - 1000
     draw_label(msp, sch_x + 4000, foot_y + 500, "FOOTING SCHEDULE",
                'ANNO-TITLE', 300, 7)
     foot_sched = [("Mark", "Size (mm)", "Depth (mm)", "Bottom R/F", "Qty")]
     for i in range(min(12, len(foot_labels))):
-        foot_sched.append((
-            f"F{i+1}", f"{foot}x{foot}", "500",
-            "D12@150 both ways", "1",
-        ))
+        foot_sched.append((f"F{i+1}", f"{foot}x{foot}", "500",
+                           "D12@150 both ways", "1"))
     draw_table(msp, sch_x, foot_y,
                [1200, 1700, 1400, 2600, 800], foot_sched)
 
@@ -1639,7 +1537,7 @@ def build_complete_project(params):
                f"{foot}x{foot}x500  D12@150 B/W", 'ANNO-TEXT', 220, 7)
 
     # ==================================================================
-    # PROJECT TITLE BLOCK
+    # TITLE BLOCK
     # ==================================================================
     tb_title_x = tb_x
     tb_title_y = win_y - (len(win_rows) + 2) * 350 - 1000
@@ -1670,11 +1568,12 @@ def build_complete_project(params):
                'ANNO-TEXT', 240, 7)
 
     # ==================================================================
-    # WRITE BINARY DXF
+    # WRITE DXF — ASCII for maximum AutoCAD compatibility
     # ==================================================================
     dxf_buf = io.BytesIO()
-    doc.write(dxf_buf, fmt='bin')
+    doc.write(dxf_buf, fmt='asc')
     dxf_bytes = dxf_buf.getvalue()
+    print(f"[build] DXF written, size={len(dxf_bytes)} bytes, fmt=ASC")
 
     boq_df = pd.DataFrame([{'Item': n, 'Quantity': round(q, 2), 'Unit': u,
                             'Unit Rate (EGP)': r, 'Total Cost (EGP)': round(q*r, 2)}
@@ -1696,13 +1595,13 @@ def build_complete_project(params):
         'num_columns': len(cols),
         'coverage_ratio': f"{coverage*100:.0f}%",
     }
+    print("[build] === build_complete_project END ===")
     return {'dxf': dxf_bytes, 'boq': boq_df.to_dict('records'), 'info': layout_info}
 
 
 # ======================================================================
 # ADDITIVE HIGH-TRAFFIC LAYER
 # ======================================================================
-
 def _strip_thumbnail_section(text: str) -> str:
     lines = text.splitlines()
     out = []
@@ -1731,11 +1630,9 @@ def _strip_thumbnail_section(text: str) -> str:
 def _open_dxf_doc_from_bytes(doc_bytes):
     if isinstance(doc_bytes, str):
         doc_bytes = doc_bytes.encode('utf-8')
-
     head = doc_bytes[:32]
     is_binary = head.startswith(b'AutoCAD Binary DXF') or (b'\x00' in head)
     print(f"[dxf] head={head!r} binary={is_binary}")
-
     if is_binary:
         try:
             return ezdxf.read(io.BytesIO(doc_bytes))
@@ -1743,14 +1640,11 @@ def _open_dxf_doc_from_bytes(doc_bytes):
             print(f"[dxf] binary read failed: {e!r}; trying recover")
             from ezdxf import recover as _recover
             return _recover.read(io.BytesIO(doc_bytes))
-
     try:
         text = doc_bytes.decode('utf-8')
     except UnicodeDecodeError:
         text = doc_bytes.decode('latin-1', errors='replace')
-
     cleaned = _strip_thumbnail_section(text)
-
     try:
         return ezdxf.read(io.StringIO(cleaned))
     except Exception as e:
