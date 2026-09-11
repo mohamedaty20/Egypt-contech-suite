@@ -1,4 +1,4 @@
-# services/dxf_service.py — Professional Architectural + Structural generator
+# services/dxf_service.py — Professional Architectural generator
 import io
 import math
 import random
@@ -90,12 +90,10 @@ def extract_areas_from_dxf(doc, unit='mm', workflow='architectural'):
     scale = {'mm': 1e-6, 'cm': 1e-4, 'm': 1.0}.get(unit, 1e-6)
     results = []
     msp = doc.modelspace()
-
     counts = {}
     for e in msp:
         counts[e.dxftype()] = counts.get(e.dxftype(), 0) + 1
     print(f"[dxf-extract] entity census: {counts}")
-
     text_positions = []
     try:
         for t in msp.query('TEXT MTEXT'):
@@ -110,7 +108,6 @@ def extract_areas_from_dxf(doc, unit='mm', workflow='architectural'):
                 pass
     except Exception:
         pass
-
     def find_label(cx, cy, radius):
         best, best_d = '', radius
         for tx, ty, txt in text_positions:
@@ -118,7 +115,6 @@ def extract_areas_from_dxf(doc, unit='mm', workflow='architectural'):
             if d < best_d and txt:
                 best, best_d = txt, d
         return best
-
     poly_closed = 0
     for entity in msp:
         if entity.dxftype() not in ('LWPOLYLINE', 'POLYLINE'):
@@ -149,7 +145,6 @@ def extract_areas_from_dxf(doc, unit='mm', workflow='architectural'):
         except Exception as e:
             print(f"[dxf-extract] polyline failed: {e!r}")
             continue
-
     hatch_count = 0
     try:
         for hatch in msp.query('HATCH'):
@@ -179,7 +174,6 @@ def extract_areas_from_dxf(doc, unit='mm', workflow='architectural'):
                 continue
     except Exception:
         pass
-
     print(f"[dxf-extract] closed polylines={poly_closed} hatch_paths={hatch_count} "
           f"→ {len(results)} areas returned")
     return results
@@ -308,7 +302,6 @@ def draw_label(msp, x, y, text, layer='A-ROOM-TEXT', height=180, color=4, align=
 
 def draw_table(msp, x, y, col_widths, rows, row_h=350, header=True,
                layer='ANNO-TABLE', color=7):
-    ncols = len(col_widths)
     total_w = sum(col_widths)
     nrows = len(rows)
     total_h = nrows * row_h
@@ -374,7 +367,6 @@ def _draw_dimension_chain(msp, x0, y_ref, grid_positions, offset_mm, label=None,
 
 
 def _draw_native_dims(msp, xs, ys, x0, y0, offset=7500, layer='ANNO-DIM'):
-    """Real AutoCAD DIMENSION entities so DIST / properties show true mm."""
     ok = 0
     fail = 0
     try:
@@ -442,79 +434,6 @@ def _draw_section_marker(msp, x, y, tag, direction='down', layer='ANNO-SECTION')
     by = y - arrow_len - 400 if direction == 'down' else y + arrow_len + 400
     msp.add_circle((x, by), radius=500, dxfattribs={'layer': layer, 'color': 1})
     draw_label(msp, x, by, tag, layer, height=280, color=1)
-
-
-def _draw_column_section_detail(msp, x, y, col_w, col_h, n_bars, bar_dia,
-                                 stirrup_dia, cover=40, layer='S-DETAIL'):
-    msp.add_lwpolyline([(x, y), (x + col_w, y), (x + col_w, y + col_h),
-                        (x, y + col_h)],
-                       dxfattribs={'layer': layer, 'color': 7}, close=True)
-    c = cover
-    msp.add_lwpolyline([(x + c, y + c), (x + col_w - c, y + c),
-                        (x + col_w - c, y + col_h - c), (x + c, y + col_h - c)],
-                       dxfattribs={'layer': layer, 'color': 1}, close=True)
-    bar_r = max(60, bar_dia * 1.5)
-    positions = [
-        (x + c, y + c), (x + col_w - c, y + c),
-        (x + col_w - c, y + col_h - c), (x + c, y + col_h - c),
-        (x + col_w / 2, y + c), (x + col_w / 2, y + col_h - c),
-        (x + c, y + col_h / 2), (x + col_w - c, y + col_h / 2),
-    ]
-    for bx, by in positions[:n_bars]:
-        msp.add_circle((bx, by), radius=bar_r,
-                       dxfattribs={'layer': layer, 'color': 1})
-
-
-def _draw_beam_section_detail(msp, x, y, beam_w, beam_d, top_bars, bot_bars,
-                               stirrup_dia, layer='S-DETAIL'):
-    msp.add_lwpolyline([(x, y), (x + beam_w, y), (x + beam_w, y + beam_d),
-                        (x, y + beam_d)],
-                       dxfattribs={'layer': layer, 'color': 7}, close=True)
-    c = 40
-    msp.add_lwpolyline([(x + c, y + c), (x + beam_w - c, y + c),
-                        (x + beam_w - c, y + beam_d - c), (x + c, y + beam_d - c)],
-                       dxfattribs={'layer': layer, 'color': 1}, close=True)
-    bar_r = 80
-    for i in range(bot_bars):
-        bx = x + c + (beam_w - 2 * c) * (i + 1) / (bot_bars + 1)
-        msp.add_circle((bx, y + c), radius=bar_r,
-                       dxfattribs={'layer': layer, 'color': 1})
-    for i in range(top_bars):
-        bx = x + c + (beam_w - 2 * c) * (i + 1) / (top_bars + 1)
-        msp.add_circle((bx, y + beam_d - c), radius=bar_r,
-                       dxfattribs={'layer': layer, 'color': 1})
-
-
-def _draw_footing_section_detail(msp, x, y, foot_w, foot_h, col_w,
-                                  n_bars_bot, layer='S-DETAIL'):
-    msp.add_lwpolyline([(x, y), (x + foot_w, y), (x + foot_w, y + foot_h),
-                        (x, y + foot_h)],
-                       dxfattribs={'layer': layer, 'color': 7}, close=True)
-    col_x = x + (foot_w - col_w) / 2
-    msp.add_lwpolyline([(col_x, y + foot_h), (col_x + col_w, y + foot_h),
-                        (col_x + col_w, y + foot_h + col_w * 1.5),
-                        (col_x, y + foot_h + col_w * 1.5)],
-                       dxfattribs={'layer': layer, 'color': 7}, close=True)
-    bar_r = 80
-    c = 100
-    for i in range(n_bars_bot):
-        bx = x + c + (foot_w - 2 * c) * (i + 1) / (n_bars_bot + 1)
-        msp.add_circle((bx, y + c), radius=bar_r,
-                       dxfattribs={'layer': layer, 'color': 1})
-
-
-def _draw_sheet_border(msp, x, y, w, h, sheet_title, sheet_code,
-                        layer='ANNO-BORDER'):
-    msp.add_lwpolyline([(x, y), (x + w, y), (x + w, y + h), (x, y + h)],
-                       dxfattribs={'layer': layer, 'color': 7}, close=True)
-    margin = 1000
-    msp.add_lwpolyline([(x + margin, y + margin), (x + w - margin, y + margin),
-                        (x + w - margin, y + h - margin), (x + margin, y + h - margin)],
-                       dxfattribs={'layer': layer, 'color': 7}, close=True)
-    draw_label(msp, x + w / 2, y + h - margin - 800,
-               sheet_title, layer, height=450, color=7)
-    draw_label(msp, x + w - margin - 3000, y + margin + 400,
-               f"SHEET: {sheet_code}", layer, height=300, color=7)
 
 
 # ======================================================================
@@ -597,14 +516,22 @@ def best_opening_position(p1, p2, columns, opening_width, col_size=300):
     return (longest[0] + longest[1]) / 2
 
 
+def _is_balcony_room(room):
+    rt = (room.get('type') or '').lower()
+    return rt in ('living', 'bedroom_master')
+
+
+def _is_bathroom(room):
+    rt = (room.get('type') or '').lower()
+    rn = (room.get('name') or '').lower()
+    return (rt == 'bathroom' or 'bath' in rn or 'wc' in rn or 'toilet' in rn)
+
+
 # ======================================================================
 # MAIN GENERATOR
 # ======================================================================
 def build_complete_project(params):
     print("[build] === build_complete_project START ===")
-    print(f"[build] params keys: {list(params.keys())}")
-    print(f"[build] has layout_plan: {'layout_plan' in params}")
-
     seed = params.get('variation_seed') or hash((
         params.get('plot_area_m2', 200),
         params.get('street_width_m', 10),
@@ -655,17 +582,13 @@ def build_complete_project(params):
     num_floors = min(params.get('num_floors', max_floors), max_floors)
     floor_h_m = params.get('floor_height_m', 3.0)
 
-    # ----- 3. Room program -----
     layout_plan = params.get('layout_plan') or {}
     ai_rooms = layout_plan.get('rooms', [])
     stair_cell = layout_plan.get('stair_cell')
     nb = params.get('num_bedrooms', 3)
     nba = params.get('num_bathrooms', 2)
 
-    print(f"[build] layout_plan keys: {list(layout_plan.keys())}")
     print(f"[build] rooms in layout_plan: {len(ai_rooms)}")
-    if ai_rooms:
-        print(f"[build] first room: {ai_rooms[0]}")
 
     from shapely.geometry import Polygon as _ShPoly
     from shapely.ops import unary_union as _sh_union
@@ -703,7 +626,6 @@ def build_complete_project(params):
         ai_rooms = [
             {"name": "Living Room", "type": "living", "area_m2": 26, "priority": 1, "zone": "public", "needs_window": True},
             {"name": "Kitchen", "type": "kitchen", "area_m2": 10, "priority": 2, "zone": "public", "needs_window": True},
-            {"name": "Dining", "type": "dining", "area_m2": 12, "priority": 3, "zone": "public", "needs_window": True},
         ]
         for i in range(nb):
             nm = "Master Bedroom" if i == 0 else f"Bedroom {i+1}"
@@ -718,9 +640,7 @@ def build_complete_project(params):
     _pre_positioned = bool(ai_rooms) and all(
         ('x' in r and 'y' in r and 'w' in r and 'h' in r) for r in ai_rooms
     )
-    print(f"[build] _pre_positioned = {_pre_positioned}")
 
-    # ----- 4. Sizes in mm -----
     if layout_plan.get('building'):
         b = layout_plan['building']
         x0 = float(b['x'])
@@ -735,9 +655,7 @@ def build_complete_project(params):
         x0, y0 = 0.0, 0.0
         x1, y1 = L, W
 
-    print(f"[build] envelope: x0={x0} y0={y0} x1={x1} y1={y1} L={L} W={W} (mm)")
-
-    # ----- 5. Structural grid -----
+    # ----- Structural grid -----
     span_max = 5000
     nx = max(3, math.ceil(L / span_max) + 1)
     ny = max(2, math.ceil(W / span_max) + 1)
@@ -745,15 +663,11 @@ def build_complete_project(params):
     ys = np.linspace(y0, y1, ny).tolist()
     cols = [(cx, cy) for cx in xs for cy in ys]
     col_size = 300 if num_floors <= 2 else 350
-    beam_b, beam_d = 250, 600
-    slab_t = 140
-    foot = 1200 if num_floors <= 2 else 1500
 
-    # ----- 6. DXF setup -----
+    # ----- DXF setup -----
     doc = ezdxf.new(dxfversion='R2000', setup=True)
     msp = doc.modelspace()
 
-    # ---- Metric units ----
     doc.header['$INSUNITS']    = 4
     doc.header['$MEASUREMENT'] = 1
     doc.header['$LUNITS']      = 2
@@ -791,11 +705,10 @@ def build_complete_project(params):
             _ds.dxf.dimtoh   = 1
             _ds.dxf.dimtix   = 1
         except Exception as _e:
-            print(f"[dimstyle] could not fully configure Standard: {_e!r}")
+            print(f"[dimstyle] could not configure: {_e!r}")
 
     print(f"[dxf-units] INSUNITS={doc.header.get('$INSUNITS')} "
           f"MEASUREMENT={doc.header.get('$MEASUREMENT')} "
-          f"LUNITS={doc.header.get('$LUNITS')} "
           f"DIMLFAC={doc.header.get('$DIMLFAC')} DIMSCALE={doc.header.get('$DIMSCALE')}")
 
     layers_def = {
@@ -807,11 +720,7 @@ def build_complete_project(params):
         'A-FURN':     {'color': 6, 'lineweight': 9},
         'A-ROOM-TEXT':{'color': 4, 'lineweight': 13},
         'A-CORE':     {'color': 4, 'lineweight': 30},
-        'S-COLUMN':   {'color': 1, 'lineweight': 50},
-        'S-BEAM':     {'color': 5, 'lineweight': 25},
-        'S-FOOTING':  {'color': 9, 'lineweight': 40},
         'S-GRID':     {'color': 2, 'lineweight': 13},
-        'S-DETAIL':   {'color': 7, 'lineweight': 18},
         'ANNO-DIM':   {'color': 2, 'lineweight': 13},
         'ANNO-TEXT':  {'color': 7, 'lineweight': 13},
         'ANNO-TITLE': {'color': 7, 'lineweight': 25},
@@ -829,9 +738,7 @@ def build_complete_project(params):
         close=True,
     )
 
-    # ==================================================================
-    # SHEET 1 — ARCHITECTURAL PLAN
-    # ==================================================================
+    # ---- Placements ----
     wall_ext_t = 250
     int_t = 150
     corridor_h = 1300
@@ -864,33 +771,73 @@ def build_complete_project(params):
         priv_pl = _partition_rect_grid(private_zone, private_rooms, xs, ys) if private_rooms else []
         placements = pub_pl + priv_pl
 
-    print(f"[build] placements before bathroom-split: {len(placements)}")
-
-    # ---- Split bathrooms in half, give the extra to a Store ----
+    # ---- Aggressive bathroom shrink: force target size, give leftover to Store ----
     _expanded = []
-    _n_bath_split = 0
+    _n_bath = 0
     for _room, (_rx0, _ry0, _rx1, _ry1) in placements:
-        _rt = (_room.get('type') or '').lower()
-        if _rt == 'bathroom' and (_rx1 - _rx0) >= 2400:
+        if _is_bathroom(_room):
             _w = _rx1 - _rx0
-            _bath_w = int(_w * 0.5)
-            _expanded.append((_room, (_rx0, _ry0, _rx0 + _bath_w, _ry1)))
-            _expanded.append((
-                {'name': 'Store', 'type': 'store', 'needs_window': False},
-                (_rx0 + _bath_w, _ry0, _rx1, _ry1),
-            ))
-            _n_bath_split += 1
+            _h = _ry1 - _ry0
+            _bw = min(_w, 2000)
+            _bh = min(_h, 2200)
+            # Bath occupies top-left of the original cell
+            _expanded.append((_room,
+                              (_rx0, _ry1 - _bh, _rx0 + _bw, _ry1)))
+            # Bottom strip → Store
+            if _ry1 - _bh > _ry0 + 100:
+                _expanded.append((
+                    {'name': 'Store', 'type': 'store', 'needs_window': False},
+                    (_rx0, _ry0, _rx1, _ry1 - _bh),
+                ))
+            # Right strip → Store
+            if _rx0 + _bw < _rx1 - 100:
+                _expanded.append((
+                    {'name': 'Store', 'type': 'store', 'needs_window': False},
+                    (_rx0 + _bw, _ry1 - _bh, _rx1, _ry1),
+                ))
+            _n_bath += 1
         else:
             _expanded.append((_room, (_rx0, _ry0, _rx1, _ry1)))
     placements = _expanded
-    print(f"[build] bathrooms split: {_n_bath_split} → total placements now {len(placements)}")
+    print(f"[build] bathrooms shrunk: {_n_bath}, total placements: {len(placements)}")
 
+    # ---- Identify balcony rooms FIRST (before window placement) ----
+    balcony_rooms = []
+    for room, (rx0, ry0, rx1, ry1) in placements:
+        if not _is_balcony_room(room):
+            continue
+        bw_ok = (rx1 - rx0) - 800 >= 1500
+        if not bw_ok:
+            continue
+        side = None
+        if abs(ry0 - y0) < wall_ext_t + 60:
+            side = 'S'
+        elif abs(ry1 - y1) < wall_ext_t + 60:
+            side = 'N'
+        if side:
+            balcony_rooms.append((room, (rx0, ry0, rx1, ry1), side))
+
+    # ---- Exterior openings ----
     ext_openings = {'bottom': [], 'top': [], 'left': [], 'right': []}
-    door_marks = []
-    win_marks = []
-    d_idx = 0; w_idx = 0
+    balcony_openings = []  # (side, along_center, width) — WIDE door opening, no window
 
     for room, (rx0, ry0, rx1, ry1) in placements:
+        is_balcony = any(b[0] is room for b in balcony_rooms)
+        if is_balcony:
+            # Wide opening instead of window
+            for _r, (brx0, bry0, brx1, bry1), bside in balcony_rooms:
+                if _r is not room:
+                    continue
+                op_w = min(brx1 - brx0 - 600, 2400)
+                wx = (brx0 + brx1) / 2
+                if bside == 'S':
+                    balcony_openings.append(('bottom', wx - x0, op_w))
+                elif bside == 'N':
+                    balcony_openings.append(('top', wx - x0, op_w))
+                break
+            # Still allow window on the OTHER (non-balcony) exterior wall if any
+            # (skip for simplicity — one exterior wall per room in this grid)
+            continue
         if not room.get('needs_window'):
             continue
         room_w = rx1 - rx0
@@ -910,7 +857,7 @@ def build_complete_project(params):
             wy = (ry0 + ry1) / 2
             ext_openings['right'].append((wy - y0, win_v))
 
-    # ---- ALWAYS reserve a 1100 mm entrance door ----
+    # ---- Entry door — always reserve ----
     entry_door_cx = None
     for room, (rx0, ry0, rx1, ry1) in placements:
         nm = (room.get('name') or '').lower()
@@ -935,24 +882,39 @@ def build_complete_project(params):
         _c = _door_c + _d
         if _c - _door_w / 2 < 300 or _c + _door_w / 2 > (x1 - x0) - 300:
             continue
+        _hit = False
+        for _s, _gc, _gw in balcony_openings:
+            if _s == 'bottom' and abs(_c - _gc) < (_gw + _door_w) / 2 + 200:
+                _hit = True; break
+        if _hit: continue
         if not any(abs(_c - gc) < (gw + _door_w) / 2 + 200
                    for gc, gw in ext_openings['bottom']):
             _final_c = _c
             break
     entry_door_cx = x0 + _final_c
     ext_openings['bottom'].append((_final_c, _door_w))
-    print(f"[build] entry door placed at x={entry_door_cx:.0f} width={_door_w}")
+    print(f"[build] entry door at x={entry_door_cx:.0f} w={_door_w}")
+
+    # ---- Combine window gaps + balcony door gaps for wall cutting ----
+    bottom_gaps = ext_openings['bottom'][:]
+    top_gaps    = ext_openings['top'][:]
+    left_gaps   = ext_openings['left'][:]
+    right_gaps  = ext_openings['right'][:]
+    for _s, _gc, _gw in balcony_openings:
+        if _s == 'bottom': bottom_gaps.append((_gc, _gw))
+        elif _s == 'top':  top_gaps.append((_gc, _gw))
 
     half_ext = wall_ext_t / 2
     _add_wall_rect_from_line((x0 + half_ext, y0), (x0 + half_ext, y1),
-                             wall_ext_t, gaps=ext_openings['left'])
+                             wall_ext_t, gaps=left_gaps)
     _add_wall_rect_from_line((x1 - half_ext, y0), (x1 - half_ext, y1),
-                             wall_ext_t, gaps=ext_openings['right'])
+                             wall_ext_t, gaps=right_gaps)
     _add_wall_rect_from_line((x0, y0 + half_ext), (x1, y0 + half_ext),
-                             wall_ext_t, gaps=ext_openings['bottom'])
+                             wall_ext_t, gaps=bottom_gaps)
     _add_wall_rect_from_line((x0, y1 - half_ext), (x1, y1 - half_ext),
-                             wall_ext_t, gaps=ext_openings['top'])
+                             wall_ext_t, gaps=top_gaps)
 
+    # ---- Draw windows (skip entry + balcony gaps) ----
     for wx, ww in ext_openings['bottom']:
         if abs(wx - (entry_door_cx - x0)) < 10:
             continue
@@ -1081,17 +1043,18 @@ def build_complete_project(params):
             _draw_sliding_door(msp, door_cx, door_cy, DOOR_W, int_t,
                                is_horizontal=True)
             door_type = "Sliding"
-
         d_idx += 1
         mark = f"D{d_idx}"
         door_marks.append((mark, door_type, DOOR_W, 2100, 1, room['name']))
 
-    # ---- Entry door symbol ----
+    # ---- Entry door symbol (INWARD swing + label) ----
     if entry_door_cx is not None:
         draw_door(msp, entry_door_cx, y0 + wall_ext_t / 2, 1100, wall_ext_t,
-                  is_horizontal=True, flip=True)
+                  is_horizontal=True, flip=False)
+        draw_label(msp, entry_door_cx, y0 - 800, "ENTRY", 'A-DOOR', 260, 3)
+        door_marks.append(("D-ENTRY", "Single Leaf", 1100, 2100, 1, "Apartment Entry"))
 
-    # ---- Interior walls: cluster, merge, draw ----
+    # ---- Interior walls ----
     TOL = 400.0
 
     def _cluster(values):
@@ -1114,14 +1077,10 @@ def build_complete_project(params):
     all_vx = []
     all_hy = []
     for room, (rx0, ry0, rx1, ry1) in placements:
-        if rx0 > x0 + wall_ext_t:
-            all_vx.append(rx0)
-        if rx1 < x1 - wall_ext_t:
-            all_vx.append(rx1)
-        if ry0 > y0 + wall_ext_t:
-            all_hy.append(ry0)
-        if ry1 < y1 - wall_ext_t:
-            all_hy.append(ry1)
+        if rx0 > x0 + wall_ext_t: all_vx.append(rx0)
+        if rx1 < x1 - wall_ext_t: all_vx.append(rx1)
+        if ry0 > y0 + wall_ext_t: all_hy.append(ry0)
+        if ry1 < y1 - wall_ext_t: all_hy.append(ry1)
 
     x_cluster = _cluster(all_vx)
     y_cluster = _cluster(all_hy)
@@ -1131,17 +1090,13 @@ def build_complete_project(params):
 
     for room, (rx0, ry0, rx1, ry1) in placements:
         if rx0 > x0 + wall_ext_t:
-            cx = x_cluster[rx0]
-            vert_by_x.setdefault(cx, []).append((ry0, ry1))
+            vert_by_x.setdefault(x_cluster[rx0], []).append((ry0, ry1))
         if rx1 < x1 - wall_ext_t:
-            cx = x_cluster[rx1]
-            vert_by_x.setdefault(cx, []).append((ry0, ry1))
+            vert_by_x.setdefault(x_cluster[rx1], []).append((ry0, ry1))
         if ry0 > y0 + wall_ext_t:
-            cy = y_cluster[ry0]
-            horiz_by_y.setdefault(cy, []).append((rx0, rx1))
+            horiz_by_y.setdefault(y_cluster[ry0], []).append((rx0, rx1))
         if ry1 < y1 - wall_ext_t:
-            cy = y_cluster[ry1]
-            horiz_by_y.setdefault(cy, []).append((rx0, rx1))
+            horiz_by_y.setdefault(y_cluster[ry1], []).append((rx0, rx1))
 
     def _merge_ranges(ranges, tol=60.0):
         if not ranges:
@@ -1158,8 +1113,7 @@ def build_complete_project(params):
     door_match_tol = TOL + 100.0
     for y, ranges in horiz_by_y.items():
         for xa, xb in _merge_ranges(ranges):
-            if xb - xa < 60:
-                continue
+            if xb - xa < 60: continue
             seg_gaps = []
             for dcx, dcy, dw in interior_door_gaps:
                 if abs(dcy - y) <= door_match_tol and (xa - 50) <= dcx <= (xb + 50):
@@ -1168,41 +1122,34 @@ def build_complete_project(params):
                 _add_wall_rect_from_line((xa, y), (xb, y), int_t, gaps=seg_gaps)
             else:
                 r = _wall_rect((xa, y), (xb, y), int_t)
-                if r:
-                    wall_polys.append(_ShPoly(r))
+                if r: wall_polys.append(_ShPoly(r))
 
     for x, ranges in vert_by_x.items():
         for ya, yb in _merge_ranges(ranges):
-            if yb - ya < 60:
-                continue
+            if yb - ya < 60: continue
             r = _wall_rect((x, ya), (x, yb), int_t)
-            if r:
-                wall_polys.append(_ShPoly(r))
+            if r: wall_polys.append(_ShPoly(r))
 
-    # ---- Union all walls ----
     if wall_polys:
         try:
             merged = _sh_union(wall_polys)
             geoms = list(merged.geoms) if hasattr(merged, 'geoms') else [merged]
             for g in geoms:
-                if g.is_empty:
-                    continue
+                if g.is_empty: continue
                 try:
                     outer = [(float(x), float(y)) for x, y in g.exterior.coords]
                     msp.add_lwpolyline(outer, close=True,
-                                       dxfattribs={'layer': 'A-WALL-EXT',
-                                                   'color': 7})
+                                       dxfattribs={'layer': 'A-WALL-EXT', 'color': 7})
                     for hole in g.interiors:
                         hole_pts = [(float(x), float(y)) for x, y in hole.coords]
                         msp.add_lwpolyline(hole_pts, close=True,
-                                           dxfattribs={'layer': 'A-WALL-EXT',
-                                                       'color': 7})
+                                           dxfattribs={'layer': 'A-WALL-EXT', 'color': 7})
                 except Exception as e:
                     print(f"[walls] draw geom failed: {e!r}")
         except Exception as e:
             print(f"[walls] union failed: {e!r}")
 
-    # ---- Room labels + furniture + schedules ----
+    # ---- Furniture + labels + schedules ----
     room_schedule = []
     for i, (room, (rx0, ry0, rx1, ry1)) in enumerate(placements):
         w = rx1 - rx0
@@ -1221,27 +1168,16 @@ def build_complete_project(params):
                               f"{perimeter:.1f}", "Tiles", "Paint"))
 
     # ---- Balconies ----
-    balconies_drawn = 0
-    for room, (rx0, ry0, rx1, ry1) in placements:
-        rt = (room.get('type') or '').lower()
-        if rt not in ('living', 'bedroom_master'):
-            continue
+    for room, (rx0, ry0, rx1, ry1), bside in balcony_rooms:
         balcony_w = min(rx1 - rx0 - 800, 3000)
-        if balcony_w < 1500:
-            print(f"[balcony] skip {room['name']}: width too small ({balcony_w:.0f})")
-            continue
         bcx = (rx0 + rx1) / 2
-        if abs(ry0 - (y0 + wall_ext_t)) < 400:
+        if bside == 'S':
             _draw_balcony(msp, bcx - balcony_w/2, bcx + balcony_w/2,
                           y0, 'S', depth=1200)
-            balconies_drawn += 1
-            print(f"[balcony] S drawn for {room['name']}")
-        elif abs(ry1 - (y1 - wall_ext_t)) < 400:
+        else:
             _draw_balcony(msp, bcx - balcony_w/2, bcx + balcony_w/2,
                           y1, 'N', depth=1200)
-            balconies_drawn += 1
-            print(f"[balcony] N drawn for {room['name']}")
-    print(f"[balcony] total drawn: {balconies_drawn}")
+    print(f"[balcony] total drawn: {len(balcony_rooms)}")
 
     # ---- Stair core ----
     stair_inset = int_t / 2 + 20
@@ -1254,12 +1190,9 @@ def build_complete_project(params):
         scy0 = float(stair_cell['y']) + stair_inset
         scx1 = float(stair_cell['x']) + float(stair_cell['w']) - stair_inset
         scy1 = float(stair_cell['y']) + float(stair_cell['h']) - stair_inset
-        scx0 = max(scx0, inner_x0)
-        scy0 = max(scy0, inner_y0)
-        scx1 = min(scx1, inner_x1)
-        scy1 = min(scy1, inner_y1)
-        core_x = scx0
-        core_y = scy0
+        scx0 = max(scx0, inner_x0); scy0 = max(scy0, inner_y0)
+        scx1 = min(scx1, inner_x1); scy1 = min(scy1, inner_y1)
+        core_x, core_y = scx0, scy0
         core_w = max(600.0, scx1 - scx0)
         core_d = max(600.0, scy1 - scy0)
     else:
@@ -1314,71 +1247,7 @@ def build_complete_project(params):
     _draw_north_arrow(msp, x0 + L + 2500, y1 - 1000, size=1400)
 
     # ==================================================================
-    # SHEET 2 — STRUCTURAL PLAN
-    # ==================================================================
-    sy = -40000
-    sx = 0
-
-    col_labels = []
-    idx = 0
-    for cy in ys:
-        for cx in xs:
-            idx += 1
-            label = f"C{idx}"
-            col_labels.append((label, cx, cy))
-            msp.add_lwpolyline(
-                [(sx+cx-col_size/2, sy+cy-col_size/2),
-                 (sx+cx+col_size/2, sy+cy-col_size/2),
-                 (sx+cx+col_size/2, sy+cy+col_size/2),
-                 (sx+cx-col_size/2, sy+cy+col_size/2)],
-                dxfattribs={'layer': 'S-COLUMN', 'color': 1}, close=True)
-            draw_label(msp, sx+cx, sy+cy, label, 'S-COLUMN', 160, 1)
-
-    draw_column_grid_bubbles(msp, sx+x0, sy+y0, L, W, xs, ys, col_size)
-
-    beam_labels = []
-    bidx = 0
-    for j, cy in enumerate(ys):
-        for i in range(len(xs)-1):
-            bidx += 1
-            p1 = (sx+xs[i], sy+cy)
-            p2 = (sx+xs[i+1], sy+cy)
-            for off_y in (-beam_b/2, beam_b/2):
-                msp.add_line((p1[0], p1[1]+off_y), (p2[0], p2[1]+off_y),
-                             dxfattribs={'layer': 'S-BEAM', 'color': 5})
-            beam_labels.append((f"B{bidx}", (p1[0]+p2[0])/2, cy+sy))
-    for i, cx in enumerate(xs):
-        for j in range(len(ys)-1):
-            bidx += 1
-            p1 = (sx+cx, sy+ys[j])
-            p2 = (sx+cx, sy+ys[j+1])
-            for off_x in (-beam_b/2, beam_b/2):
-                msp.add_line((p1[0]+off_x, p1[1]), (p2[0]+off_x, p2[1]),
-                             dxfattribs={'layer': 'S-BEAM', 'color': 5})
-            beam_labels.append((f"B{bidx}", cx+sx, (p1[1]+p2[1])/2))
-
-    for label, lx, ly in beam_labels[:40]:
-        draw_label(msp, lx, ly, label, 'S-BEAM', 120, 5)
-
-    fidx = 0
-    foot_labels = []
-    for cy in ys:
-        for cx in xs:
-            fidx += 1
-            label = f"F{fidx}"
-            foot_labels.append((label, cx, cy))
-            msp.add_lwpolyline(
-                [(sx+cx-foot/2, sy+cy-foot/2), (sx+cx+foot/2, sy+cy-foot/2),
-                 (sx+cx+foot/2, sy+cy+foot/2), (sx+cx-foot/2, sy+cy+foot/2)],
-                dxfattribs={'layer': 'S-FOOTING', 'color': 9, 'linetype': 'DASHED'}, close=True)
-            draw_label(msp, sx+cx+foot/2+400, sy+cy, label, 'S-FOOTING', 140, 9)
-
-    draw_label(msp, sx + x0 + L/2, sy + y1 + 3000,
-               "FOUNDATION & ROOF FRAMING PLAN  —  SCALE 1:100",
-               'ANNO-TITLE', 350, 7)
-
-    # ==================================================================
-    # SHEET 3 — SCHEDULES
+    # SCHEDULES SHEET (right of plan)
     # ==================================================================
     tb_x = x0 + L + 6000
     tb_y = y1
@@ -1409,26 +1278,26 @@ def build_complete_project(params):
     draw_table(msp, tb_x, win_y, [700, 1500, 800, 800, 500, 2000], win_rows)
 
     # ==================================================================
-    # SHEET 4 — BOQ + STRUCTURAL NOTES
+    # BOQ SHEET (below schedule)
     # ==================================================================
-    bx = sx + x0 + L + 6000
-    by = sy + y1
+    bx = 0
+    by = win_y - (len(win_rows) + 2) * 350 - 2000
 
     draw_label(msp, bx + 5000, by + 500, "BILL OF QUANTITIES (EGP)",
                'ANNO-TITLE', 300, 7)
     num_cols = len(cols)
-    slab_vol = (L/1000)*(W/1000)*(slab_t/1000)*num_floors
+    slab_vol = (L/1000)*(W/1000)*(0.14)*num_floors
     col_vol = num_cols * (col_size/1000)**2 * floor_h_m * num_floors
     beam_len_total = 0
     for _ in range(nx-1):
         beam_len_total += (ny) * (xs[1]-xs[0])/1000
     for _ in range(ny-1):
         beam_len_total += (nx) * (ys[1]-ys[0])/1000
-    beam_vol = beam_len_total * (beam_b/1000) * (beam_d/1000) * num_floors
-    foot_vol = num_cols * (foot/1000)**2 * 0.5
+    beam_vol = beam_len_total * 0.25 * 0.6 * num_floors
+    foot_vol = num_cols * 1.2**2 * 0.5
     total_concrete = slab_vol + col_vol + beam_vol + foot_vol
     rebar_ton = total_concrete * 0.110
-    formwork = beam_len_total * (beam_d/1000) * 2 * num_floors + col_vol * 8
+    formwork = beam_len_total * 0.6 * 2 * num_floors + col_vol * 8
     wall_len = 0
     for _r, (rx0, ry0, rx1, ry1) in placements:
         wall_len += 2*((rx1-rx0)+(ry1-ry0))/1000
@@ -1444,8 +1313,8 @@ def build_complete_project(params):
              ("Brick Masonry", "nos", brick_count, 2.5),
              ("Floor Tiling", "m2", flooring_area, 150),
              ("Wall Painting", "m2", paint_area, 30),
-             ("Windows Aluminum", "nos", len(win_rows)-1, 2000),
-             ("Doors Wood", "nos", len(door_rows)-1, 3000)]
+             ("Windows Aluminum", "nos", max(0, len(win_rows)-1), 2000),
+             ("Doors Wood", "nos", max(0, len(door_rows)-1), 3000)]
     grand = 0
     for name, unit, qty, rate in rates:
         amount = qty * rate
@@ -1455,86 +1324,19 @@ def build_complete_project(params):
     draw_table(msp, bx, by, [2600, 800, 900, 1000, 1600], boq_rows)
 
     ny_y = by - (len(boq_rows) + 2) * 350 - 500
-    draw_label(msp, bx + 3000, ny_y + 500, "STRUCTURAL NOTES (ECP 203)",
+    draw_label(msp, bx + 3000, ny_y + 500, "GENERAL NOTES",
                'ANNO-TITLE', 300, 7)
     notes = [
         "1. All dimensions are in millimetres unless noted otherwise.",
         "2. Concrete grade: C30/37 for columns & beams, C25/30 for slabs.",
-        f"3. Column size: {col_size} x {col_size} mm (based on {num_floors} floors).",
-        f"4. Beam size: {beam_b} x {beam_d} mm typical.",
-        f"5. Slab thickness: {slab_t} mm (solid slab, max span 5.0 m).",
-        f"6. Footing size: {foot} x {foot} mm x 500 mm depth typical.",
-        "7. Reinforcement: Grade 400/600 per ECP 203.",
-        "8. Cover: 25 mm slabs, 40 mm columns, 50 mm footings.",
-        "9. Max clear span: 5000 mm (ECP 203 limit for RC solid slab).",
-        "10. Setbacks per Egyptian Building Law 119/2008.",
-        f"11. Total plot area: {plot_area:.1f} m2. Coverage: {coverage*100:.0f}%.",
-        f"12. Max permitted floors: {max_floors} (street width {sw} m).",
+        f"3. Column size: {col_size} x {col_size} mm.",
+        "4. Reinforcement: Grade 400/600 per ECP 203.",
+        "5. Setbacks per Egyptian Building Law 119/2008.",
+        f"6. Total plot area: {plot_area:.1f} m2. Coverage: {coverage*100:.0f}%.",
+        f"7. Max permitted floors: {max_floors} (street width {sw} m).",
     ]
     notes_rows = [("Note",)] + [(n,) for n in notes]
     draw_table(msp, bx, ny_y, [9000], notes_rows, row_h=400)
-
-    # ==================================================================
-    # SHEET 5 — STRUCTURAL SCHEDULES
-    # ==================================================================
-    sch_x = bx
-    sch_y = ny_y - (len(notes_rows) + 3) * 350 - 1500
-
-    draw_label(msp, sch_x + 4000, sch_y + 500, "COLUMN SCHEDULE",
-               'ANNO-TITLE', 300, 7)
-    col_sched = [("Mark", "Size (mm)", "Main Bars", "Stirrups", "Qty")]
-    n_bars_col = 8
-    for i, (label, cx, cy) in enumerate(col_labels[:20]):
-        col_sched.append((
-            label, f"{col_size}x{col_size}",
-            f"{n_bars_col}D16", "D8@150", "1",
-        ))
-    draw_table(msp, sch_x, sch_y, [1200, 1600, 1400, 1400, 800], col_sched)
-
-    beam_y2 = sch_y - (len(col_sched) + 3) * 350 - 1000
-    draw_label(msp, sch_x + 4000, beam_y2 + 500, "BEAM SCHEDULE",
-               'ANNO-TITLE', 300, 7)
-    beam_sched = [("Mark", "Size (mm)", "Top Bars", "Bottom Bars", "Stirrups", "Span (m)")]
-    for i in range(min(12, len(beam_labels))):
-        bsize = f"{beam_b}x{beam_d}"
-        beam_sched.append((f"B{i+1}", bsize, "2D16", "3D16", "D8@150", "5.00"))
-    draw_table(msp, sch_x, beam_y2,
-               [1000, 1500, 1300, 1300, 1400, 1100], beam_sched)
-
-    foot_y = beam_y2 - (len(beam_sched) + 3) * 350 - 1000
-    draw_label(msp, sch_x + 4000, foot_y + 500, "FOOTING SCHEDULE",
-               'ANNO-TITLE', 300, 7)
-    foot_sched = [("Mark", "Size (mm)", "Depth (mm)", "Bottom R/F", "Qty")]
-    for i in range(min(12, len(foot_labels))):
-        foot_sched.append((f"F{i+1}", f"{foot}x{foot}", "500",
-                           "D12@150 both ways", "1"))
-    draw_table(msp, sch_x, foot_y,
-               [1200, 1700, 1400, 2600, 800], foot_sched)
-
-    det_x = sch_x
-    det_y = foot_y - (len(foot_sched) + 3) * 350 - 2500
-    draw_label(msp, det_x + 2500, det_y + 3500, "TYPICAL COLUMN SECTION  (1:20)",
-               'ANNO-TITLE', 300, 7)
-    _draw_column_section_detail(msp, det_x, det_y, col_size * 2.5, col_size * 2.5,
-                                 n_bars=8, bar_dia=16, stirrup_dia=8)
-    draw_label(msp, det_x + col_size * 1.25, det_y - 700,
-               f"{col_size}x{col_size} 8D16  D8@150 c/c", 'ANNO-TEXT', 220, 7)
-
-    bd_x = det_x + 4000
-    draw_label(msp, bd_x + 2500, det_y + 3500, "TYPICAL BEAM SECTION  (1:20)",
-               'ANNO-TITLE', 300, 7)
-    _draw_beam_section_detail(msp, bd_x, det_y, beam_b * 3.5, beam_d * 1.8,
-                              top_bars=2, bot_bars=3, stirrup_dia=8)
-    draw_label(msp, bd_x + beam_b * 1.75, det_y - 700,
-               f"{beam_b}x{beam_d} 2D16 top, 3D16 bot", 'ANNO-TEXT', 220, 7)
-
-    ft_x = bd_x + 4000
-    draw_label(msp, ft_x + 2500, det_y + 3500, "TYPICAL FOOTING SECTION  (1:20)",
-               'ANNO-TITLE', 300, 7)
-    _draw_footing_section_detail(msp, ft_x, det_y, foot * 1.6, 500,
-                                  col_size, n_bars_bot=8)
-    draw_label(msp, ft_x + foot * 0.8, det_y - 700,
-               f"{foot}x{foot}x500  D12@150 B/W", 'ANNO-TEXT', 220, 7)
 
     # ==================================================================
     # TITLE BLOCK
@@ -1567,121 +1369,11 @@ def build_complete_project(params):
                f"PLOT {plot_area:.1f} m2 | FLOORS {num_floors} | COVERAGE {coverage*100:.0f}% | SCALE 1:100 (mm)",
                'ANNO-TEXT', 240, 7)
 
-    # ==================================================================
-    # WRITE DXF — ASCII for maximum AutoCAD compatibility
-    # ==================================================================
+    # ---- Write DXF ----
     dxf_buf = io.BytesIO()
     doc.write(dxf_buf, fmt='bin')
     dxf_bytes = dxf_buf.getvalue()
     print(f"[build] DXF written, size={len(dxf_bytes)} bytes, fmt=BIN")
 
     boq_df = pd.DataFrame([{'Item': n, 'Quantity': round(q, 2), 'Unit': u,
-                            'Unit Rate (EGP)': r, 'Total Cost (EGP)': round(q*r, 2)}
-                           for n, u, q, r in rates])
-
-    layout_info = {
-        'plot_area': round(plot_area, 2),
-        'street_width': sw,
-        'location': params.get('location', ''),
-        'max_floors': max_floors,
-        'num_floors': num_floors,
-        'footprint_area': round((L/1000)*(W/1000), 2),
-        'building_width': round(W/1000, 2),
-        'building_length': round(L/1000, 2),
-        'front_setback': front_sb,
-        'rear_setback': rear_sb,
-        'side_setback': side_sb,
-        'num_rooms': len(placements),
-        'num_columns': len(cols),
-        'coverage_ratio': f"{coverage*100:.0f}%",
-    }
-    print("[build] === build_complete_project END ===")
-    return {'dxf': dxf_bytes, 'boq': boq_df.to_dict('records'), 'info': layout_info}
-
-
-# ======================================================================
-# ADDITIVE HIGH-TRAFFIC LAYER
-# ======================================================================
-def _strip_thumbnail_section(text: str) -> str:
-    lines = text.splitlines()
-    out = []
-    i = 0
-    n = len(lines)
-    while i < n:
-        if (i + 3 < n
-                and lines[i].strip() == '0'
-                and lines[i + 1].strip() == 'SECTION'
-                and lines[i + 2].strip() == '2'
-                and lines[i + 3].strip().upper() == 'THUMBNAILIMAGE'):
-            i += 4
-            while i < n:
-                if (lines[i].strip() == '0'
-                        and i + 1 < n
-                        and lines[i + 1].strip() == 'ENDSEC'):
-                    i += 2
-                    break
-                i += 1
-            continue
-        out.append(lines[i])
-        i += 1
-    return '\n'.join(out)
-
-
-def _open_dxf_doc_from_bytes(doc_bytes):
-    if isinstance(doc_bytes, str):
-        doc_bytes = doc_bytes.encode('utf-8')
-    head = doc_bytes[:32]
-    is_binary = head.startswith(b'AutoCAD Binary DXF') or (b'\x00' in head)
-    print(f"[dxf] head={head!r} binary={is_binary}")
-    if is_binary:
-        try:
-            return ezdxf.read(io.BytesIO(doc_bytes))
-        except Exception as e:
-            print(f"[dxf] binary read failed: {e!r}; trying recover")
-            from ezdxf import recover as _recover
-            return _recover.read(io.BytesIO(doc_bytes))
-    try:
-        text = doc_bytes.decode('utf-8')
-    except UnicodeDecodeError:
-        text = doc_bytes.decode('latin-1', errors='replace')
-    cleaned = _strip_thumbnail_section(text)
-    try:
-        return ezdxf.read(io.StringIO(cleaned))
-    except Exception as e:
-        print(f"[dxf] ascii read failed: {e!r}; trying recover")
-        from ezdxf import recover as _recover
-        try:
-            return _recover.read(io.StringIO(cleaned))
-        except Exception as e2:
-            print(f"[dxf] recover(StringIO) failed: {e2!r}; trying raw bytes")
-            return _recover.read(io.BytesIO(doc_bytes))
-
-
-def _extract_areas_from_dxf_worker(doc_bytes, unit, workflow):
-    doc = _open_dxf_doc_from_bytes(doc_bytes)
-    return extract_areas_from_dxf(doc, unit=unit, workflow=workflow)
-
-
-def _detect_dxf_layers_worker(doc_bytes):
-    doc = _open_dxf_doc_from_bytes(doc_bytes)
-    result = detect_dxf_layers(doc)
-    for layer, info in result.items():
-        if isinstance(info.get('types'), set):
-            info['types'] = sorted(info['types'])
-    return result
-
-
-async def detect_dxf_layers_async(doc_bytes):
-    from config import cpu_bound_limited
-    return await cpu_bound_limited(_detect_dxf_layers_worker, doc_bytes)
-
-
-async def extract_areas_from_dxf_async(doc_bytes, unit='mm', workflow='architectural'):
-    from config import cpu_bound_limited
-    return await cpu_bound_limited(_extract_areas_from_dxf_worker,
-                                   doc_bytes, unit, workflow)
-
-
-async def build_complete_project_async(params):
-    from config import cpu_bound_limited
-    return await cpu_bound_limited(build_complete_project, params)
+                            'Unit Rate (EGP)': r, 'Total Cost (EGP)': round(q
