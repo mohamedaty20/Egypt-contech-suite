@@ -36,29 +36,41 @@ def _overlap_area(a, b):
     return max(0.0, dx) * max(0.0, dy)
 
 
-def _shared_edge(room, target, tol=200):
+def _shared_edge(room, target, tol=200, min_shared_len=400):
     """
-    Return a list of direction strings where `room` touches `target`.
+    Return a list of direction strings where `room` shares a wall with `target`.
     Directions are the room's own wall: 'N','S','E','W'.
+
+    Rule:
+      - A shared HORIZONTAL edge requires the x-ranges to overlap.
+      - A shared VERTICAL   edge requires the y-ranges to overlap.
+      - The coordinate lines (ry0/ry1 vs ty0/ty1 or rx0/rx1 vs tx0/tx1)
+        must be within `tol` mm of each other.
+      - The overlap along the shared line must be at least `min_shared_len` mm.
     """
     rx0, ry0, rx1, ry1 = room
     tx0, ty0, tx1, ty1 = target
     edges = []
 
-    # Vertical overlap for horizontal edges
-    y_overlap = min(ry1, ty1) - max(ry0, ty0)
+    # How much the x-ranges overlap (perpendicular to a horizontal shared edge)
     x_overlap = min(rx1, tx1) - max(rx0, tx0)
+    # How much the y-ranges overlap (perpendicular to a vertical shared edge)
+    y_overlap = min(ry1, ty1) - max(ry0, ty0)
 
-    if y_overlap > 400:  # meaningful horizontal edge contact
-        if abs(ry0 - ty1) <= tol:      # room's S wall touches target's N wall
+    # Horizontal edges (room above/below target)
+    if x_overlap >= min_shared_len:
+        if abs(ry0 - ty1) <= tol:       # room's S wall meets target's N wall
             edges.append('S')
-        if abs(ry1 - ty0) <= tol:      # room's N wall touches target's S wall
+        if abs(ry1 - ty0) <= tol:       # room's N wall meets target's S wall
             edges.append('N')
-    if x_overlap > 400:
-        if abs(rx0 - tx1) <= tol:      # room's W wall touches target's E wall
+
+    # Vertical edges (room beside target)
+    if y_overlap >= min_shared_len:
+        if abs(rx0 - tx1) <= tol:       # room's W wall meets target's E wall
             edges.append('W')
-        if abs(rx1 - tx0) <= tol:      # room's E wall touches target's W wall
+        if abs(rx1 - tx0) <= tol:       # room's E wall meets target's W wall
             edges.append('E')
+
     return edges
 
 
