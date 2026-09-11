@@ -687,6 +687,41 @@ def build_complete_project(params):
     stair_cell = layout_plan.get('stair_cell')
     nb = params.get('num_bedrooms', 3)
     nba = params.get('num_bathrooms', 2)
+    # Wall collection — every wall goes into this list as a shapely polygon.
+    # At the end we union them all and draw the merged outline, so corners
+    # and T-junctions render as solid connections, not crossing rectangles.
+    from shapely.geometry import Polygon as _ShPoly
+    from shapely.ops import unary_union as _sh_union
+    wall_polys = []
+
+    def _add_wall_rect_from_line(p1, p2, thickness, gaps=None):
+        """Split a wall line into rects (with optional gaps) and add them."""
+        x1, y1 = p1; x2, y2 = p2
+        L = math.hypot(x2 - x1, y2 - y1)
+        if L < 1:
+            return
+        if not gaps:
+            r = _wall_rect(p1, p2, thickness)
+            if r:
+                wall_polys.append(_ShPoly(r))
+            return
+        gaps_sorted = sorted(gaps, key=lambda g: g[0])
+        cursor = 0.0
+        for gc, gw in gaps_sorted:
+            seg_start = cursor
+            seg_end = max(cursor, gc - gw / 2)
+            if seg_end - seg_start > 20:
+                a = (x1 + (x2 - x1) * seg_start / L, y1 + (y2 - y1) * seg_start / L)
+                b = (x1 + (x2 - x1) * seg_end / L, y1 + (y2 - y1) * seg_end / L)
+                r = _wall_rect(a, b, thickness)
+                if r:
+                    wall_polys.append(_ShPoly(r))
+            cursor = max(cursor, gc + gw / 2)
+        if cursor < L - 20:
+            a = (x1 + (x2 - x1) * cursor / L, y1 + (y2 - y1) * cursor / L)
+            r = _wall_rect(a, (x2, y2), thickness)
+            if r:
+                wall_polys.append(_ShPoly(r))
 
     if not ai_rooms:
         ai_rooms = [
@@ -835,14 +870,14 @@ def build_complete_project(params):
             ext_openings['right'].append((wy, 1200))
 
     half_ext = wall_ext_t / 2
-    draw_wall_seg(msp, (x0, y0 + half_ext), (x1, y0 + half_ext), wall_ext_t,
-                  'A-WALL-EXT', 7, gaps=ext_openings['bottom'])
-    draw_wall_seg(msp, (x1 - half_ext, y0), (x1 - half_ext, y1), wall_ext_t,
-                  'A-WALL-EXT', 7, gaps=ext_openings['right'])
-    draw_wall_seg(msp, (x0, y1 - half_ext), (x1, y1 - half_ext), wall_ext_t,
-                  'A-WALL-EXT', 7, gaps=ext_openings['top'])
-    draw_wall_seg(msp, (x0 + half_ext, y0), (x0 + half_ext, y1), wall_ext_t,
-                  'A-WALL-EXT', 7, gaps=ext_openings['left'])
+    _add_wall_rect_from_line((x0 + half_ext, y0), (x0 + half_ext, y1),
+                             wall_ext_t, gaps=ext_openings['left'])
+    _add_wall_rect_from_line((x1 - half_ext, y0), (x1 - half_ext, y1),
+                             wall_ext_t, gaps=ext_openings['right'])
+    _add_wall_rect_from_line((x0, y0 + half_ext), (x1, y0 + half_ext),
+                             wall_ext_t, gaps=ext_openings['bottom'])
+    _add_wall_rect_from_line((x0, y1 - half_ext), (x1, y1 - half_ext),
+                             wall_ext_t, gaps=ext_openings['top'])
 
     for wx, ww in ext_openings['bottom']:
         draw_window(msp, wx, y0 + half_ext, ww, wall_ext_t, is_horizontal=True)
@@ -1035,23 +1070,45 @@ def build_complete_project(params):
                 merged.append([a, b])
         return [(a, b) for a, b in merged]
 
-    # Horizontal walls — one merged rectangle per collinear run
+    # Interior walls — collect into wall_polys for the union step
     for y, ranges in horiz_by_y.items():
         for xa, xb in _merge_ranges(ranges):
             if xb - xa < 60:
                 continue
             r = _wall_rect((xa, y), (xb, y), int_t)
             if r:
-                msp.add_lwpolyline(r, dxfattribs={'layer': 'A-WALL-INT', 'color': 8})
+                wall_polys.append(_ShPoly(r))
 
-    # Vertical walls — one merged rectangle per collinear run
     for x, ranges in vert_by_x.items():
         for ya, yb in _merge_ranges(ranges):
             if yb - ya < 60:
                 continue
             r = _wall_rect((x, ya), (x, yb), int_t)
             if r:
-                msp.add_lwpolyline(r, dxfattribs={'layer': 'A-WALL-INT', 'color': 8})
+                wall_polys.append(_ShPoly(r))
+
+    # ---- Union all walls and draw the merged outline ----
+    if wall_polys:
+        try:
+            merged = _sh_union(wall_polys)
+            geoms = list(merged.geoms) if hasattr(merged, 'geoms') else [merged]
+            for g in geoms:
+                if g.is_empty:
+                    continue
+                try:
+                    outer = [(float(x), float(y)) for x, y in g.exterior.coords]
+                    msp.add_lwpolyline(outer, close=True,
+                                       dxfattribs={'layer': 'A-WALL-EXT',
+                                                   'color': 7})
+                    for hole in g.interiors:
+                        hole_pts = [(float(x), float(y)) for x, y in hole.coords]
+                        msp.add_lwpolyline(hole_pts, close=True,
+                                           dxfattribs={'layer': 'A-WALL-EXT',
+                                                       'color': 7})
+                except Exception as e:
+                    print(f"[walls] draw geom failed: {e!r}")
+        except Exception as e:
+            print(f"[walls] union failed: {e!r}")
 
     # Furniture + room labels
     room_schedule = []
