@@ -64,6 +64,12 @@ def build_grid(plot_data):
     # Upper zone: 4 cells side by side
     upper = split_row(upper_y0, upper_y1, 4, bx, bw, 'U', 'upper')
 
+    # Reserve the middle upper cell for the staircase — it will not
+    # receive a room assignment. The DXF layer draws the stair steps
+    # inside it, and no door is drawn on that cell's corridor wall.
+    if len(upper) >= 3:
+        upper[len(upper) // 2]['is_stair'] = True
+
     return {
         'building':   {'x': bx, 'y': by, 'w': bw, 'h': bh},
         'corridor':   corridor,
