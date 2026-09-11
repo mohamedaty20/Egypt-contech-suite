@@ -661,6 +661,10 @@ Return ONLY this JSON structure, no prose, no markdown fences:
     by_id = {c['id']: c for c in cells}
     seen = set()
     rooms = []
+    # Reserve stair cells — they don't get room assignments
+    for c in cells:
+        if c.get('is_stair'):
+            seen.add(c['id'])
     for a in data.get('assignments', []):
         cid = a.get('cell')
         if cid not in by_id or cid in seen:
@@ -683,7 +687,7 @@ Return ONLY this JSON structure, no prose, no markdown fences:
 
     # Fill any unassigned cells with a generic bedroom so the plan is complete
     for c in cells:
-        if c['id'] not in seen:
+        if c['id'] not in seen and not c.get('is_stair'):
             is_lower = c['side'] == 'lower'
             rooms.append({
                 'name': f"Room {c['id']}",
@@ -698,10 +702,12 @@ Return ONLY this JSON structure, no prose, no markdown fences:
     if not rooms:
         return None
 
+    stair_cell = next((c for c in cells if c.get('is_stair')), None)
     return {
         'building': grid['building'],
         'corridor': grid['corridor'],
         'entry_wall': grid['entry_wall'],
+        'stair_cell': stair_cell,
         'rooms': rooms,
         '_style': style_name,
         '_design_notes': data.get('design_notes', ''),
