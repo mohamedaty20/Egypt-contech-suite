@@ -709,10 +709,21 @@ def build_complete_project(params):
     )
 
     # ----- 4. Sizes in mm -----
-    L = building_length * 1000
-    W = building_width * 1000
-    x0, y0 = 0.0, 0.0
-    x1, y1 = L, W
+    # Prefer the grid's building envelope if the caller provided one,
+    # so DXF coordinates match the AI layout exactly.
+    if layout_plan.get('building'):
+        b = layout_plan['building']
+        x0 = float(b['x'])
+        y0 = float(b['y'])
+        x1 = x0 + float(b['w'])
+        y1 = y0 + float(b['h'])
+        L = x1 - x0
+        W = y1 - y0
+    else:
+        L = building_length * 1000
+        W = building_width * 1000
+        x0, y0 = 0.0, 0.0
+        x1, y1 = L, W
 
     # ----- 5. Structural grid FIRST (so rooms snap to it) -----
     span_max = 5000
