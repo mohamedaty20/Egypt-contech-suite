@@ -319,6 +319,21 @@ def draw_window(msp, cx, cy, width, wall_thickness, is_horizontal=True):
                          dxfattribs={'layer': 'A-WINDOW', 'color': 5})
         msp.add_line((cx-wall_thickness/2, cy), (cx+wall_thickness/2, cy),
                      dxfattribs={'layer': 'A-WINDOW', 'color': 5})
+def _draw_balcony(msp, x_left, x_right, outer_y, side,
+                  depth=1200, layer='A-BALCONY'):
+    """Balcony protruding outward from the building envelope.
+    side is 'S' (bottom wall) or 'N' (top wall)."""
+    if side == 'S':
+        y_out = outer_y - depth
+    else:  # 'N'
+        y_out = outer_y + depth
+    pts = [(x_left, outer_y), (x_right, outer_y),
+           (x_right, y_out),   (x_left, y_out)]
+    msp.add_lwpolyline(pts, close=True,
+                       dxfattribs={'layer': layer, 'color': 5})
+    # Railing line on the outer edge
+    msp.add_line((x_left, y_out), (x_right, y_out),
+                 dxfattribs={'layer': layer, 'color': 5})
 
 
 def place_furniture(msp, x, y, w, h, room_type):
@@ -432,6 +447,37 @@ def _draw_dimension_chain(msp, x0, y_ref, grid_positions, offset_mm, label=None,
     if label:
         mid = (grid_positions[0] + grid_positions[-1]) / 2
         draw_label(msp, mid, y_dim + 700, label, layer, height=220, color=color)
+def _draw_native_dims(msp, xs, ys, x0, y0, offset=7500, layer='ANNO-DIM'):
+    """Add real AutoCAD linear DIMENSION entities so DIST / DIM tools
+    return true mm values. Uses the 'Standard' dimstyle (dimlfac=1,
+    dimscale=100) so text shows the actual mm measurement."""
+    try:
+        y_base = y0 - offset
+        for i in range(len(xs) - 1):
+            d = msp.add_linear_dim(
+                base=(xs[i], y_base),
+                p1=(xs[i], y0),
+                p2=(xs[i + 1], y0),
+                dimstyle='Standard',
+                dxfattribs={'layer': layer},
+            )
+            d.render()
+    except Exception as e:
+        print(f"[dims-x] failed: {e!r}")
+    try:
+        x_base = x0 - offset
+        for i in range(len(ys) - 1):
+            d = msp.add_linear_dim(
+                base=(x_base, ys[i]),
+                p1=(x0, ys[i]),
+                p2=(x0, ys[i + 1]),
+                angle=90,
+                dimstyle='Standard',
+                dxfattribs={'layer': layer},
+            )
+            d.render()
+    except Exception as e:
+        print(f"[dims-y] failed: {e!r}")
 
 
 def _draw_north_arrow(msp, x, y, size=1200, layer='ANNO-SYMBOL'):
@@ -780,6 +826,10 @@ def build_complete_project(params):
     # --- Metric header + dimstyle so AutoCAD shows mm values, not weird ones ---
     doc.header['$INSUNITS']  = 4      # millimetres
     doc.header['$MEASUREMENT'] = 1    # metric
+    print(f"[dxf-units] INSUNITS={doc.header.get('$INSUNITS')} "
+          f"MEASUREMENT={doc.header.get('$MEASUREMENT')} "
+          f"LUNITS={doc.header.get('$LUNITS')} "
+          f"DIMLFAC={doc.header.get('$DIMLFAC')} DIMSCALE={doc.header.get('$DIMSCALE')}")
     doc.header['$LUNITS']    = 2      # decimal
     doc.header['$LUPREC']    = 0      # integer display
     doc.header['$AUNITS']    = 0
@@ -821,6 +871,7 @@ def build_complete_project(params):
         'A-WALL-INT': {'color': 8, 'lineweight': 25},
         'A-DOOR':     {'color': 3, 'lineweight': 18},
         'A-WINDOW':   {'color': 5, 'lineweight': 13},
+        'A-BALCONY':  {'color': 5, 'lineweight': 25},
         'A-FURN':     {'color': 6, 'lineweight': 9},
         'A-ROOM-TEXT':{'color': 4, 'lineweight': 13},
         'A-CORE':     {'color': 4, 'lineweight': 30},
@@ -883,6 +934,21 @@ def build_complete_project(params):
         pub_pl = _partition_rect_grid(public_zone, public_rooms, xs, ys) if public_rooms else []
         priv_pl = _partition_rect_grid(private_zone, private_rooms, xs, ys) if private_rooms else []
         placements = pub_pl + priv_pl
+    # Split bathroom cells so bathrooms never take a full bedroom footprint.
+    _expanded = []
+    for _room, (_rx0, _ry0, _rx1, _ry1) in placements:
+        _rt = (_room.get('type') or '').lower()
+        if _rt == 'bathroom' and (_rx1 - _rx0) >= 2400:
+            _w = _rx1 - _rx0
+            _bath_w = int(_w * 0.5)
+            _expanded.append((_room, (_rx0, _ry0, _rx0 + _bath_w, _ry1)))
+            _expanded.append((
+                {'name': 'Store', 'type': 'store', 'needs_window': False},
+                (_rx0 + _bath_w, _ry0, _rx1, _ry1),
+            ))
+        else:
+            _expanded.append((_room, (_rx0, _ry0, _rx1, _ry1)))
+    placements = _expanded
 
     ext_openings = {'bottom': [], 'top': [], 'left': [], 'right': []}
     door_marks = []
@@ -930,9 +996,24 @@ def build_complete_project(params):
                          if (ry0 + ry1) / 2 < mid_y]
         if lower_centres:
             entry_door_cx = lower_centres[len(lower_centres) // 2]
-    if entry_door_cx is not None:
-        # gap center is distance from x0 along the bottom wall
-        ext_openings['bottom'].append((entry_door_cx - x0, 1100))
+        # ALWAYS reserve a 1100 mm entry door on the bottom exterior wall.
+    if entry_door_cx is None:
+        entry_door_cx = (x0 + x1) / 2
+    _door_c = entry_door_cx - x0
+    _door_w = 1100
+    # Shift the door if it would collide with a window gap.
+    _shift_deltas = (0, 800, -800, 1600, -1600, 2400, -2400, 3200, -3200)
+    _final_c = _door_c
+    for _d in _shift_deltas:
+        _c = _door_c + _d
+        if _c - _door_w / 2 < 300 or _c + _door_w / 2 > (x1 - x0) - 300:
+            continue
+        if not any(abs(_c - gc) < (gw + _door_w) / 2 + 200
+                   for gc, gw in ext_openings['bottom']):
+            _final_c = _c
+            break
+    entry_door_cx = x0 + _final_c
+    ext_openings['bottom'].append((_final_c, _door_w))
 
     half_ext = wall_ext_t / 2
     _add_wall_rect_from_line((x0 + half_ext, y0), (x0 + half_ext, y1),
@@ -1093,7 +1174,7 @@ def build_complete_project(params):
                   is_horizontal=True, flip=True)
 
     # ---- Interior walls: cluster coords with tolerance, merge, draw once ----
-    TOL = 150.0  # mm — anything within this distance is "the same wall line"
+    TOL = 400.0  # mm — anything within this distance is "the same wall line"
 
     def _cluster(values):
         """Group coordinates within TOL and return {original: cluster_center}."""
@@ -1226,6 +1307,21 @@ def build_complete_project(params):
         perimeter = 2*((rx1-rx0)+(ry1-ry0)) / 1000
         room_schedule.append((i+1, room['name'], "Ground", f"{area_m2:.1f}",
                               f"{perimeter:.1f}", "Tiles", "Paint"))
+    # Balconies on exterior walls of Living Room and Master Bedroom.
+    for room, (rx0, ry0, rx1, ry1) in placements:
+        rt = (room.get('type') or '').lower()
+        if rt not in ('living', 'bedroom_master'):
+            continue
+        balcony_w = min(rx1 - rx0 - 800, 3000)
+        if balcony_w < 1500:
+            continue
+        bcx = (rx0 + rx1) / 2
+        if abs(ry0 - (y0 + wall_ext_t)) < 300:
+            _draw_balcony(msp, bcx - balcony_w/2, bcx + balcony_w/2,
+                          y0, 'S', depth=1200)
+        elif abs(ry1 - (y1 - wall_ext_t)) < 300:
+            _draw_balcony(msp, bcx - balcony_w/2, bcx + balcony_w/2,
+                          y1, 'N', depth=1200)
 
     # Core (stairs) — drawn inside the reserved grid cell if one was
     # provided, otherwise at a sensible default inside the building.
@@ -1288,6 +1384,7 @@ def build_complete_project(params):
     off_chain = off + 3500
     _draw_dimension_chain(msp, x0, y0, xs, -off_chain, label=f"Overall {L/1000:.2f} m")
     _draw_dimension_chain(msp, x0, y0, xs, -(off_chain + 900))
+    _draw_native_dims(msp, xs, ys, x0, y0, offset=off_chain + 3300)
     y_dim_x = x0 - off_chain
     msp.add_line((y_dim_x, y0), (y_dim_x, y1),
                  dxfattribs={'layer': 'ANNO-DIM', 'color': 2})
