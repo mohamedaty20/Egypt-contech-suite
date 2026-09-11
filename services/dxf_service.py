@@ -930,6 +930,10 @@ def build_complete_project(params):
     DOOR_W = 900
     placed_doors = []
     interior_door_gaps = []
+    door_marks = []
+    win_marks = []
+    d_idx = 0
+    w_idx = 0
 
     def _door_bbox(cx, cy, w, wt, horiz, flip):
         hw = w / 2
