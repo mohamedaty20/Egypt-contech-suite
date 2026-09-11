@@ -95,7 +95,6 @@ def extract_areas_from_dxf(doc, unit='mm', workflow='architectural'):
     scale = {'mm': 1e-6, 'cm': 1e-4, 'm': 1.0}.get(unit, 1e-6)
     results = []
     msp = doc.modelspace()
-  
 
     # --- Diagnostics: entity type census ---
     counts = {}
@@ -801,7 +800,8 @@ def build_complete_project(params):
     }
     for n, p in layers_def.items():
         create_dxf_layer(doc, n, p['color'], lineweight=p['lineweight'])
-          # Plot boundary — dashed rectangle at plot extents so the building
+
+    # Plot boundary — dashed rectangle at plot extents so the building
     # can be visually verified to fit inside it.
     msp.add_lwpolyline(
         [(0, 0), (L, 0), (L, W), (0, W)],
@@ -1009,7 +1009,7 @@ def build_complete_project(params):
         if chosen is None:
             continue
 
-         door_cx, door_cy, bbox = chosen
+        door_cx, door_cy, bbox = chosen
         placed_doors.append(bbox)
 
         # Swing needs ~door_width + 200 mm clearance in the swing direction.
@@ -1158,7 +1158,6 @@ def build_complete_project(params):
 
     # Core (stairs) — drawn inside the reserved grid cell if one was
     # provided, otherwise at a sensible default inside the building.
-    
     if stair_cell:
         core_x = float(stair_cell['x'])
         core_y = float(stair_cell['y'])
