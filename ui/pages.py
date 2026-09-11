@@ -49,6 +49,14 @@ from services.dxf_service import (
     extract_areas_from_dxf,
     build_complete_project,
 )
+from services.boq import (
+    extract_elements as boq_extract_elements,
+    process_walls as boq_process_walls,
+    process_rooms as boq_process_rooms,
+    compute_boq as boq_compute_boq,
+    PARAM_DEFAULTS as BOQ_PARAM_DEFAULTS,
+    extract_elements_from_image as boq_extract_from_image,
+)
 from services.scraper_service import scrape_jobs, detect_mime_type, RAPIDAPI_KEY
 from utils.boq import (
     normalize_keys,
@@ -196,6 +204,59 @@ def _open_dxf_doc_from_bytes(doc_bytes):
 def _extract_areas_from_dxf_bytes(doc_bytes, unit, workflow):
     doc = _open_dxf_doc_from_bytes(doc_bytes)
     return extract_areas_from_dxf(doc, unit=unit, workflow=workflow)
+
+
+# =====================================================================
+# BOQ WORKERS (module-level, picklable)
+# =====================================================================
+def _boq_run_dxf(doc_bytes, units, ext_t_mm, int_t_mm,
+                 floor_h_m, door_h_m, win_h_m, wet_tile_m):
+    import io as _io
+    import ezdxf as _ezdxf
+    from services.boq import (
+        extract_elements as _ex,
+        process_walls as _pw,
+        process_rooms as _pr,
+        compute_boq as _cb,
+    )
+    doc = _ezdxf.read(_io.BytesIO(doc_bytes))
+    records, _stats = _ex(doc, units=units)
+    walls = _pw(records, ext_thick=ext_t_mm, int_thick=int_t_mm)
+    rooms = _pr(records)
+    params = {
+        'ext_wall_thickness_m': ext_t_mm / 1000.0,
+        'int_wall_thickness_m': int_t_mm / 1000.0,
+        'floor_height_m':       floor_h_m,
+        'door_height_m':        door_h_m,
+        'window_height_m':      win_h_m,
+        'wet_tile_height_m':    wet_tile_m,
+    }
+    result = _cb(walls, rooms, records, params=params)
+    return {
+        'records': records,
+        'walls':   walls,
+        'rooms':   rooms,
+        'boq':     result,
+        'info':    {
+            'kind':    'dxf',
+            'ext_len': walls['stats']['external_len_m'],
+            'int_len': walls['stats']['internal_len_m'],
+            'n_rooms': rooms['stats']['total'],
+        },
+    }
+
+
+def _pdf_first_page_to_png_bytes(pdf_bytes, zoom=2.0):
+    import fitz as _fitz
+    doc = _fitz.open(stream=pdf_bytes, filetype="pdf")
+    try:
+        if len(doc) == 0:
+            return None
+        page = doc.load_page(0)
+        pix = page.get_pixmap(matrix=_fitz.Matrix(zoom, zoom))
+        return pix.tobytes("png")
+    finally:
+        doc.close()
 
 
 # =====================================================================
@@ -724,8 +785,7 @@ def main_page():
             t_handwriting= ui.tab('Handwriting OCR').classes('text-white font-bold')
             t_jobs       = ui.tab('Job Board').classes('text-white font-bold')
             t_progress   = ui.tab('Progress Tracker').classes('text-white font-bold')
-            t_dxf= ui.tab('DXF Area Extractor').classes('text-white font-bold')
-            
+            t_dxf        = ui.tab('DXF / PDF → BOQ').classes('text-white font-bold')
 
         with ui.tab_panels(tabs, value=t_dash).classes('w-full bg-transparent mt-4'):
 
@@ -1403,80 +1463,485 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                 ui.button('Run AI Analysis', on_click=run_progress_analysis
                           ).classes('primary-btn mt-4')
 
-            # ============ TAB 8: DXF AREA EXTRACTOR ============
+            # ============ TAB 8: DXF / PDF → BOQ ============
             with ui.tab_panel(t_dxf):
-                ui.label('📐 DXF Area Extractor').classes('text-2xl font-bold text-white mb-4')
-                ui.markdown('Upload a DXF file to extract areas of closed polylines.'
-                            ).classes('markdown-body mb-2')
-                dxf_file_data = {'bytes': None, 'name': None}
-                dxf_status_label = ui.label('Status: No file uploaded yet'
-                                            ).classes('text-xs text-amber-400 font-semibold mb-2')
+                ui.label('📐 DXF / PDF → BOQ').classes('text-2xl font-bold text-white mb-2')
+                ui.markdown(
+                    'Upload an architectural floor plan. **Quick mode** extracts areas only. '
+                    '**Full BOQ mode** runs the complete engine: walls, rooms, wet/dry split, '
+                    'finishes, and quantities.'
+                ).classes('markdown-body mb-3')
 
-                async def handle_dxf_upload(e):
+                # ---------------- STATE ----------------
+                boq_state = {
+                    'bytes': None, 'name': None, 'type': None,
+                    'is_dxf': False, 'is_pdf': False, 'is_image': False,
+                    'records': None,
+                    'walls': None,
+                    'rooms': None,
+                    'boq': None,
+                    'info': None,
+                }
+
+                # ---------------- UPLOAD ----------------
+                boq_status = ui.label('Status: No file uploaded yet'
+                                      ).classes('text-xs text-amber-400 font-semibold mb-2')
+
+                async def handle_boq_upload(e):
                     try:
                         data = await e.file.read()
                         if isinstance(data, str):
                             data = data.encode('utf-8')
-                        dxf_file_data['bytes'] = data
-                        dxf_file_data['name']  = e.file.name
-                        dxf_status_label.set_text(f'Ready: {e.file.name}')
-                        dxf_status_label.classes(replace='text-xs text-emerald-400 font-semibold mb-2')
+                        name = e.file.name
+                        ext = os.path.splitext(name)[1].lower()
+                        ftype = detect_mime_type(name, data)
+
+                        boq_state['bytes'] = data
+                        boq_state['name'] = name
+                        boq_state['type'] = ftype
+                        boq_state['is_dxf'] = ext == '.dxf'
+                        boq_state['is_pdf'] = ftype == 'application/pdf'
+                        boq_state['is_image'] = (
+                            ftype in ('image/png', 'image/jpeg')
+                            and not boq_state['is_dxf']
+                        )
+
+                        kind = ('DXF' if boq_state['is_dxf']
+                                else 'PDF' if boq_state['is_pdf']
+                                else 'Image')
+                        boq_status.set_text(f'Ready: {name} ({kind}, {len(data)/1024:.0f} KB)')
+                        boq_status.classes(replace='text-xs text-emerald-400 font-semibold mb-2')
+
+                        _update_boq_visibility()
                     except Exception as ex:
-                        ui.notify(f'Error: {str(ex)}', type='negative')
+                        ui.notify(f'Upload error: {ex}', type='negative')
 
-                ui.upload(auto_upload=True, on_upload=handle_dxf_upload,
-                          multiple=False).props('flat dark').classes('w-full mb-4')
+                ui.upload(auto_upload=True, on_upload=handle_boq_upload,
+                          multiple=False).props('flat dark').classes('w-full mb-3')
 
-                with ui.row().classes('w-full gap-4 mb-4'):
-                    workflow_select = ui.select(label='Workflow',
-                        options=['Architectural BOQ', 'Structural Mass', 'Site Layout'],
-                        value='Architectural BOQ').classes('flex-1')
-                    unit_select = ui.select(label='Units',
-                        options=['mm', 'cm', 'm'], value='mm').classes('flex-1')
+                # ---------------- MODE ----------------
+                boq_mode = ui.radio(
+                    {'quick': 'Quick areas', 'full': 'Full BOQ'},
+                    value='quick',
+                ).props('inline').classes('mb-2 text-white')
+                boq_mode.on('update:model-value', lambda _: _update_boq_visibility())
 
-                dxf_output = ui.column().classes('w-full')
+                # ---------------- PARAMETERS PANEL ----------------
+                with ui.column().classes('w-full') as boq_params_panel:
+                    ui.label('BOQ Parameters').classes('text-sm font-bold text-white mb-2')
+                    with ui.row().classes('w-full gap-3 flex-wrap'):
+                        with ui.column().classes('input-card'):
+                            boq_units = ui.radio(['mm', 'cm', 'm'], value='mm').props('inline')
+                            ui.label('DXF drawing units').classes('text-xs text-[#A9B6D0]')
+                        with ui.column().classes('input-card'):
+                            boq_ext_t = ui.number(label='Ext. wall thickness (mm)',
+                                                   value=250, min=80, max=600, step=10).classes('w-40')
+                        with ui.column().classes('input-card'):
+                            boq_int_t = ui.number(label='Int. wall thickness (mm)',
+                                                   value=120, min=60, max=400, step=10).classes('w-40')
+                        with ui.column().classes('input-card'):
+                            boq_floor_h = ui.number(label='Floor-to-floor height (m)',
+                                                     value=3.00, min=2.4, max=6.0, step=0.05).classes('w-40')
+                        with ui.column().classes('input-card'):
+                            boq_door_h = ui.number(label='Door height (m)',
+                                                    value=2.10, min=1.8, max=3.0, step=0.05).classes('w-40')
+                        with ui.column().classes('input-card'):
+                            boq_win_h = ui.number(label='Window height (m)',
+                                                   value=1.20, min=0.6, max=2.4, step=0.05).classes('w-40')
+                        with ui.column().classes('input-card'):
+                            boq_wet_tile = ui.number(label='Wet-area tile height (m)',
+                                                      value=2.10, min=1.0, max=4.0, step=0.05).classes('w-40')
 
-                async def process_dxf():
-                    if dxf_file_data['bytes'] is None:
-                        ui.notify('Upload a DXF first.', type='warning')
+                # ---------------- SCALE PANEL (PDF/PNG only) ----------------
+                with ui.column().classes('w-full') as boq_scale_panel:
+                    ui.label('Scale Reference (PDF / Image only)').classes('text-sm font-bold text-white mb-2')
+                    ui.markdown(
+                        'If blank, all AI measurements are approximate. '
+                        'For a real scale, measure a known distance in pixels using any '
+                        'image viewer and enter the two points below.'
+                    ).classes('text-xs text-[#A9B6D0] mb-1')
+                    with ui.row().classes('w-full gap-3 flex-wrap'):
+                        with ui.column().classes('input-card'):
+                            boq_scale_mm_per_px = ui.number(
+                                label='mm per pixel',
+                                value=None, step=0.1,
+                            ).classes('w-40')
+                        with ui.column().classes('input-card'):
+                            boq_ref_px_x1 = ui.number(label='Point 1 X (px)', value=None).classes('w-32')
+                        with ui.column().classes('input-card'):
+                            boq_ref_px_y1 = ui.number(label='Point 1 Y (px)', value=None).classes('w-32')
+                        with ui.column().classes('input-card'):
+                            boq_ref_px_x2 = ui.number(label='Point 2 X (px)', value=None).classes('w-32')
+                        with ui.column().classes('input-card'):
+                            boq_ref_px_y2 = ui.number(label='Point 2 Y (px)', value=None).classes('w-32')
+                        with ui.column().classes('input-card'):
+                            boq_ref_mm = ui.number(label='Real distance (mm)',
+                                                    value=None, step=100).classes('w-40')
+
+                def _update_boq_visibility():
+                    is_full = boq_mode.value == 'full'
+                    is_dxf = boq_state.get('is_dxf', False)
+                    is_img = boq_state.get('is_pdf', False) or boq_state.get('is_image', False)
+                    boq_params_panel.set_visibility(is_full)
+                    boq_scale_panel.set_visibility(is_full and is_img)
+
+                _update_boq_visibility()
+
+                # ---------------- RESULTS / EXPORT ----------------
+                boq_results = ui.column().classes('w-full mt-3')
+                boq_exports = ui.row().classes('w-full gap-4 mt-3')
+
+                # ---------------- RUN ----------------
+                async def run_boq():
+                    boq_results.clear()
+                    boq_exports.clear()
+                    if not boq_state['bytes']:
+                        ui.notify('Upload a file first.', type='warning')
                         return
-                    dxf_output.clear()
-                    with dxf_output:
+
+                    mode = boq_mode.value
+                    is_dxf = boq_state['is_dxf']
+                    is_pdf = boq_state['is_pdf']
+                    is_img = boq_state['is_image']
+
+                    with boq_results:
                         ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
+                        ui.label('Processing…').classes('self-center text-sm text-white')
+
+                    # ---------- QUICK MODE ----------
+                    if mode == 'quick':
+                        if is_dxf:
+                            try:
+                                areas = await extract_areas_from_dxf_async(
+                                    boq_state['bytes'],
+                                    boq_units.value,
+                                    'architectural',
+                                )
+                                df = pd.DataFrame(areas).sort_values(
+                                    'area_m2', ascending=False)
+                                total = df['area_m2'].sum()
+                                boq_results.clear()
+                                with boq_results:
+                                    ui.label('Extracted Areas'
+                                             ).classes('text-xl font-bold text-white mb-2')
+                                    cols = [
+                                        {'name': 'layer', 'label': 'Layer',
+                                         'field': 'layer', 'sortable': True},
+                                        {'name': 'label', 'label': 'Label',
+                                         'field': 'label', 'sortable': True},
+                                        {'name': 'area_m2', 'label': 'Area (m²)',
+                                         'field': 'area_m2', 'sortable': True},
+                                    ]
+                                    _dark_table(columns=cols,
+                                                rows=df.to_dict('records'),
+                                                row_key='index')
+                                    ui.label(f'Total: {total:.4f} m²'
+                                             ).classes('text-lg font-bold text-[#FF8C00] mt-2')
+                            except Exception as e:
+                                boq_results.clear()
+                                with boq_results:
+                                    ui.notify(f'DXF error: {e}', type='negative')
+                        else:
+                            boq_results.clear()
+                            with boq_results:
+                                ui.notify(
+                                    'Quick mode is only for DXF. '
+                                    'Use Full BOQ mode for PDF / images.',
+                                    type='warning',
+                                )
+                        return
+
+                    # ---------- FULL BOQ MODE ----------
                     try:
-                        data = dxf_file_data['bytes']
-                        if isinstance(data, str):
-                            data = data.encode('utf-8')
-                        areas = await extract_areas_from_dxf_async(
-                            data, unit_select.value,
-                            workflow_select.value.lower().split()[0])
-                        if not areas:
-                            ui.notify('No closed polylines found.', type='warning')
-                            return
-                        df = pd.DataFrame(areas).sort_values('area_m2', ascending=False)
-                        total = df['area_m2'].sum()
-                        dxf_output.clear()
-                        with dxf_output:
-                            ui.label('📋 Extracted Areas'
-                                     ).classes('text-xl font-bold text-white mb-2')
-                            columns = [
-                                {'name': 'layer',    'label': 'Layer',    'field': 'layer',    'sortable': True},
-                                {'name': 'label',    'label': 'Label',    'field': 'label',    'sortable': True},
-                                {'name': 'area_m2',  'label': 'Area (m²)','field': 'area_m2',  'sortable': True},
-                            ]
-                            _dark_table(columns=columns,
-                                        rows=df.to_dict('records'),
-                                        row_key='index')
-                            ui.label(f'Total: {total:.4f} m²'
-                                     ).classes('text-lg font-bold text-[#FF8C00] mt-2')
+                        ext_t_mm = float(boq_ext_t.value or 250)
+                        int_t_mm = float(boq_int_t.value or 120)
+                        floor_h_m = float(boq_floor_h.value or 3.0)
+                        door_h_m = float(boq_door_h.value or 2.1)
+                        win_h_m = float(boq_win_h.value or 1.2)
+                        wet_tile_m = float(boq_wet_tile.value or 2.1)
+
+                        if is_dxf:
+                            units = boq_units.value or 'mm'
+                            payload = await cpu_bound_limited(
+                                _boq_run_dxf,
+                                boq_state['bytes'], units,
+                                ext_t_mm, int_t_mm,
+                                floor_h_m, door_h_m, win_h_m, wet_tile_m,
+                            )
+                        else:
+                            if is_pdf:
+                                png = _pdf_first_page_to_png_bytes(boq_state['bytes'])
+                                if not png:
+                                    raise Exception('Could not read PDF page 1')
+                                img_bytes = png
+                                img_mime = 'image/png'
+                            else:
+                                img_bytes = boq_state['bytes']
+                                img_mime = boq_state['type']
+
+                            scale_info = None
+                            mm_per_px = boq_scale_mm_per_px.value
+                            if mm_per_px:
+                                scale_info = {'mode': 'pixel_ratio',
+                                              'mm_per_pixel': float(mm_per_px)}
+                            elif (boq_ref_px_x1.value is not None
+                                  and boq_ref_px_x2.value is not None
+                                  and boq_ref_mm.value):
+                                scale_info = {
+                                    'mode': 'two_points',
+                                    'p1': [float(boq_ref_px_x1.value),
+                                           float(boq_ref_px_y1.value or 0)],
+                                    'p2': [float(boq_ref_px_x2.value),
+                                           float(boq_ref_px_y2.value or 0)],
+                                    'real_distance_mm': float(boq_ref_mm.value),
+                                }
+
+                            records, _img_stats = await gemini_limited(
+                                lambda: boq_extract_from_image(
+                                    img_bytes, img_mime,
+                                    call_gemini_json_fn=call_gemini_json_limited,
+                                    scale_info=scale_info,
+                                ),
+                                timeout=300,
+                            )
+
+                            walls = boq_process_walls(
+                                records,
+                                ext_thick=ext_t_mm,
+                                int_thick=int_t_mm,
+                            )
+                            rooms = boq_process_rooms(records)
+                            params = {
+                                'ext_wall_thickness_m': ext_t_mm / 1000.0,
+                                'int_wall_thickness_m': int_t_mm / 1000.0,
+                                'floor_height_m':       floor_h_m,
+                                'door_height_m':        door_h_m,
+                                'window_height_m':      win_h_m,
+                                'wet_tile_height_m':    wet_tile_m,
+                            }
+                            boq_result = boq_compute_boq(walls, rooms, records,
+                                                          params=params)
+                            payload = {
+                                'records': records,
+                                'walls':   walls,
+                                'rooms':   rooms,
+                                'boq':     boq_result,
+                                'info': {
+                                    'kind':    'image',
+                                    'ext_len': walls['stats']['external_len_m'],
+                                    'int_len': walls['stats']['internal_len_m'],
+                                    'n_rooms': rooms['stats']['total'],
+                                },
+                            }
+
+                        boq_state['records'] = payload['records']
+                        boq_state['walls'] = payload['walls']
+                        boq_state['rooms'] = payload['rooms']
+                        boq_state['boq'] = payload['boq']
+                        boq_state['info'] = payload['info']
+
+                        _render_boq_results(payload)
+
                     except Exception as e:
-                        dxf_output.clear()
-                        with dxf_output:
-                            ui.notify(f'Error: {str(e)}', type='negative')
+                        boq_results.clear()
+                        with boq_results:
+                            ui.label(f'❌ Failed: {e}'
+                                     ).classes('text-red-400 font-bold')
+                            traceback.print_exc()
 
-                ui.button('Process DXF', on_click=process_dxf).classes('primary-btn mt-4')
+                # ---------------- RENDER ----------------
+                def _render_boq_results(payload):
+                    boq_results.clear()
+                    boq_exports.clear()
 
-            
+                    boq_data = payload['boq']
+                    summary = boq_data['summary']
+                    boq_items = boq_data['boq']
+                    rooms = payload['rooms']['rooms']
+                    walls = payload['walls']['walls']
+
+                    with boq_results:
+                        ui.label('✅ BOQ generated'
+                                 ).classes('text-xl font-bold text-green-400 mb-2')
+
+                        with ui.row().classes('w-full gap-3 flex-wrap mb-3'):
+                            for label, val, unit in [
+                                ('Envelope', summary['envelope_area_m2'], 'm²'),
+                                ('Net floor', summary['net_floor_area_m2'], 'm²'),
+                                ('Ext walls', summary['ext_wall_len_m'], 'm'),
+                                ('Int walls', summary['int_wall_len_m'], 'm'),
+                                ('Wet area', summary['wet_area_m2'], 'm²'),
+                                ('Dry area', summary['dry_area_m2'], 'm²'),
+                                ('Doors', summary['door_count'], ''),
+                                ('Windows', summary['window_count'], ''),
+                            ]:
+                                with ui.column().classes('stat-chip'):
+                                    ui.label(f'{val}').classes('val')
+                                    ui.label(f'{label} ({unit})' if unit else label).classes('lbl')
+
+                        ui.label('📋 BOQ Quantities'
+                                 ).classes('text-lg font-bold text-white mt-3 mb-2')
+                        boq_cols = [
+                            {'name': 'category', 'label': 'Category',
+                             'field': 'category', 'sortable': True},
+                            {'name': 'item', 'label': 'Item',
+                             'field': 'item', 'sortable': True},
+                            {'name': 'qty', 'label': 'Qty',
+                             'field': 'qty', 'sortable': True},
+                            {'name': 'unit', 'label': 'Unit',
+                             'field': 'unit', 'sortable': True},
+                            {'name': 'notes', 'label': 'Notes',
+                             'field': 'notes', 'sortable': False},
+                        ]
+                        _dark_table(columns=boq_cols, rows=boq_items,
+                                    row_key='item')
+
+                        if rooms:
+                            ui.label('🚪 Rooms'
+                                     ).classes('text-lg font-bold text-white mt-4 mb-2')
+                            room_rows = []
+                            for r in rooms:
+                                room_rows.append({
+                                    'id': r['id'],
+                                    'type': r['subtype'],
+                                    'area_m2': round(r['geometry']['area_mm2'] / 1e6, 2),
+                                    'confidence': r['confidence'],
+                                    'reasons': ', '.join(r['meta'].get('reasons', [])) or '—',
+                                })
+                            _dark_table(
+                                columns=[
+                                    {'name': 'id', 'label': 'ID', 'field': 'id'},
+                                    {'name': 'type', 'label': 'Type', 'field': 'type'},
+                                    {'name': 'area_m2', 'label': 'Area (m²)',
+                                     'field': 'area_m2', 'sortable': True},
+                                    {'name': 'confidence', 'label': 'Confidence',
+                                     'field': 'confidence'},
+                                    {'name': 'reasons', 'label': 'Detected by',
+                                     'field': 'reasons'},
+                                ],
+                                rows=room_rows, row_key='id')
+
+                        if walls:
+                            ui.label('🧱 Walls'
+                                     ).classes('text-lg font-bold text-white mt-4 mb-2')
+                            wall_rows = []
+                            for w in walls:
+                                g = w['geometry']
+                                wall_rows.append({
+                                    'id': w['id'],
+                                    'subtype': w['subtype'],
+                                    'length_m': round(g['length_mm'] / 1000.0, 3),
+                                    'thickness_mm': round(g['width_mm'], 0),
+                                    'method': w['meta'].get('method'),
+                                    'confidence': w['confidence'],
+                                })
+                            _dark_table(
+                                columns=[
+                                    {'name': 'id', 'label': 'ID', 'field': 'id'},
+                                    {'name': 'subtype', 'label': 'Type',
+                                     'field': 'subtype'},
+                                    {'name': 'length_m', 'label': 'Length (m)',
+                                     'field': 'length_m', 'sortable': True},
+                                    {'name': 'thickness_mm', 'label': 't (mm)',
+                                     'field': 'thickness_mm', 'sortable': True},
+                                    {'name': 'method', 'label': 'Method',
+                                     'field': 'method'},
+                                    {'name': 'confidence', 'label': 'Conf.',
+                                     'field': 'confidence'},
+                                ],
+                                rows=wall_rows, row_key='id')
+
+                    boq_exports.clear()
+                    with boq_exports:
+                        def export_excel():
+                            try:
+                                items_df = pd.DataFrame(boq_items)
+                                summary_df = pd.DataFrame(
+                                    [{'metric': k, 'value': v}
+                                     for k, v in summary.items()])
+                                bio = io.BytesIO()
+                                with pd.ExcelWriter(bio, engine='openpyxl') as writer:
+                                    items_df.to_excel(writer, sheet_name='BOQ', index=False)
+                                    summary_df.to_excel(writer, sheet_name='Summary', index=False)
+                                bio.seek(0)
+                                ui.download(bio.read(),
+                                            filename=f"BOQ_{boq_state['name']}.xlsx")
+                                ui.notify('Excel downloaded!', type='positive')
+                            except Exception as ex:
+                                ui.notify(f'Excel error: {ex}', type='negative')
+
+                        def export_pdf():
+                            try:
+                                from reportlab.platypus import (
+                                    SimpleDocTemplate, Paragraph, Spacer,
+                                    Table, TableStyle,
+                                )
+                                from reportlab.lib import colors
+                                from reportlab.lib.styles import getSampleStyleSheet
+
+                                bio = io.BytesIO()
+                                doc = SimpleDocTemplate(bio, pagesize=PAGE_WIDTH,
+                                                         rightMargin=MARGIN,
+                                                         leftMargin=MARGIN,
+                                                         topMargin=MARGIN,
+                                                         bottomMargin=MARGIN)
+                                styles = getSampleStyleSheet()
+                                story = []
+                                story.append(Paragraph("BILL OF QUANTITIES",
+                                                        styles['Title']))
+                                story.append(Spacer(1, 12))
+                                story.append(Paragraph(
+                                    f"Source: {boq_state['name']}",
+                                    styles['Normal']))
+                                story.append(Spacer(1, 8))
+
+                                story.append(Paragraph("Summary", styles['Heading2']))
+                                for k, v in summary.items():
+                                    story.append(Paragraph(f"{k}: {v}",
+                                                            styles['Normal']))
+                                story.append(Spacer(1, 12))
+
+                                story.append(Paragraph("BOQ Items",
+                                                        styles['Heading2']))
+                                data = [['Category', 'Item', 'Qty', 'Unit', 'Notes']]
+                                for b in boq_items:
+                                    data.append([
+                                        str(b['category']),
+                                        str(b['item']),
+                                        f"{b['qty']:.3f}",
+                                        str(b['unit']),
+                                        str(b.get('notes', ''))[:60],
+                                    ])
+                                tbl = Table(data, repeatRows=1,
+                                            colWidths=[70, 200, 60, 45, 180])
+                                tbl.setStyle(TableStyle([
+                                    ('BACKGROUND', (0, 0), (-1, 0),
+                                     colors.HexColor('#1B2A4A')),
+                                    ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+                                    ('GRID', (0, 0), (-1, -1), 0.4,
+                                     colors.HexColor('#94A3B8')),
+                                    ('FONTSIZE', (0, 0), (-1, -1), 8),
+                                    ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                                ]))
+                                story.append(tbl)
+                                doc.build(story)
+                                bio.seek(0)
+                                ui.download(bio.read(),
+                                            filename=f"BOQ_{boq_state['name']}.pdf")
+                                ui.notify('PDF downloaded!', type='positive')
+                            except Exception as ex:
+                                ui.notify(f'PDF error: {ex}', type='negative')
+
+                        ui.button('📊 Download Excel', on_click=export_excel
+                                  ).classes('primary-btn')
+                        ui.button('📄 Download PDF', on_click=export_pdf
+                                  ).classes('primary-btn')
+
+                ui.button('▶ Run', on_click=run_boq).classes('primary-btn mt-4')
+                with boq_results:
+                    ui.markdown('*Upload a file, choose mode, click Run.*'
+                                ).classes('text-sm text-[#A9B6D0]')
+
         # ---------------- FOOTER ----------------
         ui.html('''
         <div class="app-footer">
