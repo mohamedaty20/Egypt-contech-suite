@@ -3,7 +3,7 @@ import io
 import json
 import datetime
 import os
-from ezdxf import recover  # or use the lazy import inside the function
+from ezdxf import recover
 import uuid
 import traceback
 import asyncio
@@ -17,7 +17,6 @@ from nicegui import app, ui, run
 from google.genai import types
 from reportlab.platypus import Paragraph, Spacer
 
-# ----- Modules -----
 from config import (
     CODE_BASIS_OPTIONS,
     get_code_directive,
@@ -64,12 +63,8 @@ from utils.boq import (
 
 # =====================================================================
 # ADDITIVE HIGH-TRAFFIC LAYER — PART 1
-# ---------------------------------------------------------------------
-# Semaphores, gates, BytesIO helpers, and process-pool shims.
-# Nothing here modifies or shadows any existing symbol.
 # =====================================================================
 
-# --- Tunables (env-overridable) ---
 _GEMINI_MAX_CONCURRENT = int(os.environ.get("GEMINI_MAX_CONCURRENT", "8"))
 _CPU_MAX_CONCURRENT    = int(os.environ.get(
     "CPU_MAX_CONCURRENT",
@@ -77,7 +72,6 @@ _CPU_MAX_CONCURRENT    = int(os.environ.get(
 ))
 _GEMINI_TIMEOUT_S      = float(os.environ.get("GEMINI_TIMEOUT_S", "240"))
 
-# --- Lazy semaphores (created inside the running event loop) ---
 _GEMINI_SEM = None
 _CPU_SEM    = None
 
@@ -96,9 +90,7 @@ def _get_cpu_sem():
     return _CPU_SEM
 
 
-# --- BytesIO helpers (avoid disk round-trips) ---
 def bytes_to_stream(data):
-    """Wrap bytes/str in a fresh in-memory stream, cursor at 0."""
     if isinstance(data, str):
         data = data.encode("utf-8")
     buf = io.BytesIO(data)
@@ -111,17 +103,11 @@ def stream_to_bytes(buf):
     return buf.getvalue()
 
 
-# --- Picklable shim for kwargs (nicegui.run.cpu_bound has no kwargs) ---
 def _call_with_kwargs(fn, args, kwargs):
     return fn(*args, **kwargs)
 
 
-# --- CPU-bound runner gated by a global semaphore ---
 async def cpu_bound_limited(fn, *args, **kwargs):
-    """
-    Run a MODULE-LEVEL picklable function in NiceGUI's cpu_bound process
-    pool, but never spawn more concurrent workers than CPU_MAX_CONCURRENT.
-    """
     sem = _get_cpu_sem()
     async with sem:
         if kwargs:
@@ -129,22 +115,14 @@ async def cpu_bound_limited(fn, *args, **kwargs):
         return await run.cpu_bound(fn, *args)
 
 
-# --- Async Gemini runner gated by a global semaphore + timeout ---
 async def gemini_limited(coro_factory, timeout=None):
-    """
-    Run an async Gemini call under a global concurrency cap + timeout.
-    Pass a ZERO-ARG CALLABLE that returns a coroutine, so the coroutine
-    is only created once we actually hold a slot.
-    """
     sem = _get_gemini_sem()
     t = timeout or _GEMINI_TIMEOUT_S
     async with sem:
         return await asyncio.wait_for(coro_factory(), timeout=t)
 
 
-# --- Blocking-I/O runner (sync SDKs, requests, disk) ---
 async def io_bound_limited(fn, *args, **kwargs):
-    """Run blocking I/O in a thread pool, gated by the CPU semaphore."""
     sem = _get_cpu_sem()
     async with sem:
         if kwargs:
@@ -154,16 +132,8 @@ async def io_bound_limited(fn, *args, **kwargs):
 
 _DXF_BINARY_MAGIC = b"AutoCAD Binary DXF\r\n\x1a\x00"
 
-def _strip_thumbnail_section(text: str) -> str:
-    """
-    Remove the THUMBNAILIMAGE section from an ASCII DXF string.
 
-    AutoCAD embeds a small PNG preview in this section as hex data under
-    tag 310. If that hex is truncated by even one character (which happens
-    when files pass through upload/download without byte-perfect handling),
-    ezdxf's unhexlify() raises 'Odd-length string'. We don't need the
-    preview, so drop the whole section before parsing.
-    """
+def _strip_thumbnail_section(text: str) -> str:
     lines = text.splitlines()
     out = []
     i = 0
@@ -174,7 +144,6 @@ def _strip_thumbnail_section(text: str) -> str:
                 and lines[i + 1].strip() == 'SECTION'
                 and lines[i + 2].strip() == '2'
                 and lines[i + 3].strip().upper() == 'THUMBNAILIMAGE'):
-            # Skip to the matching ENDSEC
             i += 4
             while i < n:
                 if (lines[i].strip() == '0'
@@ -190,18 +159,6 @@ def _strip_thumbnail_section(text: str) -> str:
 
 
 def _open_dxf_doc_from_bytes(doc_bytes):
-    """
-    Rebuild a fresh ezdxf document from raw DXF bytes.
-
-    ASCII path:
-      - decode
-      - strip THUMBNAILIMAGE (avoids the odd-length hex crash)
-      - ezdxf.read on the cleaned text
-      - if that still fails, ezdxf.recover.read (ignores bad entities)
-
-    Binary path:
-      - ezdxf.read on BytesIO, ezdxf.recover.read as fallback.
-    """
     if isinstance(doc_bytes, str):
         doc_bytes = doc_bytes.encode('utf-8')
 
@@ -217,7 +174,6 @@ def _open_dxf_doc_from_bytes(doc_bytes):
             from ezdxf import recover as _recover
             return _recover.read(io.BytesIO(doc_bytes))
 
-    # ASCII path
     try:
         text = doc_bytes.decode('utf-8')
     except UnicodeDecodeError:
@@ -236,13 +192,14 @@ def _open_dxf_doc_from_bytes(doc_bytes):
             print(f"[dxf] recover(StringIO) failed: {e2!r}; trying raw bytes")
             return _recover.read(io.BytesIO(doc_bytes))
 
+
 def _extract_areas_from_dxf_bytes(doc_bytes, unit, workflow):
     doc = _open_dxf_doc_from_bytes(doc_bytes)
     return extract_areas_from_dxf(doc, unit=unit, workflow=workflow)
 
 
 # =====================================================================
-# AI layout planner  (fallback version, uses Gemini if available)
+# AI layout planner (fallback version)
 # =====================================================================
 async def plan_architectural_layout(plot_data):
     n_bed    = int(plot_data.get('num_bedrooms', 3) or 3)
@@ -318,17 +275,9 @@ Rules:
 
 
 # =====================================================================
-# Local room positioning (slice-and-dice)
+# Local room positioning (grid-based)
 # =====================================================================
 def _position_rooms(rooms, plot_data):
-    """
-    Grid-based room placement. Assigns a room program to the SAME
-    pre-computed grid cells that design_layout_with_ai_enhanced uses.
-
-    Cells are non-overlapping, corridor-facing, and already respect
-    Egyptian setbacks — so this fallback can never produce overlaps,
-    out-of-bounds rooms, or a bathroom that opens into a kitchen.
-    """
     from services.floor_plan_grid import build_grid as _bg
 
     grid = _bg(plot_data)
@@ -355,7 +304,6 @@ def _position_rooms(rooms, plot_data):
     lower_rooms, upper_rooms = [], []
     for r in rooms:
         nm = (r.get('name') or '').lower()
-        # The corridor is implicit in the grid — skip any corridor entry.
         if nm == 'corridor' or nm.startswith('corridor '):
             continue
         rt = _rtype(r.get('name', ''))
@@ -384,7 +332,7 @@ def _position_rooms(rooms, plot_data):
                 'type': rt,
                 'x': cell['x'], 'y': cell['y'],
                 'w': cell['w'], 'h': cell['h'],
-                'door_wall': cell.get('door_wall'),   # 'N' or 'S', from grid
+                'door_wall': cell.get('door_wall'),
                 'door_pos': cell['w'] // 2,
                 'window_walls': [win_wall] if rt != 'bathroom' else [],
             })
@@ -399,6 +347,8 @@ def _position_rooms(rooms, plot_data):
         'stair_cell': stair,
         'rooms': placed,
     }
+
+
 # =====================================================================
 # Excel / PDF helpers
 # =====================================================================
@@ -620,21 +570,13 @@ def generate_autocad_pdf(info, boq_df, engineer_name, project_name, logo_bytes, 
     return buffer.getvalue()
 
 
-# =====================================================================
-# Dark table helper
-# =====================================================================
 def _dark_table(**kwargs):
     return ui.table(**kwargs).classes('w-full text-white').props('dark flat bordered')
 
 
 # =====================================================================
 # ADDITIVE HIGH-TRAFFIC LAYER — PART 2
-# ---------------------------------------------------------------------
-# Async wrappers around the ORIGINAL functions above. Each wrapper
-# delegates straight to the untouched original — no logic is
-# reimplemented, only offloaded/gated.
 # =====================================================================
-
 async def process_excel_file_async(file_bytes, filename):
     return await cpu_bound_limited(process_excel_file, file_bytes, filename)
 
@@ -668,7 +610,6 @@ async def build_complete_project_async(params):
 
 
 async def plan_architectural_layout_async(plot_data):
-    """plan_architectural_layout() is already async; just gate it."""
     sem = _get_gemini_sem()
     async with sem:
         return await plan_architectural_layout(plot_data)
@@ -895,7 +836,7 @@ Cement = {cement_input.value} kg/m3 | Water = {water_input.value} kg/m3
 Truck: {truck_input.value} | Ticket: {ticket_input.value}
 Provide: per-stage table, statistical commentary, final PASS/FAIL with ECP clause.
 """
-                        res_text = await call_gemini_limited(prompt)  # [HT]
+                        res_text = await call_gemini_limited(prompt)
                         ai_cube_result_holder['text'] = res_text
                         result_output_area.clear()
                         with result_output_area:
@@ -1015,7 +956,7 @@ Perform a comprehensive technical audit."""
                             contents.append(types.Part.from_bytes(
                                 data=uploaded_file_data['bytes'],
                                 mime_type=uploaded_file_data['type']))
-                        audit_result_text = await call_gemini_limited(contents, timeout=240)  # [HT]
+                        audit_result_text = await call_gemini_limited(contents, timeout=240)
                         audit_output_container.clear()
                         with audit_output_container:
                             with ui.column().classes('output-card w-full'):
@@ -1081,7 +1022,7 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                             contents.append(types.Part.from_bytes(
                                 data=defect_file_data['bytes'],
                                 mime_type=defect_file_data['type']))
-                        res_text = await call_gemini_limited(contents, timeout=240)  # [HT]
+                        res_text = await call_gemini_limited(contents, timeout=240)
                         defect_output.clear()
                         with defect_output:
                             with ui.column().classes('output-card w-full'):
@@ -1139,7 +1080,7 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                             f"{get_code_directive(basis)}\n{NO_LATEX_RULE}\n"
                             "Use strictly METRIC (SI) units."
                         )
-                        answer = await call_gemini_limited(  # [HT]
+                        answer = await call_gemini_limited(
                             q, system_instruction=system_prompt, timeout=240)
                         chat_messages.append({"role": "assistant", "content": answer})
                     except Exception as e:
@@ -1225,7 +1166,7 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                         else:
                             contents.append(types.Part.from_bytes(
                                 data=ocr_file_data['bytes'], mime_type=ocr_file_data['type']))
-                        response_text = await call_gemini_limited(  # [HT]
+                        response_text = await call_gemini_limited(
                             contents, temperature=0, timeout=240)
                         transcribed = sanitize_ai_markdown(response_text)
                         transcribed_holder['text'] = transcribed
@@ -1247,7 +1188,6 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                                 text_editor['widget'].on('input', update_preview)
                                 update_preview()
 
-                        # ---------- DOWNLOAD BUTTONS ----------
                         ocr_export.clear()
                         with ocr_export:
                             def download_ocr_pdf():
@@ -1415,7 +1355,7 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                         for f in uploaded_files:
                             ext = os.path.splitext(f['name'])[1].lower()
                             if ext in ['.xlsx', '.xls']:
-                                df = await process_excel_file_async(f['bytes'], f['name'])  # [HT]
+                                df = await process_excel_file_async(f['bytes'], f['name'])
                                 if not df.empty:
                                     df['source'] = f['name']
                                     all_rows.append(df)
@@ -1509,7 +1449,7 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                         data = dxf_file_data['bytes']
                         if isinstance(data, str):
                             data = data.encode('utf-8')
-                        areas = await extract_areas_from_dxf_async(  # [HT]
+                        areas = await extract_areas_from_dxf_async(
                             data, unit_select.value,
                             workflow_select.value.lower().split()[0])
                         if not areas:
@@ -1543,8 +1483,7 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                 ui.label('🏗️ AI-Powered Home Layout Generator'
                          ).classes('text-2xl font-bold text-white mb-4')
                 ui.markdown('Describe your plot and what you want — the AI designs the layout, '
-                            'positions the rooms, and generates a full DXF with architectural '
-                            '+ structural plans.'
+                            'positions the rooms, and generates a DXF floor plan.'
                             ).classes('markdown-body mb-2')
 
                 with ui.row().classes('w-full gap-4 flex-wrap'):
@@ -1614,8 +1553,8 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                             'engineer': engineer_input.value,
                             'date': datetime.date.today().strftime('%Y-%m-%d'),
                         }
+                        plot_data['variation_seed'] = _rnd.randint(1, 999_999)
 
-                        # ---- Try sophisticated AI design first ----
                         from services.ai_service import (
                             design_layout_with_ai_enhanced, validate_layout,
                             _LAYOUT_STYLES,
@@ -1636,14 +1575,6 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                         except Exception as e:
                             print(f"[autocad] enhanced design failed: {e!r}")
 
-                        # Geometric validation only.
-                        # DO NOT call refine_layout_with_ai here: that function
-                        # asks the model to return free-form x/y/w/h and would
-                        # override the grid layout, which is exactly how
-                        # overlaps, out-of-bounds rooms, and bathroom-into-
-                        # kitchen doors were re-introduced in the past.
-                        # If validate flags area warnings, retry ONCE with a
-                        # different style — but always keep grid-sourced rooms.
                         if layout_design:
                             _area_warnings = validate_layout(layout_design, plot_data)
                             if _area_warnings:
@@ -1662,7 +1593,6 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                                 except Exception as _e:
                                     print(f"[autocad] style retry failed: {_e!r}")
 
-                        # ---- Fallback to legacy slice-and-dice ----
                         if not layout_design or not layout_design.get('rooms'):
                             with autocad_output:
                                 ui.label('Step 1/4 — Fallback positioning…'
@@ -1671,7 +1601,6 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                             layout_design = _position_rooms(
                                 room_program.get('rooms', []), plot_data)
 
-                        # === DEBUG + VALIDATE ===
                         import json as _json
                         from services.plan_validator import validate_plan as _validate_plan
                         print("=" * 70)
@@ -1700,7 +1629,7 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                                         ).classes('text-red-200 text-xs')
 
                         with autocad_output:
-                            ui.label('Step 3/4 — Rendering DXF (sophisticated)…'
+                            ui.label('Step 3/4 — Rendering DXF…'
                                      ).classes('self-center text-sm')
 
                         params = dict(plot_data)
@@ -1718,25 +1647,11 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                                      ).classes('text-xl font-bold text-green-400 mb-2')
                             info = result['info']
                             ui.markdown(f"""
-**Style:** {layout_design.get('_style', 'Custom')}  
-**Plot Area:** {info.get('plot_area', 0):.1f} m²  |  **Floors:** {info.get('num_floors', 0)}  |  **Coverage:** {info.get('coverage_ratio', 'n/a')}  
-**Building:** {info.get('building_width', 0)} m × {info.get('building_length', 0)} m  |  **Footprint:** {info.get('footprint_area', 0)} m²  
-**Rooms Placed:** {info.get('num_rooms', 0)}  |  **Columns:** {info.get('num_columns', 0)}
+**Style:** {layout_design.get('_style', 'Custom')}
+**Plot Area:** {info.get('plot_area', 0):.1f} m²  |  **Floors:** {info.get('num_floors', 0)}  |  **Coverage:** {info.get('coverage_ratio', 'n/a')}
+**Building:** {info.get('building_width', 0)} m × {info.get('building_length', 0)} m  |  **Footprint:** {info.get('footprint_area', 0)} m²
+**Rooms Placed:** {info.get('num_rooms', 0)}
 """).classes('text-white')
-
-                            ui.label('📋 Bill of Quantities'
-                                     ).classes('text-xl font-bold text-white mt-4 mb-2')
-                            boq_df = pd.DataFrame(result['boq'])
-                            if not boq_df.empty:
-                                cols = [{'name': c, 'label': c, 'field': c,
-                                         'sortable': True} for c in boq_df.columns]
-                                _dark_table(columns=cols,
-                                            rows=boq_df.to_dict('records'),
-                                            row_key='index')
-                                if 'Total Cost (EGP)' in boq_df.columns:
-                                    total = boq_df['Total Cost (EGP)'].sum()
-                                    ui.label(f'🏷️ Grand Total: {total:,.0f} EGP'
-                                             ).classes('text-2xl font-bold text-[#FF8C00] mt-2')
 
                         autocad_export.clear()
                         with autocad_export:
@@ -1757,11 +1672,13 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                                         engineer_input.value, project_name_input.value,
                                         logo_bytes_holder['bytes'], ticket_input.value
                                     )
+                                    import time as _t2
                                     ui.download(
                                         pdf_bytes,
-                                        filename=f"AI_Report_{info.get('plot_area', 0):.0f}m2.pdf")
-                                    ui.notify('PDF downloaded!', type='positive')
+                                        filename=f"AI_Report_{info.get('plot_area', 0):.0f}m2_{int(_t2.time())}.pdf")
+                                    ui.notify(f'PDF downloaded! ({len(pdf_bytes)} bytes)', type='positive')
                                 except Exception as e:
+                                    traceback.print_exc()
                                     ui.notify(f'PDF error: {e}', type='negative')
 
                             ui.button('📥 Download DXF', on_click=download_dxf
