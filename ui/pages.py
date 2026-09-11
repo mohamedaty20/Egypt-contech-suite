@@ -626,10 +626,23 @@ def main_page():
     ui.query('body').style('width: 100vw; height: 100vh; overflow-x: hidden;')
 
     # ---------------- SIDEBAR ----------------
-    sidebar = ui.left_drawer().classes('sidebar-container').style('width: 380px;')
+        sidebar = ui.left_drawer().classes('sidebar-container').style('width: 380px;')
     with sidebar:
         with ui.row().classes('w-full items-center justify-between mb-4 p-2'):
-           
+            ui.label('📋 PROJECT METADATA').classes('text-white font-bold text-base tracking-wide')
+            ui.button('✕', on_click=sidebar.toggle).classes(
+                'bg-transparent text-white text-xl hover:text-[#FF8C00] p-1 min-w-[36px] '
+                '!shadow-none !rounded-full !bg-transparent'
+            ).style('font-size: 20px; line-height: 1;')
+
+        project_name_input = ui.input(label='Project Name',
+                                       value='Highway Expansion Project').classes('w-full mb-3')
+        pour_location_input = ui.input(label='Structural Element / Chainage',
+                                        value='Highway Section Ch. 12+500').classes('w-full mb-4')
+
+        ui.label('Governing Design Code Basis').classes('text-white font-bold text-sm mb-1')
+        ui.markdown('By default every AI output is generated strictly per **ECP 203 / ECP 202 / ECP 104**.'
+                    ).classes('text-xs text-[#A9B6D0] mb-2')
         code_basis_select = ui.select(label='Code Type (applies app-wide)',
                                        options=CODE_BASIS_OPTIONS,
                                        value=CODE_BASIS_OPTIONS[0]).classes('w-full mb-4')
