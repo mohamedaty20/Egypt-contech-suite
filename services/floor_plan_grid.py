@@ -9,14 +9,8 @@ The AI then assigns rooms to cells. Geometry is owned by Python.
 
 def build_grid(plot_data):
     """
-    Returns:
-      {
-        'building':    {'x','y','w','h'},
-        'corridor':    {'x','y','w','h'},
-        'entry_wall':  'S' | 'N' | 'E' | 'W',
-        'cells':       [ {id, x, y, w, h, side}, ... ],
-      }
-    'side' is 'lower' (below corridor) or 'upper' (above corridor).
+    Envelope = OUTER face of exterior walls.
+    Cells live inside the INNER face so rooms don't overlap the walls.
     """
     pw_mm = int((plot_data.get('plot_width') or 12) * 1000)
     pl_mm = int((plot_data.get('plot_length') or 16) * 1000)
@@ -26,24 +20,31 @@ def build_grid(plot_data):
     elif sw >= 8:  front, rear, side = 2500, 1800, 1500
     else:          front, rear, side = 2000, 1800, 1200
 
+    wall_mm = int(plot_data.get('wall_thickness_mm', 250))
+
     bx = side
     by = front
-    bw = pw_mm - 2 * side
-    bh = pl_mm - front - rear
+    bw = max(pw_mm - 2 * side, 8000)
+    bh = max(pl_mm - front - rear, 9000)
 
-    # Make sure we have enough room for a reasonable building
-    bw = max(bw, 8000)
-    bh = max(bh, 9000)
+    # Inner face of exterior walls — cells must stay inside this
+    ix0 = bx + wall_mm
+    iy0 = by + wall_mm
+    ix1 = bx + bw - wall_mm
+    iy1 = by + bh - wall_mm
+    iw = ix1 - ix0
+    ih = iy1 - iy0
 
     corridor_h = 1300
-    mid_y = by + bh / 2
+    mid_y = iy0 + ih / 2
     corridor_y = int(mid_y - corridor_h / 2)
-    corridor = {'x': bx, 'y': corridor_y, 'w': bw, 'h': corridor_h}
+    corridor = {'x': int(ix0), 'y': corridor_y,
+                'w': int(iw), 'h': corridor_h}
 
-    lower_y0 = by
+    lower_y0 = iy0
     lower_y1 = corridor_y
     upper_y0 = corridor_y + corridor_h
-    upper_y1 = by + bh
+    upper_y1 = iy1
 
     def split_row(y0, y1, n, x0, w, prefix, side):
         cells = []
@@ -59,14 +60,9 @@ def build_grid(plot_data):
             })
         return cells
 
-    # Lower zone: 3 cells side by side
-    lower = split_row(lower_y0, lower_y1, 3, bx, bw, 'L', 'lower')
-    # Upper zone: 4 cells side by side
-    upper = split_row(upper_y0, upper_y1, 4, bx, bw, 'U', 'upper')
+    lower = split_row(lower_y0, lower_y1, 3, ix0, iw, 'L', 'lower')
+    upper = split_row(upper_y0, upper_y1, 4, ix0, iw, 'U', 'upper')
 
-    # Reserve the middle upper cell for the staircase — it will not
-    # receive a room assignment. The DXF layer draws the stair steps
-    # inside it, and no door is drawn on that cell's corridor wall.
     if len(upper) >= 3:
         upper[len(upper) // 2]['is_stair'] = True
 
