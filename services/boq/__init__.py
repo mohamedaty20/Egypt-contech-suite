@@ -28,23 +28,18 @@ from .classifier import classify_unknown_layers
 from .extractor_image import extract_elements_from_image
 
 __all__ = [
-    # taxonomy
     "LAYER_TAXONOMY", "CATEGORY_GROUPS",
     "classify_layer", "normalize_layer_name", "levenshtein",
     "in_group", "is_primary_architectural", "is_annotation",
-    # geometry
     "shoelace_area", "bbox", "polyline_length", "is_closed",
     "line_angle_deg", "line_midpoint", "line_length", "is_axis_aligned",
     "perpendicular_distance", "parallel_lines",
     "point_in_polygon", "point_to_segment_distance",
     "polygon_inside_polygon", "polygon_centroid",
     "angle_bucket",
-    # pipeline
     "extract_elements", "collect_unknown_layers",
     "process_walls", "process_rooms",
-    # engine
     "compute_boq", "PARAM_DEFAULTS",
-    # batch 4
     "classify_unknown_layers",
     "extract_elements_from_image",
 ]
