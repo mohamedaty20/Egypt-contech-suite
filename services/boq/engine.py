@@ -2,41 +2,37 @@
 services/boq/engine.py
 
 The BOQ engine. Applies every architectural formula from the master spec
-and produces a priced BOQ as a flat list of line items.
+and produces a QUANTITY-ONLY BOQ (no prices, no rates).
 
 Inputs:
   walls_result    — from wall_processor.process_walls()
   rooms_result    — from room_processor.process_rooms()
   records         — raw records from extractor_dxf.extract_elements()
-                    (used to summarize doors / windows)
   params          — user-supplied parameters (see PARAM_DEFAULTS)
-  rates           — dict of unit rates (default: DEFAULT_RATES)
 
 Output:
   {
     "summary": { ...derived quantities... },
-    "boq":     [ {item, unit, qty, rate, amount, category}, ... ],
-    "grand_total": float,
+    "boq":     [ {item, unit, qty, category, notes}, ... ],
+    "totals":  { ...grouped quantities by category... },
   }
 """
-
-from .rates import DEFAULT_RATES
 
 
 # =====================================================================
 # USER PARAMETERS (with defaults)
 # =====================================================================
 PARAM_DEFAULTS = {
-    "ext_wall_thickness_m":  0.250,   # 250 mm
-    "int_wall_thickness_m":  0.120,   # 120 mm
-    "floor_height_m":        3.00,
-    "door_height_m":         2.10,
-    "window_height_m":       1.20,
-    "wet_tile_height_m":     2.10,
-    "mortar_bed_thickness_m": 0.020,  # 20 mm
-    "tile_size_m":           0.60,    # 60×60 tiles
-    "grout_kg_per_m2":       0.50,
-    "skirting_deduction":    0.10,    # 10% for door openings
+    "ext_wall_thickness_m":   0.250,
+    "int_wall_thickness_m":   0.120,
+    "floor_height_m":         3.00,
+    "door_height_m":          2.10,
+    "window_height_m":        1.20,
+    "wet_tile_height_m":      2.10,
+    "mortar_bed_thickness_m": 0.020,
+    "tile_size_m":            0.60,
+    "grout_kg_per_m2":        0.50,
+    "skirting_deduction":     0.10,
 }
 
 
@@ -53,12 +49,6 @@ def _p(params, key):
 # DOOR / WINDOW SUMMARY
 # =====================================================================
 def _summarize_openings(records, door_h_m, win_h_m):
-    """
-    Return (door_count, door_area_m2, window_count, window_area_m2).
-
-    Doors: prefer polyline geometry (bbox width). Fall back to arc radius.
-    Windows: prefer polyline geometry (bbox width).
-    """
     door_count = 0
     door_area_m2 = 0.0
     win_count = 0
@@ -84,7 +74,7 @@ def _summarize_openings(records, door_h_m, win_h_m):
             elif gt == "line":
                 width_mm = geom.get("length_mm")
 
-            if width_mm and width_mm > 300:  # > 30 cm is a plausible door
+            if width_mm and width_mm > 300:
                 door_count += 1
                 door_area_m2 += (width_mm / 1000.0) * door_h_m
 
@@ -109,16 +99,10 @@ def _summarize_openings(records, door_h_m, win_h_m):
 # =====================================================================
 # MAIN
 # =====================================================================
-def compute_boq(walls_result, rooms_result, records, params=None,
-                rates=None):
+def compute_boq(walls_result, rooms_result, records, params=None):
     """
-    Produce the full architectural BOQ.
-
-    Returns: {summary, boq, grand_total}
+    Produce the full architectural BOQ — quantities only, no prices.
     """
-    rates = dict(rates) if rates else dict(DEFAULT_RATES)
-
-    # -------- user params (metres, metres, metres) --------
     ext_t_m     = _p(params, "ext_wall_thickness_m")
     int_t_m     = _p(params, "int_wall_thickness_m")
     floor_h_m   = _p(params, "floor_height_m")
@@ -130,22 +114,18 @@ def compute_boq(walls_result, rooms_result, records, params=None,
     grout_kg    = _p(params, "grout_kg_per_m2")
     skirt_ded   = _p(params, "skirting_deduction")
 
-    # -------- wall data --------
     walls = walls_result.get("walls", [])
     ext_len_m = sum(w["geometry"]["length_mm"] for w in walls
                     if w["subtype"] == "external") / 1000.0
     int_len_m = sum(w["geometry"]["length_mm"] for w in walls
                     if w["subtype"] == "internal") / 1000.0
 
-    # -------- envelope --------
     env = walls_result.get("envelope", {})
     env_area_m2 = (env.get("area_mm2") or 0.0) / 1e6
 
-    # -------- wall footprints (deducted from envelope) --------
     ext_footprint_m2 = ext_len_m * ext_t_m
     int_footprint_m2 = int_len_m * int_t_m
 
-    # -------- voids & stairs (from raw records) --------
     void_area_m2 = 0.0
     stair_area_m2 = 0.0
     for r in records:
@@ -156,17 +136,14 @@ def compute_boq(walls_result, rooms_result, records, params=None,
         elif cat == "stair":
             stair_area_m2 += area / 1e6
 
-    # -------- net floor area --------
     net_floor_m2 = env_area_m2 - int_footprint_m2 - stair_area_m2 - void_area_m2
     if net_floor_m2 < 0:
         net_floor_m2 = 0.0
 
-    # -------- wet / dry split from rooms --------
     rstats = rooms_result.get("stats", {})
     wet_area_m2 = rstats.get("wet_area_m2", 0.0)
     dry_area_m2 = max(0.0, net_floor_m2 - wet_area_m2)
 
-    # -------- wall elevation --------
     ext_elev_m2 = ext_len_m * floor_h_m
     int_elev_m2 = int_len_m * floor_h_m * 2.0
     gross_wall_m2 = ext_elev_m2 + int_elev_m2
@@ -176,8 +153,6 @@ def compute_boq(walls_result, rooms_result, records, params=None,
     )
     net_wall_m2 = max(0.0, gross_wall_m2 - door_area_m2 - win_area_m2)
 
-    # -------- wet / dry wall finish split --------
-    # Wet rooms: their perimeter walls get ceramic up to wet_tile_height.
     wet_perim_m = 0.0
     for r in rooms_result.get("rooms", []):
         if r["subtype"] == "wet":
@@ -186,25 +161,20 @@ def compute_boq(walls_result, rooms_result, records, params=None,
 
     dry_wall_m2 = max(0.0, net_wall_m2 - wet_ceramic_wall_m2)
 
-    # -------- floor finishes --------
     ceramic_floor_m2 = net_floor_m2
     mortar_m3 = ceramic_floor_m2 * mortar_m
     tile_count = ceramic_floor_m2 / (tile_m * tile_m) if tile_m > 0 else 0.0
     grout_total_kg = ceramic_floor_m2 * grout_kg
 
-    # -------- ceiling --------
     ceiling_m2 = net_floor_m2
 
-    # -------- skirting --------
     total_perim_m = 0.0
     for r in rooms_result.get("rooms", []):
         total_perim_m += (r["geometry"].get("length_mm") or 0.0) / 1000.0
     skirting_len_m = total_perim_m * (1.0 - skirt_ded)
 
-    # -------- wall masonry (brick / block) --------
-    wall_masonry_m2 = ext_elev_m2 + int_elev_m2   # per face area
+    wall_masonry_m2 = ext_elev_m2 + int_elev_m2
 
-    # -------- summary --------
     summary = {
         "envelope_area_m2":         round(env_area_m2, 3),
         "ext_wall_len_m":           round(ext_len_m, 3),
@@ -233,79 +203,68 @@ def compute_boq(walls_result, rooms_result, records, params=None,
         "wall_masonry_m2":          round(wall_masonry_m2, 3),
     }
 
-    # -------- BOQ items --------
-    def _item(name, unit, qty, rate_key, category, notes=""):
-        r = float(rates.get(rate_key, 0.0))
-        amt = float(qty) * r
+    def _item(name, unit, qty, category, notes=""):
         return {
             "item":     name,
             "unit":     unit,
             "qty":      round(float(qty), 3),
-            "rate":     r,
-            "amount":   round(amt, 2),
             "category": category,
             "notes":    notes,
         }
 
     boq = []
 
-    # --- masonry ---
     boq.append(_item("Wall masonry (brick / block)",
-                     "m²", wall_masonry_m2, "wall_masonry", "masonry",
+                     "m²", wall_masonry_m2, "masonry",
                      f"{ext_len_m:.1f} m ext + {int_len_m:.1f} m int × {floor_h_m:.2f} m"))
-
-    # --- wall finishes ---
     boq.append(_item("Wall plastering — dry areas",
-                     "m²", dry_wall_m2, "wall_plaster", "finishing",
-                     "Dry walls after subtracting wet areas + openings"))
+                     "m²", dry_wall_m2, "finishing",
+                     "Dry walls after wet areas + openings"))
     boq.append(_item("Wall painting — dry areas",
-                     "m²", dry_wall_m2, "wall_paint", "finishing",
+                     "m²", dry_wall_m2, "finishing",
                      "2 coats emulsion"))
 
-    # --- wet ceramic ---
     if wet_ceramic_wall_m2 > 0:
         boq.append(_item("Wall ceramic tiles — wet areas",
-                         "m²", wet_ceramic_wall_m2, "wet_wall_ceramic",
-                         "finishing",
+                         "m²", wet_ceramic_wall_m2, "finishing",
                          f"Bathrooms + kitchen up to {wet_tile_m:.2f} m"))
 
-    # --- floor ---
     boq.append(_item("Floor ceramic tiles (60×60)",
-                     "m²", ceramic_floor_m2, "floor_ceramic", "finishing"))
+                     "m²", ceramic_floor_m2, "finishing"))
     boq.append(_item("Floor mortar bed (20 mm)",
-                     "m³", mortar_m3, "floor_mortar", "finishing"))
+                     "m³", mortar_m3, "finishing"))
     boq.append(_item("Tile grout",
-                     "kg", grout_total_kg, "floor_grout", "finishing"))
-
-    # --- ceiling ---
+                     "kg", grout_total_kg, "finishing"))
     boq.append(_item("Ceiling plastering",
-                     "m²", ceiling_m2, "ceiling_plaster", "finishing"))
+                     "m²", ceiling_m2, "finishing"))
     boq.append(_item("Ceiling painting",
-                     "m²", ceiling_m2, "ceiling_paint", "finishing"))
-
-    # --- skirting ---
+                     "m²", ceiling_m2, "finishing"))
     boq.append(_item("Skirting board",
-                     "m", skirting_len_m, "skirting", "finishing",
+                     "m", skirting_len_m, "finishing",
                      f"{100*skirt_ded:.0f}% deducted for door openings"))
 
-    # --- doors / windows ---
     if door_count > 0:
         boq.append(_item("Doors (supply + install)",
-                         "unit", door_count, "door", "openings",
+                         "unit", door_count, "openings",
                          f"avg area/unit: {(door_area_m2/max(1,door_count)):.2f} m²"))
     if win_area_m2 > 0:
         boq.append(_item("Windows (supply + install)",
-                         "m²", win_area_m2, "window", "openings"))
+                         "m²", win_area_m2, "openings"))
 
-    grand = sum(b["amount"] for b in boq)
+    totals = {}
+    for b in boq:
+        cat = b["category"]
+        totals.setdefault(cat, []).append({
+            "item": b["item"], "unit": b["unit"], "qty": b["qty"],
+        })
 
     print(f"[engine] net_floor_area = {net_floor_m2:.2f} m²")
     print(f"[engine] wall elevation (gross) = {gross_wall_m2:.2f} m²  "
           f"net = {net_wall_m2:.2f} m²")
-    print(f"[engine] BOQ items: {len(boq)}   grand_total = {grand:,.0f} EGP")
+    print(f"[engine] BOQ items: {len(boq)}")
 
     return {
-        "summary":      summary,
-        "boq":          boq,
-        "grand_total":  round(grand, 2),
+        "summary": summary,
+        "boq":     boq,
+        "totals":  totals,
     }
