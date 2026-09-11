@@ -1742,9 +1742,10 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                         with autocad_export:
                             def download_dxf():
                                 if autocad_data_holder.get('dxf'):
+                                    import time as _t
                                     ui.download(
                                         autocad_data_holder['dxf'],
-                                        filename=f"AI_Design_{info.get('plot_area', 0):.0f}m2.dxf")
+                                        filename=f"AI_Design_{info.get('plot_area', 0):.0f}m2_{int(_t.time())}.dxf")
                                     ui.notify('DXF downloaded!', type='positive')
                                 else:
                                     ui.notify('No DXF generated.', type='warning')
