@@ -321,101 +321,84 @@ Rules:
 # Local room positioning (slice-and-dice)
 # =====================================================================
 def _position_rooms(rooms, plot_data):
-    pw_mm = int((plot_data.get('plot_width') or 12) * 1000)
-    pl_mm = int((plot_data.get('plot_length') or 16) * 1000)
+    """
+    Grid-based room placement. Assigns a room program to the SAME
+    pre-computed grid cells that design_layout_with_ai_enhanced uses.
 
-    sw = plot_data.get('street_width_m', 10)
-    if sw >= 12:   front, rear, side = 2500, 2000, 1500
-    elif sw >= 8:  front, rear, side = 2200, 1800, 1500
-    else:          front, rear, side = 1800, 1800, 1200
+    Cells are non-overlapping, corridor-facing, and already respect
+    Egyptian setbacks — so this fallback can never produce overlaps,
+    out-of-bounds rooms, or a bathroom that opens into a kitchen.
+    """
+    from services.floor_plan_grid import build_grid as _bg
 
-    bx = side
-    by = front
-    bw = max(6000, pw_mm - 2 * side)
-    bh = max(8000, pl_mm - front - rear)
+    grid = _bg(plot_data)
+    all_cells = grid['cells']
+    stair = next((c for c in all_cells if c.get('is_stair')), None)
+    cells = [c for c in all_cells if not c.get('is_stair')]
 
-    corridor_h = 1300
-    mid_y = by + bh / 2
-    corridor = {'x': int(bx + 200), 'y': int(mid_y - corridor_h / 2),
-                'w': int(bw - 400), 'h': corridor_h}
-    core = {'x': int(bx + bw - 2800), 'y': int(mid_y - 1800),
-            'w': 2400, 'h': 3600}
+    if not cells:
+        return {'building': grid['building'], 'corridor': grid['corridor'],
+                'entry_wall': grid['entry_wall'], 'stair_cell': stair,
+                'rooms': []}
 
-    lower_zone = (bx + 150, by + 150, bx + bw - 150, mid_y - corridor_h / 2 - 100)
-    upper_zone = (bx + 150, mid_y + corridor_h / 2 + 100, bx + bw - 150, by + bh - 150)
+    def _rtype(nm):
+        n = (nm or '').lower()
+        if 'master' in n: return 'bedroom_master'
+        if 'bath' in n or 'wc' in n or 'toilet' in n: return 'bathroom'
+        if 'kitchen' in n: return 'kitchen'
+        if 'living' in n or 'reception' in n or 'mandara' in n: return 'living'
+        if 'dining' in n: return 'dining'
+        if 'bedroom' in n: return 'bedroom'
+        if 'corridor' in n or 'hall' in n or 'entry' in n or 'foyer' in n: return 'entry'
+        return 'bedroom'
 
-    public_rooms = [r for r in rooms
-                    if r.get('zone') == 'public'
-                    and 'corridor' not in r.get('name', '').lower()]
-    private_rooms = [r for r in rooms if r.get('zone') == 'private']
-    public_rooms.sort(key=lambda r: r.get('priority', 99))
-    private_rooms.sort(key=lambda r: r.get('priority', 99))
-
-    def partition(rect, room_list):
-        if not room_list:
-            return []
-        if len(room_list) == 1:
-            return [(room_list[0], rect)]
-        x0, y0, x1, y1 = rect
-        w, h = x1 - x0, y1 - y0
-        total = sum(r.get('area_m2', 10) for r in room_list) or 1
-        frac = max(0.25, min(0.75, room_list[0].get('area_m2', 10) / total))
-        if w >= h:
-            cut = x0 + int(w * frac)
-            return ([(room_list[0], (x0, y0, cut, y1))] +
-                    partition((cut, y0, x1, y1), room_list[1:]))
+    lower_rooms, upper_rooms = [], []
+    for r in rooms:
+        nm = (r.get('name') or '').lower()
+        # The corridor is implicit in the grid — skip any corridor entry.
+        if nm == 'corridor' or nm.startswith('corridor '):
+            continue
+        rt = _rtype(r.get('name', ''))
+        if r.get('zone') == 'private' or rt in ('bedroom', 'bedroom_master', 'bathroom'):
+            upper_rooms.append(r)
         else:
-            cut = y0 + int(h * frac)
-            return ([(room_list[0], (x0, y0, x1, cut))] +
-                    partition((x0, cut, x1, y1), room_list[1:]))
+            lower_rooms.append(r)
 
-    placements = []
-    if public_rooms:
-        placements += partition(lower_zone, public_rooms)
-    if private_rooms:
-        placements += partition(upper_zone, private_rooms)
+    lower_cells = [c for c in cells if c['side'] == 'lower']
+    upper_cells = [c for c in cells if c['side'] == 'upper']
 
-    positioned = []
-    for room, (x0, y0, x1, y1) in placements:
-        nm = room.get('name', '').lower()
-        if 'master' in nm:      rtype = 'bedroom_master'
-        elif 'bedroom' in nm:   rtype = 'bedroom'
-        elif 'living' in nm:    rtype = 'living'
-        elif 'kitchen' in nm:   rtype = 'kitchen'
-        elif 'bath' in nm:      rtype = 'bathroom'
-        elif 'dining' in nm:    rtype = 'dining'
-        else:                   rtype = 'bedroom'
+    placed = []
 
-        room_cy = (y0 + y1) / 2
-        door_wall = 'N' if room_cy < mid_y else 'S'
-        door_pos = int((x1 - x0) / 2)
+    def _fill(room_list, cell_list):
+        for i, cell in enumerate(cell_list):
+            if i < len(room_list):
+                r = room_list[i]
+                nm = r.get('name', f'Room {i+1}')
+                rt = _rtype(nm)
+            else:
+                nm = f"Room {cell['id']}"
+                rt = 'bedroom'
+            win_wall = 'S' if cell['side'] == 'lower' else 'N'
+            placed.append({
+                'name': nm,
+                'type': rt,
+                'x': cell['x'], 'y': cell['y'],
+                'w': cell['w'], 'h': cell['h'],
+                'door_wall': cell.get('door_wall'),   # 'N' or 'S', from grid
+                'door_pos': cell['w'] // 2,
+                'window_walls': [win_wall] if rt != 'bathroom' else [],
+            })
 
-        wins = []
-        if room.get('needs_window'):
-            if abs(y0 - by) < 400:            wins.append('S')
-            if abs(y1 - (by + bh)) < 400:     wins.append('N')
-            if abs(x0 - bx) < 400:            wins.append('W')
-            if abs(x1 - (bx + bw)) < 400:     wins.append('E')
-            if not wins:                      wins.append('S')
-
-        positioned.append({
-            'name': room.get('name', 'Room'),
-            'type': rtype,
-            'x': int(x0), 'y': int(y0),
-            'w': int(x1 - x0), 'h': int(y1 - y0),
-            'door_wall': door_wall,
-            'door_pos': door_pos,
-            'window_walls': wins,
-        })
+    _fill(lower_rooms, lower_cells)
+    _fill(upper_rooms, upper_cells)
 
     return {
-        'building': {'x': int(bx), 'y': int(by), 'w': int(bw), 'h': int(bh)},
-        'corridor': corridor,
-        'core': core,
-        'rooms': positioned,
+        'building': grid['building'],
+        'corridor': grid['corridor'],
+        'entry_wall': grid['entry_wall'],
+        'stair_cell': stair,
+        'rooms': placed,
     }
-
-
 # =====================================================================
 # Excel / PDF helpers
 # =====================================================================
@@ -1635,7 +1618,7 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                         # ---- Try sophisticated AI design first ----
                         from services.ai_service import (
                             design_layout_with_ai_enhanced, validate_layout,
-                            refine_layout_with_ai, _LAYOUT_STYLES,
+                            _LAYOUT_STYLES,
                         )
 
                         style = _rnd.choice(_LAYOUT_STYLES)
@@ -1653,30 +1636,31 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                         except Exception as e:
                             print(f"[autocad] enhanced design failed: {e!r}")
 
-                        # Validate + refine loop (max 2 refinements)
+                        # Geometric validation only.
+                        # DO NOT call refine_layout_with_ai here: that function
+                        # asks the model to return free-form x/y/w/h and would
+                        # override the grid layout, which is exactly how
+                        # overlaps, out-of-bounds rooms, and bathroom-into-
+                        # kitchen doors were re-introduced in the past.
+                        # If validate flags area warnings, retry ONCE with a
+                        # different style — but always keep grid-sourced rooms.
                         if layout_design:
-                            for attempt in range(2):
-                                violations = validate_layout(layout_design, plot_data)
-                                if not violations:
-                                    break
-                                with autocad_output:
-                                    ui.label(
-                                        f'Step 2/4 — Refining (pass {attempt+1}, '
-                                        f'{len(violations)} issues)…'
-                                    ).classes('self-center text-sm')
+                            _area_warnings = validate_layout(layout_design, plot_data)
+                            if _area_warnings:
+                                print(f"[autocad] {len(_area_warnings)} area "
+                                      f"warning(s) — retrying with another style")
                                 try:
-                                    refined = await gemini_limited(
-                                        lambda: refine_layout_with_ai(
-                                            layout_design, violations, plot_data),
+                                    _alt_style = _rnd.choice(_LAYOUT_STYLES)
+                                    _alt = await gemini_limited(
+                                        lambda: design_layout_with_ai_enhanced(
+                                            plot_data, style_hint=_alt_style,
+                                            temperature=0.95),
                                         timeout=300,
                                     )
-                                    if refined and refined.get('rooms'):
-                                        layout_design = refined
-                                    else:
-                                        break
-                                except Exception as e:
-                                    print(f"[autocad] refine failed: {e!r}")
-                                    break
+                                    if _alt and _alt.get('rooms'):
+                                        layout_design = _alt
+                                except Exception as _e:
+                                    print(f"[autocad] style retry failed: {_e!r}")
 
                         # ---- Fallback to legacy slice-and-dice ----
                         if not layout_design or not layout_design.get('rooms'):
