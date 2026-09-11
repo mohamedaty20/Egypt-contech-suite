@@ -577,84 +577,135 @@ _LAYOUT_STYLES = [
 ]
 
 
-async def design_layout_with_ai_enhanced(plot_data, style_hint=None, temperature=0.95):
-    """Ask Gemini for a FULL positioned floor plan. Returns dict with
-    building/corridor/rooms, or None on failure. Uses a random style hint
-    and high temperature so every call produces a different design."""
-    pw_mm = int((plot_data.get('plot_width') or 12) * 1000)
-    pl_mm = int((plot_data.get('plot_length') or 16) * 1000)
-    street = plot_data.get('street_side', 'S')
-    if style_hint is None:
-        style_hint = _random.choice(_LAYOUT_STYLES)
+async def design_layout_with_ai_enhanced(plot_data, style_hint=None, temperature=0.85):
+    """
+    AI assigns room names to pre-computed grid cells.
+    Python owns the geometry. The AI cannot produce overlaps or
+    out-of-bounds rooms because it never returns coordinates.
+    """
+    import random as _r
+    from services.floor_plan_grid import build_grid
 
+    grid = build_grid(plot_data)
+    cells = grid['cells']
+
+    if style_hint is None:
+        style_hint = _r.choice(_LAYOUT_STYLES)
     if isinstance(style_hint, tuple):
         style_name, style_desc = style_hint
     else:
         style_name, style_desc = "Custom", style_hint
 
-    prompt = f"""You are a master Egyptian architect. Design a REAL residential floor plan as POSITIONED rectangles in millimetres.
+    cell_lines = "\n".join(
+        f"  {c['id']}: {c['w']} x {c['h']} mm  ({c['side']} side)"
+        for c in cells
+    )
 
-STYLE FOR THIS DESIGN (obey strictly): {style_name}
+    nb = int(plot_data.get('num_bedrooms', 3))
+    nba = int(plot_data.get('num_bathrooms', 2))
+
+    prompt = f"""You are a master Egyptian architect. Assign room types to a fixed grid of cells.
+
+The building shell and corridor are PRE-DESIGNED. You are only choosing which room goes in which cell.
+
+STYLE FOR THIS DESIGN: {style_name}
 Style details: {style_desc}
 
-PLOT: {pw_mm} x {pl_mm} mm. Street faces {street} side.
-Floors: {plot_data.get('num_floors', 2)}.
-Bedrooms: {plot_data.get('num_bedrooms', 3)}.
-Bathrooms: {plot_data.get('num_bathrooms', 2)}.
-User wish: {plot_data.get('user_description', 'Standard Egyptian family home')}
+GRID (all cells already exist, all touch the corridor):
+{cell_lines}
 
-EGYPTIAN CODE RULES (MUST OBEY, ECP 203 + Law 119/2008):
-- Setbacks: front 2500mm, rear 2000mm, each side 1500mm from plot edge
-- Corridor width >= 1100 mm
-- Stair core >= 2200 x 3200 mm, must touch corridor
-- Master bedroom >= 14 m2, other bedrooms >= 10 m2
-- Living >= 20 m2
-- Kitchen >= 7 m2 (must have exterior wall for window)
-- Bathroom >= 3.5 m2
-- Dining (if present) >= 10 m2
-- Every room must have a door on the corridor side
-- Living, kitchen, all bedrooms MUST have a window on an EXTERIOR wall
-- NO TWO ROOMS MAY OVERLAP
-- Every room must be INSIDE the building bounds
+The "lower side" cells are below the corridor. The "upper side" cells are above.
 
-COORDINATE SYSTEM: (0,0) at bottom-left of the PLOT (not the building).
-X increases right, Y increases up. Room (x,y,w,h) is bottom-left corner + size.
-All values in MILLIMETRES.
+ROOM REQUIREMENTS (obey strictly):
+- Exactly {nb} bedrooms total (name one of them "Master Bedroom" if you want)
+- Exactly {nba} bathrooms total
+- Exactly 1 Living Room
+- Exactly 1 Kitchen
+- Remaining cells: pick from Dining, Entry Hall, Laundry, Storage, Study, Family Lounge
 
-Return ONLY a JSON object, no prose, no markdown fences:
+PLACEMENT GUIDANCE:
+- Public rooms (Living, Kitchen, Dining, Entry) usually go on the lower side
+- Private rooms (Bedrooms, Bathrooms) usually go on the upper side
+- Bathrooms near bedrooms where possible
+- Kitchen adjacent to Dining where possible
+- Every cell gets exactly one assignment — do not skip cells
+
+Return ONLY this JSON structure, no prose, no markdown fences:
 
 {{
-  "building": {{"x": 1500, "y": 2500, "w": {pw_mm-3000}, "h": {pl_mm-4500}}},
-  "corridor": {{"x": 1600, "y": 8000, "w": {pw_mm-3200}, "h": 1200}},
-  "core": {{"x": 8500, "y": 6500, "w": 2400, "h": 3600}},
-  "rooms": [
-    {{"name": "Living Room", "type": "living", "x": 1600, "y": 2600, "w": 5000, "h": 5200,
-      "door_wall": "N", "door_pos": 2500, "window_walls": ["S", "W"]}},
-    {{"name": "Kitchen", "type": "kitchen", "x": 6800, "y": 2600, "w": 3200, "h": 4000,
-      "door_wall": "N", "door_pos": 1600, "window_walls": ["S"]}}
+  "assignments": [
+    {{"cell": "L1", "room_name": "Living Room", "room_type": "living"}},
+    {{"cell": "L2", "room_name": "Kitchen", "room_type": "kitchen"}},
+    {{"cell": "L3", "room_name": "Dining", "room_type": "dining"}},
+    {{"cell": "U1", "room_name": "Master Bedroom", "room_type": "bedroom_master"}},
+    {{"cell": "U2", "room_name": "Bedroom 2", "room_type": "bedroom"}},
+    {{"cell": "U3", "room_name": "Bathroom 1", "room_type": "bathroom"}},
+    {{"cell": "U4", "room_name": "Bedroom 3", "room_type": "bedroom"}}
   ],
-  "design_notes": "Brief 1-2 sentence description of the layout concept"
+  "design_notes": "one-sentence concept"
 }}
-
-Design a DIFFERENT, rich layout each time. Vary room sizes within code limits.
-Place wet rooms (kitchen + baths) together for plumbing efficiency.
-Place bedrooms away from street noise. Fill the plot efficiently without waste."""
+"""
 
     try:
-        text = await call_gemini_json([prompt], temperature=temperature, timeout=300)
+        text = await call_gemini_json([prompt], temperature=temperature, timeout=180)
         text = re.sub(r'^```json\s*', '', text.strip())
         text = re.sub(r'\s*```$', '', text)
         s, e = text.find('{'), text.rfind('}')
         if s != -1 and e != -1:
             text = text[s:e+1]
         data = json.loads(text)
-        if not data.get('rooms'):
-            return None
-        data['_style'] = style_name
-        return data
     except Exception as ex:
-        print(f"[design_layout_with_ai_enhanced] failed: {ex}")
+        print(f"[grid-design] AI failed: {ex}")
         return None
+
+    by_id = {c['id']: c for c in cells}
+    seen = set()
+    rooms = []
+    for a in data.get('assignments', []):
+        cid = a.get('cell')
+        if cid not in by_id or cid in seen:
+            continue
+        seen.add(cid)
+        cell = by_id[cid]
+        rtype = a.get('room_type', 'bedroom')
+        is_lower = cell['side'] == 'lower'
+        door_wall = 'N' if is_lower else 'S'
+        window_wall = 'S' if is_lower else 'N'
+        rooms.append({
+            'name': a.get('room_name', rtype.title()),
+            'type': rtype,
+            'x': cell['x'], 'y': cell['y'],
+            'w': cell['w'], 'h': cell['h'],
+            'door_wall': door_wall,
+            'door_pos': cell['w'] // 2,
+            'window_walls': [window_wall] if rtype != 'bathroom' else [],
+        })
+
+    # Fill any unassigned cells with a generic bedroom so the plan is complete
+    for c in cells:
+        if c['id'] not in seen:
+            is_lower = c['side'] == 'lower'
+            rooms.append({
+                'name': f"Room {c['id']}",
+                'type': 'bedroom',
+                'x': c['x'], 'y': c['y'],
+                'w': c['w'], 'h': c['h'],
+                'door_wall': 'N' if is_lower else 'S',
+                'door_pos': c['w'] // 2,
+                'window_walls': ['S' if is_lower else 'N'],
+            })
+
+    if not rooms:
+        return None
+
+    return {
+        'building': grid['building'],
+        'corridor': grid['corridor'],
+        'entry_wall': grid['entry_wall'],
+        'rooms': rooms,
+        '_style': style_name,
+        '_design_notes': data.get('design_notes', ''),
+    }
 
 
 def validate_layout(layout, plot_data):
