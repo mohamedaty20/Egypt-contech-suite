@@ -20,7 +20,7 @@ from .geometry import (
     polygon_inside_polygon, polygon_centroid,
     angle_bucket,
 )
-from .extractor_dxf import extract_elements, collect_unknown_layers
+from .extractor_dxf import extract_elements, collect_unknown_layers, list_all_layers
 from .wall_processor import process_walls
 from .room_processor import process_rooms
 from .engine import compute_boq, PARAM_DEFAULTS
@@ -37,7 +37,7 @@ __all__ = [
     "point_in_polygon", "point_to_segment_distance",
     "polygon_inside_polygon", "polygon_centroid",
     "angle_bucket",
-    "extract_elements", "collect_unknown_layers",
+    "extract_elements", "collect_unknown_layers", "list_all_layers",
     "process_walls", "process_rooms",
     "compute_boq", "PARAM_DEFAULTS",
     "classify_unknown_layers",
