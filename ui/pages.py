@@ -263,6 +263,13 @@ def _probe_unknown_layers_dxf(doc_bytes):
     return _cu(doc)
 
 
+def _list_layers_dxf(doc_bytes):
+    """Return [{layer, count, category, subtype, confidence, matched}, ...]."""
+    from services.boq import list_all_layers as _ll
+    doc = _open_dxf_doc_from_bytes(doc_bytes)
+    return _ll(doc)
+
+
 # =====================================================================
 # AI layout planner (fallback version)
 # =====================================================================
@@ -1517,11 +1524,131 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                         boq_status.classes(replace='text-xs text-emerald-400 font-semibold mb-2')
 
                         _update_boq_visibility()
+
+                        # If DXF, probe layers and build the mapping UI
+                        if boq_state['is_dxf']:
+                            try:
+                                rows = await cpu_bound_limited(
+                                    _list_layers_dxf, boq_state['bytes'])
+                                _render_layer_mapping(rows)
+                            except Exception as le:
+                                print(f"[boq] layer probe failed: {le!r}")
+                                _render_layer_mapping([])
+                        else:
+                            _render_layer_mapping([])
                     except Exception as ex:
                         ui.notify(f'Upload error: {ex}', type='negative')
 
                 ui.upload(auto_upload=True, on_upload=handle_boq_upload,
                           multiple=False).props('flat dark').classes('w-full mb-3')
+
+                # ---------------- LAYER MAPPING PANEL ----------------
+                # Only shown when a DXF is uploaded. Lets the user manually
+                # assign a category to any layer the taxonomy couldn't classify.
+                layer_map_rows = []   # list of {layer, count, dropdown}
+                layer_overrides_holder = {'manual': {}}
+
+                with ui.column().classes('w-full') as boq_layers_panel:
+                    ui.label('Layer Mapping').classes('text-sm font-bold text-white mb-1')
+                    ui.markdown(
+                        'Review how each layer in your DXF was interpreted. '
+                        'Fix any wrong or missing classification below, then click Run.'
+                    ).classes('text-xs text-[#A9B6D0] mb-2')
+                    boq_layers_body = ui.column().classes('w-full')
+
+                LAYER_CATEGORY_OPTIONS = {
+                    '': '(ignore this layer)',
+                    'wall': 'Wall',
+                    'wall_ext': 'Wall — external',
+                    'wall_int': 'Wall — internal',
+                    'column': 'Column',
+                    'beam': 'Beam',
+                    'slab': 'Slab',
+                    'footing': 'Footing',
+                    'door': 'Door',
+                    'window': 'Window',
+                    'stair': 'Stair',
+                    'balcony': 'Balcony',
+                    'void': 'Void / shaft',
+                    'room': 'Room (floor outline)',
+                    'furniture': 'Furniture',
+                    'hatch': 'Hatch',
+                    'dim': 'Dimension',
+                    'text': 'Text',
+                    'grid': 'Grid / axis',
+                    'section': 'Section mark',
+                    'level': 'Level tag',
+                    'boundary': 'Plot boundary',
+                    'title_block': 'Title block',
+                }
+
+                def _render_layer_mapping(layer_rows):
+                    boq_layers_body.clear()
+                    layer_map_rows.clear()
+                    layer_overrides_holder['manual'] = {}
+                    if not layer_rows:
+                        with boq_layers_body:
+                            ui.label('No layers found.').classes('text-xs text-amber-300')
+                        return
+
+                    with boq_layers_body:
+                        for r in layer_rows:
+                            layer = r['layer']
+                            count = r['count']
+                            cat = r.get('category') or ''
+                            # Normalise wall_ext/wall_int into dropdown keys
+                            default = cat
+                            if cat == 'wall' and r.get('subtype') == 'external':
+                                default = 'wall_ext'
+                            elif cat == 'wall' and r.get('subtype') == 'internal':
+                                default = 'wall_int'
+
+                            with ui.row().classes('w-full items-center gap-2 mb-1'):
+                                ui.label(f'{layer}').classes(
+                                    'text-white text-xs font-mono flex-1 truncate'
+                                ).style('min-width: 180px;')
+                                ui.label(f'×{count}').classes(
+                                    'text-[#A9B6D0] text-xs w-14 text-right'
+                                )
+                                dd = ui.select(
+                                    options=LAYER_CATEGORY_OPTIONS,
+                                    value=default,
+                                    with_input=False,
+                                ).classes('text-xs').style('width: 220px;')
+
+                                def _on_change_factory(layer_name):
+                                    def _h(ev):
+                                        v = ev.value or ''
+                                        if v == '':
+                                            layer_overrides_holder['manual'].pop(
+                                                layer_name, None)
+                                        else:
+                                            # Split wall_ext / wall_int into
+                                            # category + subtype
+                                            if v == 'wall_ext':
+                                                layer_overrides_holder['manual'][layer_name] = {
+                                                    'category': 'wall',
+                                                    'subtype':  'external',
+                                                    'confidence': 'manual',
+                                                }
+                                            elif v == 'wall_int':
+                                                layer_overrides_holder['manual'][layer_name] = {
+                                                    'category': 'wall',
+                                                    'subtype':  'internal',
+                                                    'confidence': 'manual',
+                                                }
+                                            else:
+                                                layer_overrides_holder['manual'][layer_name] = {
+                                                    'category': v,
+                                                    'subtype':  None,
+                                                    'confidence': 'manual',
+                                                }
+                                    return _h
+
+                                dd.on('update:model-value', _on_change_factory(layer))
+                                layer_map_rows.append({
+                                    'layer': layer, 'count': count, 'dropdown': dd,
+                                })
 
                 # ---------------- MODE ----------------
                 boq_mode = ui.radio(
@@ -1612,7 +1739,9 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                         ui.spinner('ios', size='lg').classes('self-center text-[#4FC3F7]')
                         ui.label('Processing…').classes('self-center text-sm text-white')
 
-                    # ---------- QUICK MODE ----------
+                    # ==================================================
+                    # QUICK MODE — DXF only, areas table
+                    # ==================================================
                     if mode == 'quick':
                         if is_dxf:
                             try:
@@ -1655,20 +1784,22 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                                 )
                         return
 
-                    # ---------- FULL BOQ MODE ----------
+                    # ==================================================
+                    # FULL BOQ MODE
+                    # ==================================================
                     try:
-                        ext_t_mm = float(boq_ext_t.value or 250)
-                        int_t_mm = float(boq_int_t.value or 120)
-                        floor_h_m = float(boq_floor_h.value or 3.0)
-                        door_h_m = float(boq_door_h.value or 2.1)
-                        win_h_m = float(boq_win_h.value or 1.2)
+                        ext_t_mm   = float(boq_ext_t.value or 250)
+                        int_t_mm   = float(boq_int_t.value or 120)
+                        floor_h_m  = float(boq_floor_h.value or 3.0)
+                        door_h_m   = float(boq_door_h.value or 2.1)
+                        win_h_m    = float(boq_win_h.value or 1.2)
                         wet_tile_m = float(boq_wet_tile.value or 2.1)
 
                         if is_dxf:
                             units = boq_units.value or 'mm'
 
-                            # --- Pass 1: probe for layers the taxonomy can't classify ---
-                            layer_overrides = None
+                            # --- Pass 1: AI classifies layers the taxonomy missed ---
+                            layer_overrides = {}
                             try:
                                 unknown = await cpu_bound_limited(
                                     _probe_unknown_layers_dxf,
@@ -1682,25 +1813,36 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                                             f'{len(unknown)} unknown layer(s)…'
                                         ).classes('self-center text-xs text-[#A9B6D0]')
                                     from services.boq import classify_unknown_layers as _cu
-                                    layer_overrides = await gemini_limited(
+                                    ai_overrides = await gemini_limited(
                                         lambda: _cu(unknown, call_gemini_json_limited),
                                         timeout=60,
                                     )
-                                    _ok = sum(1 for v in (layer_overrides or {}).values()
+                                    _ok = sum(1 for v in (ai_overrides or {}).values()
                                               if v.get('category'))
                                     print(f"[boq] AI classified {_ok}/{len(unknown)} layers")
+                                    if ai_overrides:
+                                        layer_overrides.update(ai_overrides)
                             except Exception as _ce:
-                                print(f"[boq] AI layer classifier failed (continuing): {_ce!r}")
+                                print(f"[boq] AI layer classifier failed "
+                                      f"(continuing): {_ce!r}")
 
-                            # --- Pass 2: full extraction with overrides ---
+                            # --- Manual overrides always win ---
+                            manual = layer_overrides_holder.get('manual') or {}
+                            if manual:
+                                print(f"[boq] applying {len(manual)} manual "
+                                      f"layer override(s)")
+                                layer_overrides.update(manual)
+
+                            # --- Pass 2: full extraction ---
                             payload = await cpu_bound_limited(
                                 _boq_run_dxf,
                                 boq_state['bytes'], units,
                                 ext_t_mm, int_t_mm,
                                 floor_h_m, door_h_m, win_h_m, wet_tile_m,
-                                layer_overrides,
+                                layer_overrides or None,
                             )
                         else:
+                            # ---------- PDF / PNG branch ----------
                             if is_pdf:
                                 png = _pdf_first_page_to_png_bytes(boq_state['bytes'])
                                 if not png:
@@ -1766,11 +1908,12 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                                 },
                             }
 
+                        # --- stash + render ---
                         boq_state['records'] = payload['records']
-                        boq_state['walls'] = payload['walls']
-                        boq_state['rooms'] = payload['rooms']
-                        boq_state['boq'] = payload['boq']
-                        boq_state['info'] = payload['info']
+                        boq_state['walls']   = payload['walls']
+                        boq_state['rooms']   = payload['rooms']
+                        boq_state['boq']     = payload['boq']
+                        boq_state['info']    = payload['info']
 
                         _render_boq_results(payload)
 
