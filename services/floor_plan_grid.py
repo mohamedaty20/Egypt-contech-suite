@@ -6,7 +6,6 @@ and a set of non-overlapping cells arranged below and above the corridor.
 The AI then assigns rooms to cells. Geometry is owned by Python.
 """
 
-# Minimum cell width so a 4.5 m² bathroom still fits with clearances.
 MIN_CELL_W_MM = 1400
 
 
@@ -14,10 +13,6 @@ def build_grid(plot_data):
     """
     Envelope = OUTER face of exterior walls.
     Cells live inside the INNER face so rooms don't overlap the walls.
-    Every cell returned carries:
-      - 'faces_corridor': True (all cells touch the corridor here)
-      - 'door_wall':      'top' (lower row) or 'bottom' (upper row)
-                          -> the ONLY edge a door may be placed on
     """
     pw_mm = int((plot_data.get('plot_width') or 12) * 1000)
     pl_mm = int((plot_data.get('plot_length') or 16) * 1000)
@@ -34,7 +29,6 @@ def build_grid(plot_data):
     bw = max(pw_mm - 2 * side, 8000)
     bh = max(pl_mm - front - rear, 9000)
 
-    # Inner face of exterior walls — cells must stay inside this
     ix0 = bx + wall_mm
     iy0 = by + wall_mm
     ix1 = bx + bw - wall_mm
@@ -46,8 +40,6 @@ def build_grid(plot_data):
     mid_y = iy0 + ih / 2
     corridor_y = int(mid_y - corridor_h / 2)
 
-    # Clamp corridor to inner faces (defensive; small plots could otherwise
-    # push it past a wall).
     corridor_x = int(ix0)
     corridor_w = int(max(0, iw))
     if corridor_y < iy0:
@@ -66,7 +58,6 @@ def build_grid(plot_data):
     upper_y1 = iy1
 
     def _pick_n(target_n, avail_w):
-        """Reduce cell count so every cell is at least MIN_CELL_W_MM wide."""
         if avail_w <= 0:
             return 1
         n = max(1, target_n)
@@ -77,7 +68,6 @@ def build_grid(plot_data):
     def split_row(y0, y1, target_n, x0, w, prefix, side):
         n = _pick_n(target_n, w)
         cells = []
-        # Integer cells that tile exactly — no 1mm shifts between neighbours.
         base_w = w // n
         remainder = w - base_w * n
         x_cursor = x0
@@ -103,7 +93,6 @@ def build_grid(plot_data):
     if len(upper) >= 3:
         stair_idx = len(upper) // 2
         upper[stair_idx]['is_stair'] = True
-        # No door onto stair treads.
         upper[stair_idx]['faces_corridor'] = False
         upper[stair_idx]['door_wall'] = None
 
