@@ -1376,4 +1376,112 @@ def build_complete_project(params):
     print(f"[build] DXF written, size={len(dxf_bytes)} bytes, fmt=BIN")
 
     boq_df = pd.DataFrame([{'Item': n, 'Quantity': round(q, 2), 'Unit': u,
-                            'Unit Rate (EGP)': r, 'Total Cost (EGP)': round(q
+                            'Unit Rate (EGP)': r, 'Total Cost (EGP)': round(q*r, 2)}
+                           for n, u, q, r in rates])
+
+    layout_info = {
+        'plot_area': round(plot_area, 2),
+        'street_width': sw,
+        'location': params.get('location', ''),
+        'max_floors': max_floors,
+        'num_floors': num_floors,
+        'footprint_area': round((L/1000)*(W/1000), 2),
+        'building_width': round(W/1000, 2),
+        'building_length': round(L/1000, 2),
+        'front_setback': front_sb,
+        'rear_setback': rear_sb,
+        'side_setback': side_sb,
+        'num_rooms': len(placements),
+        'num_columns': len(cols),
+        'coverage_ratio': f"{coverage*100:.0f}%",
+    }
+    print("[build] === build_complete_project END ===")
+    return {'dxf': dxf_bytes, 'boq': boq_df.to_dict('records'), 'info': layout_info}
+
+
+# ======================================================================
+# ADDITIVE HIGH-TRAFFIC LAYER
+# ======================================================================
+def _strip_thumbnail_section(text: str) -> str:
+    lines = text.splitlines()
+    out = []
+    i = 0
+    n = len(lines)
+    while i < n:
+        if (i + 3 < n
+                and lines[i].strip() == '0'
+                and lines[i + 1].strip() == 'SECTION'
+                and lines[i + 2].strip() == '2'
+                and lines[i + 3].strip().upper() == 'THUMBNAILIMAGE'):
+            i += 4
+            while i < n:
+                if (lines[i].strip() == '0'
+                        and i + 1 < n
+                        and lines[i + 1].strip() == 'ENDSEC'):
+                    i += 2
+                    break
+                i += 1
+            continue
+        out.append(lines[i])
+        i += 1
+    return '\n'.join(out)
+
+
+def _open_dxf_doc_from_bytes(doc_bytes):
+    if isinstance(doc_bytes, str):
+        doc_bytes = doc_bytes.encode('utf-8')
+    head = doc_bytes[:32]
+    is_binary = head.startswith(b'AutoCAD Binary DXF') or (b'\x00' in head)
+    print(f"[dxf] head={head!r} binary={is_binary}")
+    if is_binary:
+        try:
+            return ezdxf.read(io.BytesIO(doc_bytes))
+        except Exception as e:
+            print(f"[dxf] binary read failed: {e!r}; trying recover")
+            from ezdxf import recover as _recover
+            return _recover.read(io.BytesIO(doc_bytes))
+    try:
+        text = doc_bytes.decode('utf-8')
+    except UnicodeDecodeError:
+        text = doc_bytes.decode('latin-1', errors='replace')
+    cleaned = _strip_thumbnail_section(text)
+    try:
+        return ezdxf.read(io.StringIO(cleaned))
+    except Exception as e:
+        print(f"[dxf] ascii read failed: {e!r}; trying recover")
+        from ezdxf import recover as _recover
+        try:
+            return _recover.read(io.StringIO(cleaned))
+        except Exception as e2:
+            print(f"[dxf] recover(StringIO) failed: {e2!r}; trying raw bytes")
+            return _recover.read(io.BytesIO(doc_bytes))
+
+
+def _extract_areas_from_dxf_worker(doc_bytes, unit, workflow):
+    doc = _open_dxf_doc_from_bytes(doc_bytes)
+    return extract_areas_from_dxf(doc, unit=unit, workflow=workflow)
+
+
+def _detect_dxf_layers_worker(doc_bytes):
+    doc = _open_dxf_doc_from_bytes(doc_bytes)
+    result = detect_dxf_layers(doc)
+    for layer, info in result.items():
+        if isinstance(info.get('types'), set):
+            info['types'] = sorted(info['types'])
+    return result
+
+
+async def detect_dxf_layers_async(doc_bytes):
+    from config import cpu_bound_limited
+    return await cpu_bound_limited(_detect_dxf_layers_worker, doc_bytes)
+
+
+async def extract_areas_from_dxf_async(doc_bytes, unit='mm', workflow='architectural'):
+    from config import cpu_bound_limited
+    return await cpu_bound_limited(_extract_areas_from_dxf_worker,
+                                   doc_bytes, unit, workflow)
+
+
+async def build_complete_project_async(params):
+    from config import cpu_bound_limited
+    return await cpu_bound_limited(build_complete_project, params)
