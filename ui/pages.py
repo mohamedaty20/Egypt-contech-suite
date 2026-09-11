@@ -557,6 +557,7 @@ def generate_autocad_pdf(info, boq_df, engineer_name, project_name, logo_bytes, 
     buffer.seek(0)
     return buffer.getvalue()
 
+
 def _dark_table(**kwargs):
     return ui.table(**kwargs).classes('w-full text-white').props('dark flat bordered')
 
@@ -626,7 +627,7 @@ def main_page():
     ui.query('body').style('width: 100vw; height: 100vh; overflow-x: hidden;')
 
     # ---------------- SIDEBAR ----------------
-        sidebar = ui.left_drawer().classes('sidebar-container').style('width: 380px;')
+    sidebar = ui.left_drawer().classes('sidebar-container').style('width: 380px;')
     with sidebar:
         with ui.row().classes('w-full items-center justify-between mb-4 p-2'):
             ui.label('📋 PROJECT METADATA').classes('text-white font-bold text-base tracking-wide')
@@ -1314,13 +1315,21 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                 ui.upload(auto_upload=True, on_upload=handle_progress_upload,
                           multiple=True).props('flat dark').classes('w-full mb-4')
 
-                with ui.row().classes('w-full gap-4 mb-4'):
+                with ui.row().classes('w-full gap-4 mb-4 items-center'):
                     ui.label('Start Date').classes('text-white text-sm font-semibold')
-                    start_date = ui.date(
-                        value=datetime.date.today() - datetime.timedelta(days=30)
-                    ).classes('w-40')
+                    _start_default = (datetime.date.today() - datetime.timedelta(days=30)).strftime('%Y-%m-%d')
+                    with ui.input(value=_start_default) as start_date:
+                        with ui.menu().props('no-parent-event') as _start_menu:
+                            ui.date().bind_value(start_date)
+                        with start_date.add_slot('append'):
+                            ui.icon('edit_calendar').on('click', _start_menu.open).classes('cursor-pointer')
                     ui.label('End Date').classes('text-white text-sm font-semibold')
-                    end_date = ui.date(value=datetime.date.today()).classes('w-40')
+                    _end_default = datetime.date.today().strftime('%Y-%m-%d')
+                    with ui.input(value=_end_default) as end_date:
+                        with ui.menu().props('no-parent-event') as _end_menu:
+                            ui.date().bind_value(end_date)
+                        with end_date.add_slot('append'):
+                            ui.icon('edit_calendar').on('click', _end_menu.open).classes('cursor-pointer')
 
                 description_input = ui.input(label='Project Phase',
                                               value='Foundation and Structure').classes('w-full mb-4')
@@ -1376,8 +1385,8 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
 
                         overview_text = await generate_progress_overview(
                             combined_df,
-                            start_date.value.strftime('%Y-%m-%d') if start_date.value else 'N/A',
-                            end_date.value.strftime('%Y-%m-%d') if end_date.value else 'N/A',
+                            start_date.value or 'N/A',
+                            end_date.value or 'N/A',
                             description_input.value)
                         progress_overview.clear()
                         with progress_overview:
