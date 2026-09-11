@@ -1687,6 +1687,34 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                             layout_design = _position_rooms(
                                 room_program.get('rooms', []), plot_data)
 
+                        # === DEBUG + VALIDATE ===
+                        import json as _json
+                        from services.plan_validator import validate_plan as _validate_plan
+                        print("=" * 70)
+                        print("[plan-debug] Positioned layout:")
+                        print(_json.dumps(layout_design, indent=2, default=str))
+                        _violations = _validate_plan(layout_design, plot_data)
+                        for _v in _violations:
+                            print(f"[plan-debug] {_v['severity'].upper()}: "
+                                  f"{_v['type']} — {_v['message']}")
+                        print(f"[plan-debug] total violations: {len(_violations)}")
+                        print("=" * 70)
+
+                        autocad_output.clear()
+                        if _violations:
+                            with autocad_output:
+                                with ui.column().classes(
+                                    'w-full bg-red-900/40 border border-red-500 '
+                                    'rounded-lg p-3 mb-2'
+                                ):
+                                    ui.label(
+                                        f'⚠️ {len(_violations)} plan issue(s) detected'
+                                    ).classes('text-red-300 font-bold')
+                                    for _v in _violations[:12]:
+                                        ui.label(
+                                            f"• [{_v['type']}] {_v['message']}"
+                                        ).classes('text-red-200 text-xs')
+
                         with autocad_output:
                             ui.label('Step 3/4 — Rendering DXF (sophisticated)…'
                                      ).classes('self-center text-sm')
