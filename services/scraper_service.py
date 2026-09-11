@@ -7,7 +7,7 @@ from urllib.parse import quote_plus
 
 RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY", "").strip()
 JSEARCH_HOST = "jsearch.p.rapidapi.com"
-REQUEST_TIMEOUT = 30
+REQUEST_TIMEOUT = 25
 
 HEADERS = {
     "User-Agent": (
@@ -23,8 +23,10 @@ HEADERS = {
 scraper = cloudscraper.create_scraper()
 scraper.headers.update(HEADERS)
 
+
 def log(msg):
     print(f"[JOB-SCRAPER] {msg}")
+
 
 def detect_mime_type(filename: str, data: bytes) -> str:
     ext = os.path.splitext(filename)[1].lower()
@@ -42,6 +44,10 @@ def detect_mime_type(filename: str, data: bytes) -> str:
         return 'application/pdf'
     return 'image/jpeg'
 
+
+# =====================================================================
+# JSearch (RapidAPI) — only runs if RAPIDAPI_KEY is set
+# =====================================================================
 def scrape_jsearch(query, max_results=20):
     jobs = []
     if not RAPIDAPI_KEY:
@@ -91,43 +97,67 @@ def scrape_jsearch(query, max_results=20):
     log(f"JSearch parsed {len(jobs)} jobs")
     return jobs
 
+
+# =====================================================================
+# Wuzzuf direct scrape (broadened selectors)
+# =====================================================================
 def scrape_wuzzuf_direct(query, max_results=20):
     jobs = []
-    url = f"https://wuzzuf.net/search/jobs/?q={quote_plus(query)}&a=hpb"
-    try:
-        resp = scraper.get(url, timeout=REQUEST_TIMEOUT)
-        log(f"Wuzzuf GET {url} -> status={resp.status_code}, len={len(resp.text)}")
-        if resp.status_code != 200:
-            log(f"Wuzzuf non-200 body preview: {resp.text[:200]}")
-            return jobs
-        soup = BeautifulSoup(resp.text, "html.parser")
-    except Exception as e:
-        log(f"Wuzzuf request failed: {e}")
+    urls_to_try = [
+        f"https://wuzzuf.net/search/jobs/?q={quote_plus(query)}&a=hpb",
+        f"https://wuzzuf.net/search/jobs/?q={quote_plus(query)}",
+    ]
+    soup = None
+    for url in urls_to_try:
+        try:
+            resp = scraper.get(url, timeout=REQUEST_TIMEOUT)
+            log(f"Wuzzuf GET {url} -> status={resp.status_code}, len={len(resp.text)}")
+            if resp.status_code == 200 and len(resp.text) > 2000:
+                soup = BeautifulSoup(resp.text, "html.parser")
+                break
+        except Exception as e:
+            log(f"Wuzzuf request failed: {e}")
+    if soup is None:
         return jobs
 
-    for a in soup.select('a[href*="/jobs/p/"]'):
+    # Broadened selectors — multiple URL patterns used by Wuzzuf over time
+    anchors = soup.select('a[href*="/jobs/p/"]') or \
+              soup.select('a[href*="/jobs/"]') or \
+              soup.select('h2 a')
+
+    seen_hrefs = set()
+    for a in anchors:
         href = a.get("href")
         title = a.get_text(strip=True)
-        if not href or not title:
+        if not href or not title or len(title) < 3:
             continue
+        if href in seen_hrefs:
+            continue
+        seen_hrefs.add(href)
         full_url = href if href.startswith("http") else f"https://wuzzuf.net{href}"
+
+        # Walk up to find the containing card
         card = a
-        for _ in range(8):
-            card = card.parent
-            if card is None:
+        for _ in range(10):
+            if card.parent is None:
                 break
+            card = card.parent
             if len(card.find_all("a")) >= 2:
                 break
+
         company, location, desc = "", "", ""
         if card is not None:
             company_link = card.find("a", href=re.compile(r"/employers/"))
             company = company_link.get_text(strip=True) if company_link else ""
-            loc_elem = card.find("span", class_=re.compile(r"location", re.I)) or card.find("div", class_=re.compile(r"location", re.I))
+            loc_elem = card.find("span", class_=re.compile(r"location", re.I)) or \
+                       card.find("div", class_=re.compile(r"location", re.I))
             if loc_elem:
                 location = loc_elem.get_text(strip=True)
-            chunks = [t.get_text(strip=True) for t in card.find_all(["span", "div"]) if t.get_text(strip=True)]
+            chunks = [t.get_text(strip=True) for t in card.find_all(["span", "div"])
+                      if t.get_text(strip=True)]
             chunks = [t for t in chunks if t not in (title, company, location)]
             desc = " | ".join(dict.fromkeys(chunks))[:400]
+
         jobs.append({
             "title": title,
             "company": company or "N/A",
@@ -139,12 +169,13 @@ def scrape_wuzzuf_direct(query, max_results=20):
         if len(jobs) >= max_results:
             break
 
-    if not jobs:
-        log(f"Wuzzuf: No job links found. HTML snippet: {re.sub(r'\s+', ' ', str(soup))[:500]}")
-    else:
-        log(f"Wuzzuf parsed {len(jobs)} jobs")
+    log(f"Wuzzuf parsed {len(jobs)} jobs")
     return jobs
 
+
+# =====================================================================
+# Bayt direct scrape (broadened selectors)
+# =====================================================================
 def scrape_bayt_direct(query, max_results=20):
     jobs = []
     url = f"https://www.bayt.com/en/egypt/jobs/?search={quote_plus(query)}"
@@ -152,29 +183,37 @@ def scrape_bayt_direct(query, max_results=20):
         resp = scraper.get(url, timeout=REQUEST_TIMEOUT)
         log(f"Bayt GET {url} -> status={resp.status_code}, len={len(resp.text)}")
         if resp.status_code != 200:
-            log(f"Bayt non-200 body preview: {resp.text[:200]}")
             return jobs
         soup = BeautifulSoup(resp.text, "html.parser")
     except Exception as e:
         log(f"Bayt request failed: {e}")
         return jobs
 
-    cards = soup.select('li.has-pointer') or soup.select('div.job-card')
+    cards = (soup.select('li.has-pointer') or
+             soup.select('div.job-card') or
+             soup.select('[data-job-id]') or
+             soup.select('article'))
+
     for card in cards[:max_results]:
         try:
-            a = card.find("h2") and card.find("h2").find("a")
+            a = None
+            h2 = card.find("h2")
+            if h2:
+                a = h2.find("a")
             if not a:
                 a = card.find("a", href=re.compile(r"/job/"))
             if not a:
                 continue
             title = a.get_text(strip=True)
             href = a.get("href")
+            if not title or not href:
+                continue
             full_url = href if href.startswith("http") else f"https://www.bayt.com{href}"
-            company_el = card.select_one(".company-name, .jb-company")
+            company_el = card.select_one(".company-name, .jb-company, .t-default")
             company = company_el.get_text(strip=True) if company_el else "N/A"
-            loc_el = card.select_one(".location, .t-mute.t-small")
+            loc_el = card.select_one(".location, .t-mute.t-small, .jb-loc")
             location = loc_el.get_text(strip=True) if loc_el else "Egypt"
-            desc_el = card.select_one("p")
+            desc_el = card.find("p")
             desc = desc_el.get_text(strip=True) if desc_el else "No description."
             jobs.append({
                 "title": title,
@@ -186,38 +225,110 @@ def scrape_bayt_direct(query, max_results=20):
             })
         except Exception as e:
             log(f"Bayt card parse error: {e}")
-    if not jobs:
-        log(f"Bayt: No job cards found. HTML snippet: {re.sub(r'\s+', ' ', str(soup))[:500]}")
-    else:
-        log(f"Bayt parsed {len(jobs)} jobs")
+
+    log(f"Bayt parsed {len(jobs)} jobs")
     return jobs
 
+
+# =====================================================================
+# GUARANTEED FALLBACK — direct search links to major job sites.
+# Runs only if the scrapers above return < 3 jobs.
+# =====================================================================
+def _search_links_fallback(query):
+    q = quote_plus(query)
+    return [
+        {
+            "title": f"🔗 Open full search on Wuzzuf — '{query}'",
+            "company": "Wuzzuf (external)",
+            "location": "Egypt",
+            "description": "Click to open the complete live job results for this query on Wuzzuf.",
+            "url": f"https://wuzzuf.net/search/jobs/?q={q}&a=hpb",
+            "source": "Search Link",
+        },
+        {
+            "title": f"🔗 Open full search on Bayt — '{query}'",
+            "company": "Bayt (external)",
+            "location": "Egypt",
+            "description": "Click to open the complete live job results for this query on Bayt.",
+            "url": f"https://www.bayt.com/en/egypt/jobs/?search={q}",
+            "source": "Search Link",
+        },
+        {
+            "title": f"🔗 Open full search on LinkedIn Jobs — '{query}'",
+            "company": "LinkedIn (external)",
+            "location": "Egypt",
+            "description": "Click to open the complete live job results for this query on LinkedIn.",
+            "url": f"https://www.linkedin.com/jobs/search/?keywords={q}&location=Egypt",
+            "source": "Search Link",
+        },
+        {
+            "title": f"🔗 Open full search on Indeed Egypt — '{query}'",
+            "company": "Indeed (external)",
+            "location": "Egypt",
+            "description": "Click to open the complete live job results for this query on Indeed.",
+            "url": f"https://eg.indeed.com/jobs?q={q}",
+            "source": "Search Link",
+        },
+        {
+            "title": f"🔗 Open full search on Glassdoor — '{query}'",
+            "company": "Glassdoor (external)",
+            "location": "Egypt",
+            "description": "Click to open the complete live job results for this query on Glassdoor.",
+            "url": f"https://www.glassdoor.com/Job/egypt-jobs-SRCH_IL.0,5_IN69_KO6,30.htm?sc.keyword={q}",
+            "source": "Search Link",
+        },
+    ]
+
+
+# =====================================================================
+# Main entry point — unchanged signature
+# =====================================================================
 def scrape_jobs(query, location=""):
     full_query = f"{query} {location}".strip() if location else query
+    log(f"scrape_jobs called: query={full_query!r} (RAPIDAPI_KEY set: {bool(RAPIDAPI_KEY)})")
+
     all_jobs = []
+
+    # 1. Try JSearch if key is configured
     try:
         all_jobs.extend(scrape_jsearch(full_query))
     except Exception as e:
         log(f"JSearch top-level error: {e}")
+
+    # 2. Try Wuzzuf if we don't have enough results
     if len(all_jobs) < 3:
-        log("JSearch returned few results – trying Wuzzuf.")
+        log("Trying Wuzzuf direct scrape…")
         try:
             all_jobs.extend(scrape_wuzzuf_direct(full_query))
         except Exception as e:
             log(f"Wuzzuf top-level error: {e}")
+
+    # 3. Try Bayt if still not enough
     if len(all_jobs) < 3:
-        log("Wuzzuf also returned few results – trying Bayt.")
+        log("Trying Bayt direct scrape…")
         try:
             all_jobs.extend(scrape_bayt_direct(full_query))
         except Exception as e:
             log(f"Bayt top-level error: {e}")
+
+    # 4. GUARANTEED fallback — direct search links
+    if len(all_jobs) < 3:
+        log("Live scrapers returned <3 results — adding external search links.")
+        all_jobs.extend(_search_links_fallback(full_query))
+
+    # Deduplicate by URL
     seen = set()
     deduped = []
     for job in all_jobs:
-        if job["url"] in seen:
+        url = job.get("url", "")
+        if not url or url in seen:
             continue
-        seen.add(job["url"])
+        seen.add(url)
         deduped.append(job)
-    deduped.sort(key=lambda j: 0 if j["source"] == "Wuzzuf" else 1)
+
+    # Real Wuzzuf/Bayt/JSearch jobs first; search links last
+    order = {"Wuzzuf": 0, "Bayt": 1, "LinkedIn": 2, "JSearch": 3, "Search Link": 9}
+    deduped.sort(key=lambda j: order.get(j.get("source", ""), 5))
+
     log(f"TOTAL jobs after dedup: {len(deduped)}")
     return deduped
