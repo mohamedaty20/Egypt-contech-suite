@@ -694,7 +694,8 @@ def build_complete_project(params):
     wall_polys = []
 
     def _add_wall_rect_from_line(p1, p2, thickness, gaps=None):
-        """Split a wall line into rects (with optional gaps) and add them."""
+        """Split a wall line into rects (with optional gaps) and add them.
+        gaps = list of (center_along_from_p1, width)."""
         x1, y1 = p1; x2, y2 = p2
         L = math.hypot(x2 - x1, y2 - y1)
         if L < 1:
@@ -775,7 +776,45 @@ def build_complete_project(params):
     # ----- 6. DXF setup -----
     doc = ezdxf.new(dxfversion='R2000', setup=True)
     msp = doc.modelspace()
-    doc.header['$INSUNITS'] = 4
+
+    # --- Metric header + dimstyle so AutoCAD shows mm values, not weird ones ---
+    doc.header['$INSUNITS']  = 4      # millimetres
+    doc.header['$MEASUREMENT'] = 1    # metric
+    doc.header['$LUNITS']    = 2      # decimal
+    doc.header['$LUPREC']    = 0      # integer display
+    doc.header['$AUNITS']    = 0
+    doc.header['$AUPREC']    = 0
+    doc.header['$DIMSCALE']  = 100    # 1:100 drawing scale
+    doc.header['$DIMLFAC']   = 1.0    # measurement factor 1:1 (mm -> mm)
+    doc.header['$DIMTXT']    = 2.5    # 2.5 mm text on paper (= 250 mm model)
+    doc.header['$DIMASZ']    = 2.5
+    doc.header['$DIMDEC']    = 0
+    doc.header['$DIMZIN']    = 8
+    try:
+        _ds = doc.dimstyles.get('Standard')
+    except Exception:
+        _ds = None
+    if _ds is None:
+        try:
+            _ds = doc.dimstyles.add('Standard')
+        except Exception:
+            _ds = None
+    if _ds is not None:
+        try:
+            _ds.dxf.dimscale = 100
+            _ds.dxf.dimlfac  = 1.0
+            _ds.dxf.dimtxt   = 2.5
+            _ds.dxf.dimasz   = 2.5
+            _ds.dxf.dimexe   = 1.25
+            _ds.dxf.dimexo   = 0.625
+            _ds.dxf.dimdec   = 0
+            _ds.dxf.dimzin   = 8
+            _ds.dxf.dimtad   = 1
+            _ds.dxf.dimtih   = 1
+            _ds.dxf.dimtoh   = 1
+            _ds.dxf.dimtix   = 1
+        except Exception as _e:
+            print(f"[dimstyle] could not fully configure Standard: {_e!r}")
 
     layers_def = {
         'A-WALL-EXT': {'color': 7, 'lineweight': 50},
@@ -852,6 +891,9 @@ def build_complete_project(params):
     door_specs = {}
     win_specs = {}
 
+    # NOTE: gap centers appended below are DISTANCES ALONG THE WALL from p1
+    # (p1 is x0 / y0 corner of the wall). Previously absolute coords were
+    # passed, which only worked when x0 == y0 == 0.
     for room, (rx0, ry0, rx1, ry1) in placements:
         if not room.get('needs_window'):
             continue
@@ -861,16 +903,16 @@ def build_complete_project(params):
         win_v = max(900, min(1200, room_h * 0.45))
         if abs(ry0 - y0) < wall_ext_t + 60:
             wx = (rx0 + rx1) / 2
-            ext_openings['bottom'].append((wx, win_h))
+            ext_openings['bottom'].append((wx - x0, win_h))
         if abs(ry1 - y1) < wall_ext_t + 60:
             wx = (rx0 + rx1) / 2
-            ext_openings['top'].append((wx, win_h))
+            ext_openings['top'].append((wx - x0, win_h))
         if abs(rx0 - x0) < wall_ext_t + 60:
             wy = (ry0 + ry1) / 2
-            ext_openings['left'].append((wy, win_v))
+            ext_openings['left'].append((wy - y0, win_v))
         if abs(rx1 - x1) < wall_ext_t + 60:
             wy = (ry0 + ry1) / 2
-            ext_openings['right'].append((wy, win_v))
+            ext_openings['right'].append((wy - y0, win_v))
 
     # ---- Apartment entrance door ----
     # Reserve a 1100 mm gap in the bottom exterior wall, ideally
@@ -889,7 +931,8 @@ def build_complete_project(params):
         if lower_centres:
             entry_door_cx = lower_centres[len(lower_centres) // 2]
     if entry_door_cx is not None:
-        ext_openings['bottom'].append((entry_door_cx, 1100))
+        # gap center is distance from x0 along the bottom wall
+        ext_openings['bottom'].append((entry_door_cx - x0, 1100))
 
     half_ext = wall_ext_t / 2
     _add_wall_rect_from_line((x0 + half_ext, y0), (x0 + half_ext, y1),
@@ -901,19 +944,23 @@ def build_complete_project(params):
     _add_wall_rect_from_line((x0, y1 - half_ext), (x1, y1 - half_ext),
                              wall_ext_t, gaps=ext_openings['top'])
     for wx, ww in ext_openings['bottom']:
-        if entry_door_cx is not None and abs(wx - entry_door_cx) < 10:
+        # entry-door check below must compare along-wall values, not absolute
+        if entry_door_cx is not None and abs(wx - (entry_door_cx - x0)) < 10:
             continue  # this gap is the entry door, not a window
-        draw_window(msp, wx, y0 + half_ext, ww, wall_ext_t, is_horizontal=True)
+        draw_window(msp, wx + x0, y0 + half_ext, ww, wall_ext_t, is_horizontal=True)
     for wx, ww in ext_openings['top']:
-        draw_window(msp, wx, y1 - half_ext, ww, wall_ext_t, is_horizontal=True)
+        draw_window(msp, wx + x0, y1 - half_ext, ww, wall_ext_t, is_horizontal=True)
     for wy, ww in ext_openings['left']:
-        draw_window(msp, x0 + half_ext, wy, ww, wall_ext_t, is_horizontal=False)
+        draw_window(msp, x0 + half_ext, wy + y0, ww, wall_ext_t, is_horizontal=False)
     for wy, ww in ext_openings['right']:
-        draw_window(msp, x1 - half_ext, wy, ww, wall_ext_t, is_horizontal=False)
+        draw_window(msp, x1 - half_ext, wy + y0, ww, wall_ext_t, is_horizontal=False)
 
     # Interior walls — collect door gaps first
     DOOR_W = 900
     placed_doors = []
+    # Every interior door we actually place here is remembered so that
+    # the merged interior wall outline can have real gaps cut into it.
+    interior_door_gaps = []  # list of (cx, cy, width) — horizontal doors
 
     def _door_bbox(cx, cy, w, wt, horiz, flip):
         hw = w / 2
@@ -947,6 +994,10 @@ def build_complete_project(params):
                          (cx + wall_thickness/4, cy + width/2),
                          dxfattribs={'layer': 'A-DOOR', 'color': 3})
 
+    corridor_bot = mid_y - corridor_h / 2
+    corridor_top = mid_y + corridor_h / 2
+    DOOR_WALL_TOL = 250.0  # mm
+
     for room, (rx0, ry0, rx1, ry1) in placements:
         # Skip rooms sitting on the reserved stair cell — no door onto treads
         if stair_cell:
@@ -961,14 +1012,22 @@ def build_complete_project(params):
         room_cy = (ry0 + ry1) / 2
         room_depth = ry1 - ry0  # perpendicular to the horizontal door wall
 
+        faces_corridor_bottom = abs(ry1 - corridor_bot) < DOOR_WALL_TOL
+        faces_corridor_top    = abs(ry0 - corridor_top) < DOOR_WALL_TOL
+
         if room_cy < mid_y:
-            # Public room below corridor → door on TOP wall.
-            # Should swing DOWN into the room (flip=True).
+            # Public room, must face the corridor from below.
+            # If it doesn't reach the corridor, skip — do not open a door
+            # into a neighbouring room (this is what put bathroom doors
+            # inside kitchens).
+            if not faces_corridor_bottom:
+                continue
             wall_p1, wall_p2 = (rx0, ry1), (rx1, ry1)
             door_flip = True
         else:
-            # Private room above corridor → door on BOTTOM wall.
-            # Should swing UP into the room (flip=False).
+            # Private room, must face the corridor from above.
+            if not faces_corridor_top:
+                continue
             wall_p1, wall_p2 = (rx0, ry0), (rx1, ry0)
             door_flip = False
 
@@ -1011,6 +1070,8 @@ def build_complete_project(params):
 
         door_cx, door_cy, bbox = chosen
         placed_doors.append(bbox)
+        # Remember for interior-wall gap cutting
+        interior_door_gaps.append((door_cx, door_cy, DOOR_W))
 
         # Swing needs ~door_width + 200 mm clearance in the swing direction.
         if room_depth >= DOOR_W + 200:
@@ -1098,14 +1159,24 @@ def build_complete_project(params):
                 merged.append([a, b])
         return [(a, b) for a, b in merged]
 
-    # Interior walls — collect into wall_polys for the union step
+    # Interior walls — collect into wall_polys for the union step.
+    # Horizontal walls get door gaps cut into them; vertical walls don't
+    # (all our doors swing across horizontal walls).
+    door_match_tol = TOL + 100.0
     for y, ranges in horiz_by_y.items():
         for xa, xb in _merge_ranges(ranges):
             if xb - xa < 60:
                 continue
-            r = _wall_rect((xa, y), (xb, y), int_t)
-            if r:
-                wall_polys.append(_ShPoly(r))
+            seg_gaps = []
+            for dcx, dcy, dw in interior_door_gaps:
+                if abs(dcy - y) <= door_match_tol and (xa - 50) <= dcx <= (xb + 50):
+                    seg_gaps.append((dcx - xa, dw))
+            if seg_gaps:
+                _add_wall_rect_from_line((xa, y), (xb, y), int_t, gaps=seg_gaps)
+            else:
+                r = _wall_rect((xa, y), (xb, y), int_t)
+                if r:
+                    wall_polys.append(_ShPoly(r))
 
     for x, ranges in vert_by_x.items():
         for ya, yb in _merge_ranges(ranges):
@@ -1158,15 +1229,36 @@ def build_complete_project(params):
 
     # Core (stairs) — drawn inside the reserved grid cell if one was
     # provided, otherwise at a sensible default inside the building.
+    # The stair rectangle is clamped to the interior face of the walls
+    # and inset by half the interior wall thickness, so it can never be
+    # wider than the room it sits in.
+    stair_inset = int_t / 2 + 20
+    inner_x0 = x0 + wall_ext_t
+    inner_y0 = y0 + wall_ext_t
+    inner_x1 = x1 - wall_ext_t
+    inner_y1 = y1 - wall_ext_t
     if stair_cell:
-        core_x = float(stair_cell['x'])
-        core_y = float(stair_cell['y'])
-        core_w = float(stair_cell['w'])
-        core_d = float(stair_cell['h'])
+        scx0 = float(stair_cell['x']) + stair_inset
+        scy0 = float(stair_cell['y']) + stair_inset
+        scx1 = float(stair_cell['x']) + float(stair_cell['w']) - stair_inset
+        scy1 = float(stair_cell['y']) + float(stair_cell['h']) - stair_inset
+        # clamp into the interior face of the walls
+        scx0 = max(scx0, inner_x0)
+        scy0 = max(scy0, inner_y0)
+        scx1 = min(scx1, inner_x1)
+        scy1 = min(scy1, inner_y1)
+        core_x = scx0
+        core_y = scy0
+        core_w = max(600.0, scx1 - scx0)
+        core_d = max(600.0, scy1 - scy0)
     else:
-        core_w, core_d = 2400, 3600
-        core_x = x1 - wall_ext_t - core_w - 400
-        core_y = mid_y - core_d/2
+        avail_w_core = max(600.0, (inner_x1 - inner_x0) - 800.0)
+        avail_d_core = max(600.0, (inner_y1 - inner_y0) - 800.0)
+        core_w = min(2400.0, avail_w_core)
+        core_d = min(3600.0, avail_d_core)
+        core_x = inner_x1 - core_w - 400
+        core_y = mid_y - core_d / 2
+
     msp.add_lwpolyline([(core_x, core_y), (core_x+core_w, core_y),
                         (core_x+core_w, core_y+core_d), (core_x, core_y+core_d)],
                        dxfattribs={'layer': 'A-CORE', 'color': 4}, close=True)
