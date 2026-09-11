@@ -13,6 +13,9 @@ Each violation: {
 }
 """
 
+# Must match DOOR_WALL_TOL in services/dxf_service.py
+CORRIDOR_EDGE_TOL = 250
+
 
 def _rect_inside(inner, outer, margin=0):
     """(x0,y0,x1,y1) fully inside outer with `margin` allowance."""
@@ -78,6 +81,19 @@ def _room_rect(r):
     return (float(r['x']), float(r['y']),
             float(r['x']) + float(r['w']),
             float(r['y']) + float(r['h']))
+
+
+def _is_bathroom(room):
+    rt = (room.get('type') or '').lower()
+    rn = (room.get('name') or '').lower()
+    return (rt == 'bathroom'
+            or 'bath' in rn or 'toilet' in rn or 'wc' in rn)
+
+
+def _is_kitchen(room):
+    rt = (room.get('type') or '').lower()
+    rn = (room.get('name') or '').lower()
+    return rt == 'kitchen' or 'kitchen' in rn
 
 
 def validate_plan(layout, plot_data=None):
@@ -166,10 +182,11 @@ def validate_plan(layout, plot_data=None):
                 })
 
     # --- 5. Every room must touch the corridor ---
+    # (matches dxf_service.py DOOR_WALL_TOL so validator and drawer agree)
     if c_rect:
         for r in rooms:
             r_rect = _room_rect(r)
-            shared = _shared_edge(r_rect, c_rect, tol=200)
+            shared = _shared_edge(r_rect, c_rect, tol=CORRIDOR_EDGE_TOL)
             if not shared:
                 violations.append({
                     'type': 'no_corridor_access', 'severity': 'error',
@@ -178,17 +195,30 @@ def validate_plan(layout, plot_data=None):
                                 f"through another room"),
                     'room': r.get('name'),
                 })
-            else:
-                # Check that door_wall (if present) matches the corridor-facing edge
-                dw = r.get('door_wall')
-                if dw and dw not in shared:
-                    violations.append({
-                        'type': 'door_wall_mismatch', 'severity': 'warning',
-                        'message': (f"Room '{r.get('name')}' has "
-                                    f"door_wall='{dw}' but its corridor-facing "
-                                    f"edge(s) are {shared}"),
-                        'room': r.get('name'),
-                    })
+
+    # --- 5b. Bathroom must not have to be entered through a kitchen ---
+    if c_rect:
+        for r in rooms:
+            if not _is_bathroom(r):
+                continue
+            r_rect = _room_rect(r)
+            if _shared_edge(r_rect, c_rect, tol=CORRIDOR_EDGE_TOL):
+                continue  # has direct corridor access; fine
+            # No corridor access — look at neighbours
+            neighbours = []
+            for other in rooms:
+                if other is r:
+                    continue
+                if _shared_edge(r_rect, _room_rect(other), tol=200):
+                    neighbours.append(other)
+            if neighbours and all(_is_kitchen(o) for o in neighbours):
+                violations.append({
+                    'type': 'bathroom_through_kitchen', 'severity': 'error',
+                    'message': (f"Bathroom '{r.get('name')}' has no corridor "
+                                f"access and can only be reached through the "
+                                f"kitchen"),
+                    'room': r.get('name'),
+                })
 
     # --- 6. Entry from outside ---
     # At least one room or the corridor must touch the building boundary.
