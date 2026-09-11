@@ -814,31 +814,30 @@ def build_complete_project(params):
             wy = (ry0 + ry1) / 2
             ext_openings['right'].append((wy, 1200))
 
-    draw_wall_seg(msp, (x0, y0), (x1, y0), wall_ext_t, 'A-WALL-EXT', 7,
-                  gaps=ext_openings['bottom'])
-    draw_wall_seg(msp, (x1, y0), (x1, y1), wall_ext_t, 'A-WALL-EXT', 7,
-                  gaps=ext_openings['right'])
-    draw_wall_seg(msp, (x1, y1), (x0, y1), wall_ext_t, 'A-WALL-EXT', 7,
-                  gaps=ext_openings['top'])
-    draw_wall_seg(msp, (x0, y1), (x0, y0), wall_ext_t, 'A-WALL-EXT', 7,
-                  gaps=ext_openings['left'])
+    half_ext = wall_ext_t / 2
+    draw_wall_seg(msp, (x0, y0 + half_ext), (x1, y0 + half_ext), wall_ext_t,
+                  'A-WALL-EXT', 7, gaps=ext_openings['bottom'])
+    draw_wall_seg(msp, (x1 - half_ext, y0), (x1 - half_ext, y1), wall_ext_t,
+                  'A-WALL-EXT', 7, gaps=ext_openings['right'])
+    draw_wall_seg(msp, (x0, y1 - half_ext), (x1, y1 - half_ext), wall_ext_t,
+                  'A-WALL-EXT', 7, gaps=ext_openings['top'])
+    draw_wall_seg(msp, (x0 + half_ext, y0), (x0 + half_ext, y1), wall_ext_t,
+                  'A-WALL-EXT', 7, gaps=ext_openings['left'])
 
     for wx, ww in ext_openings['bottom']:
-        draw_window(msp, wx, y0, ww, wall_ext_t, is_horizontal=True)
+        draw_window(msp, wx, y0 + half_ext, ww, wall_ext_t, is_horizontal=True)
     for wx, ww in ext_openings['top']:
-        draw_window(msp, wx, y1, ww, wall_ext_t, is_horizontal=True)
+        draw_window(msp, wx, y1 - half_ext, ww, wall_ext_t, is_horizontal=True)
     for wy, ww in ext_openings['left']:
-        draw_window(msp, x0, wy, ww, wall_ext_t, is_horizontal=False)
+        draw_window(msp, x0 + half_ext, wy, ww, wall_ext_t, is_horizontal=False)
     for wy, ww in ext_openings['right']:
-        draw_window(msp, x1, wy, ww, wall_ext_t, is_horizontal=False)
+        draw_window(msp, x1 - half_ext, wy, ww, wall_ext_t, is_horizontal=False)
 
-        # Interior walls — collect door gaps first
-    door_gaps_per_seg = []
+            # Interior walls — collect door gaps first
     DOOR_W = 900
-    placed_doors = []  # list of (x0, y0, x1, y1) bounding boxes for collision checks
+    placed_doors = []
 
     def _door_bbox(cx, cy, w, wt, horiz, flip):
-        """Bounding box of a door assembly (frame + swing arc)."""
         hw = w / 2
         ht = wt / 2
         if horiz:
@@ -854,25 +853,36 @@ def build_complete_project(params):
         return not (a[2] + margin < b[0] or b[2] + margin < a[0]
                     or a[3] + margin < b[1] or b[3] + margin < a[1])
 
-    for room, (rx0, ry0, rx1, ry1) in placements:
-        segs = []
-        if rx0 > x0 + wall_ext_t:
-            segs.append(((rx0, ry0), (rx0, ry1), 'V'))
-        if rx1 < x1 - wall_ext_t:
-            segs.append(((rx1, ry0), (rx1, ry1), 'V'))
-        if ry0 > y0 + wall_ext_t:
-            segs.append(((rx0, ry0), (rx1, ry0), 'H'))
-        if ry1 < y1 - wall_ext_t:
-            segs.append(((rx0, ry1), (rx1, ry1), 'H'))
-
-        # Door on the wall facing corridor
-        room_cy = (ry0 + ry1) / 2
-        if room_cy < mid_y:
-            wall_p1, wall_p2 = (rx0, ry1), (rx1, ry1)
-            door_flip = False
+    def _draw_sliding_door(msp, cx, cy, width, wall_thickness, is_horizontal=True):
+        if is_horizontal:
+            msp.add_line((cx - width/2, cy - wall_thickness/4),
+                         (cx + width/2, cy - wall_thickness/4),
+                         dxfattribs={'layer': 'A-DOOR', 'color': 3})
+            msp.add_line((cx - width/2, cy + wall_thickness/4),
+                         (cx + width/2, cy + wall_thickness/4),
+                         dxfattribs={'layer': 'A-DOOR', 'color': 3})
         else:
-            wall_p1, wall_p2 = (rx0, ry0), (rx1, ry0)
+            msp.add_line((cx - wall_thickness/4, cy - width/2),
+                         (cx - wall_thickness/4, cy + width/2),
+                         dxfattribs={'layer': 'A-DOOR', 'color': 3})
+            msp.add_line((cx + wall_thickness/4, cy - width/2),
+                         (cx + wall_thickness/4, cy + width/2),
+                         dxfattribs={'layer': 'A-DOOR', 'color': 3})
+
+    for room, (rx0, ry0, rx1, ry1) in placements:
+        room_cy = (ry0 + ry1) / 2
+        room_depth = ry1 - ry0  # perpendicular to the horizontal door wall
+
+        if room_cy < mid_y:
+            # Public room below corridor → door on TOP wall.
+            # Should swing DOWN into the room (flip=True).
+            wall_p1, wall_p2 = (rx0, ry1), (rx1, ry1)
             door_flip = True
+        else:
+            # Private room above corridor → door on BOTTOM wall.
+            # Should swing UP into the room (flip=False).
+            wall_p1, wall_p2 = (rx0, ry0), (rx1, ry0)
+            door_flip = False
 
         t_best = best_opening_position(wall_p1, wall_p2, cols, DOOR_W, col_size)
         if t_best is None:
@@ -885,8 +895,6 @@ def build_complete_project(params):
         ux = (wall_p2[0] - wall_p1[0]) / wall_L
         uy = (wall_p2[1] - wall_p1[1]) / wall_L
 
-        # Try the desired position first, then shift along the wall
-        # by whole door widths until we find a non-colliding spot.
         half = DOOR_W / 2 + 50
         shifts = (0,
                   DOOR_W + 150, -(DOOR_W + 150),
@@ -911,37 +919,78 @@ def build_complete_project(params):
                 break
 
         if chosen is None:
-            # Could not place this door without overlapping an existing
-            # one — skip it rather than draw a broken swing.
             continue
 
         door_cx, door_cy, bbox = chosen
         placed_doors.append(bbox)
-        draw_door(msp, door_cx, door_cy, DOOR_W, int_t,
-                  is_horizontal=True, flip=door_flip)
+
+        # Swing needs ~door_width + 200 mm clearance in the swing direction.
+        if room_depth >= DOOR_W + 200:
+            draw_door(msp, door_cx, door_cy, DOOR_W, int_t,
+                      is_horizontal=True, flip=door_flip)
+            door_type = "Single Leaf"
+        else:
+            _draw_sliding_door(msp, door_cx, door_cy, DOOR_W, int_t,
+                               is_horizontal=True)
+            door_type = "Sliding"
+
         d_idx += 1
         mark = f"D{d_idx}"
-        door_marks.append((mark, "Single Leaf", DOOR_W, 2100, 1, room['name']))
+        door_marks.append((mark, door_type, DOOR_W, 2100, 1, room['name']))
 
-    wall_segments = []
+       # ---- Interior walls: collinear merge, draw each shared segment once ----
+    horiz_by_y = {}   # y -> list of (x_start, x_end)
+    vert_by_x  = {}   # x -> list of (y_start, y_end)
+
+    def _add_h(y, xa, xb):
+        if xb < xa:
+            xa, xb = xb, xa
+        horiz_by_y.setdefault(round(y), []).append((xa, xb))
+
+    def _add_v(x, ya, yb):
+        if yb < ya:
+            ya, yb = yb, ya
+        vert_by_x.setdefault(round(x), []).append((ya, yb))
+
     for room, (rx0, ry0, rx1, ry1) in placements:
         if rx0 > x0 + wall_ext_t:
-            wall_segments.append(((rx0, ry0), (rx0, ry1)))
+            _add_v(rx0, ry0, ry1)
         if rx1 < x1 - wall_ext_t:
-            wall_segments.append(((rx1, ry0), (rx1, ry1)))
+            _add_v(rx1, ry0, ry1)
         if ry0 > y0 + wall_ext_t:
-            wall_segments.append(((rx0, ry0), (rx1, ry0)))
+            _add_h(ry0, rx0, rx1)
         if ry1 < y1 - wall_ext_t:
-            wall_segments.append(((rx0, ry1), (rx1, ry1)))
-    seen = set()
-    for p1, p2 in wall_segments:
-        key = tuple(sorted([(round(p1[0]), round(p1[1])), (round(p2[0]), round(p2[1]))]))
-        if key in seen:
-            continue
-        seen.add(key)
-        r = _wall_rect(p1, p2, int_t)
-        if r:
-            msp.add_lwpolyline(r, dxfattribs={'layer': 'A-WALL-INT', 'color': 8})
+            _add_h(ry1, rx0, rx1)
+
+    def _merge_ranges(ranges, tol=60):
+        if not ranges:
+            return []
+        ranges = sorted(ranges)
+        merged = [list(ranges[0])]
+        for a, b in ranges[1:]:
+            if a <= merged[-1][1] + tol:
+                merged[-1][1] = max(merged[-1][1], b)
+            else:
+                merged.append([a, b])
+        return [(a, b) for a, b in merged]
+
+    # Horizontal interior walls — one merged rectangle per collinear run
+    for y, ranges in horiz_by_y.items():
+        for xa, xb in _merge_ranges(ranges):
+            if xb - xa < 60:
+                continue
+            r = _wall_rect((xa, y), (xb, y), int_t)
+            if r:
+                msp.add_lwpolyline(r, dxfattribs={'layer': 'A-WALL-INT', 'color': 8})
+
+    # Vertical interior walls — one merged rectangle per collinear run
+    for x, ranges in vert_by_x.items():
+        for ya, yb in _merge_ranges(ranges):
+            if yb - ya < 60:
+                continue
+            r = _wall_rect((x, ya), (x, yb), int_t)
+            if r:
+                msp.add_lwpolyline(r, dxfattribs={'layer': 'A-WALL-INT', 'color': 8})
 
     room_schedule = []
     for i, (room, (rx0, ry0, rx1, ry1)) in enumerate(placements):
