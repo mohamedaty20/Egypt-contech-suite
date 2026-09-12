@@ -20,6 +20,7 @@ Key functions:
 """
 
 import math
+print("[BOQ] geometry.py VERSION 4")
 print("[BOQ] geometry.py VERSION 3 — tol=0.5, shorter-line rule")
 
 
