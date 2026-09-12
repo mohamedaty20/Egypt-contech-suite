@@ -19,6 +19,7 @@ Rule (hardcoded, cannot be skipped):
 """
 
 import math
+print("[BOQ] wall_processor.py VERSION 4")
 
 from .geometry import (
     bbox, line_angle_deg, line_midpoint, line_length,
