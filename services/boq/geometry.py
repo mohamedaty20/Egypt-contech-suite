@@ -20,6 +20,7 @@ Key functions:
 """
 
 import math
+print("[BOQ] geometry.py VERSION 3 — tol=0.5, shorter-line rule")
 
 
 # =====================================================================
@@ -152,6 +153,7 @@ def parallel_lines(line_a, line_b,
                    min_offset=80.0,
                    max_offset=500.0,
                    length_tol_ratio=0.5):
+         
     """
     Decide whether two segments form a *wall pair*.
 
