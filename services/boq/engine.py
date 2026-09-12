@@ -118,7 +118,8 @@ def compute_boq(walls_result, rooms_result, records, params=None):
     ext_len_m = sum(w["geometry"]["length_mm"] for w in walls
                     if w["subtype"] == "external") / 1000.0
     int_len_m = sum(w["geometry"]["length_mm"] for w in walls
-                    if w["subtype"] == "internal") / 1000.0
+                    if w["subtype"] == "internal"
+                    and (w.get("meta") or {}).get("method") != "polyline_outline") / 1000.0
 
     env = walls_result.get("envelope", {})
     env_area_m2 = (env.get("area_mm2") or 0.0) / 1e6
