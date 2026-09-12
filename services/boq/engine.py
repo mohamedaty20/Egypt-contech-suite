@@ -124,9 +124,24 @@ def compute_boq(walls_result, rooms_result, records, params=None):
     # The envelope outline has length ≈ 2×(env_w + env_h) — it's the
     # building boundary itself, not a partition, so it doesn't
     # deduct from the area it encloses.
-    env_w_m_dbg = (env.get("w") or 0) / 1000.0
-    env_h_m_dbg = (env.get("h") or 0) / 1000.0
+    _env_dbg = walls_result.get("envelope", {}) or {}
+    env_w_m_dbg = (_env_dbg.get("w") or 0) / 1000.0
+    env_h_m_dbg = (_env_dbg.get("h") or 0) / 1000.0
     env_perimeter_m = 2.0 * (env_w_m_dbg + env_h_m_dbg)
+
+    int_len_inside_m = 0.0
+    for w in walls:
+        if w["subtype"] != "internal":
+            continue
+        L_m = w["geometry"]["length_mm"] / 1000.0
+        method = (w.get("meta") or {}).get("method")
+        if (method == "polyline_outline"
+                and env_perimeter_m > 0
+                and L_m >= env_perimeter_m * 0.85):
+            print(f"[engine] excluding envelope outline {w['id']} "
+                  f"(L={L_m:.3f} m, env_perim={env_perimeter_m:.3f} m)")
+            continue
+        int_len_inside_m += L_m
 
     int_len_inside_m = 0.0
     for w in walls:
