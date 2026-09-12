@@ -19,7 +19,7 @@ Rule (hardcoded, cannot be skipped):
 """
 
 import math
-print("[BOQ] wall_processor.py VERSION 4")
+print("[BOQ] wall_processor.py VERSION 5")
 
 from .geometry import (
     bbox, line_angle_deg, line_midpoint, line_length,
@@ -159,7 +159,7 @@ def _walls_from_open_polyline(rec, thickness_mm):
     out = []
     for p1, p2 in _polyline_segments(pts, closed=False):
         L = line_length(p1, p2)
-        if L < 50:   # ignore degenerate sub-mm edges
+        if L < 50:
             continue
         out.append({
             "length_mm":   L,
@@ -203,7 +203,7 @@ def _wall_from_arc(rec):
     r = float(meta.get("radius_mm") or (g.get("width_mm") or 0) / 2.0 or 0)
     return {
         "length_mm":   L,
-        "thickness_mm": max(2.0 * r * 0.1, 120.0),  # heuristic
+        "thickness_mm": max(2.0 * r * 0.1, 120.0),
         "centerline":  (center, center),
         "kind":        "arc",
         "source_rec":  rec,
@@ -253,11 +253,6 @@ def _merge_line_pairs(line_candidates):
             if best_j is not None:
                 c_i = line_candidates[i]
                 c_j = line_candidates[best_j]
-                # Use the SHORTER of the two parallel lines as the wall
-                # reference face. For concentric building outlines this
-                # is the void-facing (inner) line, which is what the
-                # user wants measured. For ordinary double-line walls
-                # the two lines are near-equal so either works.
                 if c_i["length_mm"] <= c_j["length_mm"]:
                     ref_line = c_i["centerline"]
                     ref_len = c_i["length_mm"]
@@ -287,10 +282,8 @@ def _bbox_nested(inner_bbox, outer_bbox, max_offset=600.0):
     """
     ix0, iy0, ix1, iy1 = inner_bbox
     ox0, oy0, ox1, oy1 = outer_bbox
-    # inner must be strictly inside outer
     if not (ix0 >= ox0 and iy0 >= oy0 and ix1 <= ox1 and iy1 <= oy1):
         return False
-    # must be a tight nesting — small gap
     gap = min(abs(ix0 - ox0), abs(iy0 - oy0), abs(ix1 - ox1), abs(iy1 - oy1))
     return gap <= max_offset
 
@@ -298,8 +291,7 @@ def _bbox_nested(inner_bbox, outer_bbox, max_offset=600.0):
 def _dedup_nested_polylines(polyline_walls, max_offset=600.0):
     """
     For concentric building outlines (outer + inner face of the same wall),
-    drop the OUTER and keep the INNER (void-facing). This matches the
-    rule: wall length is measured on the face nearest the void.
+    drop the OUTER and keep the INNER (void-facing).
 
     For non-nested polylines, both are kept.
     """
@@ -320,15 +312,14 @@ def _dedup_nested_polylines(polyline_walls, max_offset=600.0):
             if b_bbox is None:
                 continue
             if _bbox_nested(a_bbox, b_bbox, max_offset=max_offset):
-                # a is inside b → drop b (outer), keep a (inner)
                 dropped.add(j)
             elif _bbox_nested(b_bbox, a_bbox, max_offset=max_offset):
-                # b is inside a → drop a (outer), keep b (inner)
                 dropped.add(i)
                 break
         if i not in dropped:
             kept.append(polyline_walls[i])
     return kept
+
 
 # =====================================================================
 # ENVELOPE
@@ -404,8 +395,6 @@ def process_walls(records, ext_thick=250.0, int_thick=120.0):
                       "external_len_m": 0.0, "internal_len_m": 0.0},
         }
 
-    env = _envelope_from_points(all_points)
-
     # --- Merge LINE pairs ---
     merged_from_lines, leftover_lines = _merge_line_pairs(line_candidates)
 
@@ -422,6 +411,19 @@ def process_walls(records, ext_thick=250.0, int_thick=120.0):
             print(f"[wall] dropped {dropped} nested outline(s) — "
                   f"kept innermost (void-facing)")
     other_candidates = non_outlines + outlines
+
+    # --- Envelope ---
+    # If nested outlines exist, use the bbox of the INNERMOST (void-facing)
+    # outline. Otherwise fall back to bbox of all wall geometry.
+    if outlines:
+        env_pts = []
+        for c in outlines:
+            src = c.get("source_rec") or {}
+            env_pts.extend((src.get("geometry") or {}).get("points") or [])
+        env = (_envelope_from_points(env_pts) if env_pts
+               else _envelope_from_points(all_points))
+    else:
+        env = _envelope_from_points(all_points)
 
     # --- Leftover single lines: wall with user-supplied ext thickness ---
     singles = []
@@ -446,7 +448,6 @@ def process_walls(records, ext_thick=250.0, int_thick=120.0):
     for idx, w in enumerate(all_walls):
         p1, p2 = w["centerline"]
         if p1 == p2:
-            # circle / arc — center only; treat as internal for classification
             d = prox_threshold + 1.0
         else:
             mid = line_midpoint(p1, p2)
