@@ -57,17 +57,17 @@ def _is_arc(rec):
 def _closed(rec):
     g = rec.get("geometry") or {}
     m = rec.get("meta") or {}
+    pts = g.get("points") or []
+    rid = rec.get("id", "?")
 
-    # 1. Explicit closed flag from the extractor or from dxf entity
     if g.get("closed") or m.get("closed"):
+        print(f"[closed] {rid} -> True (flag)")
         return True
 
-    pts = g.get("points") or []
     if len(pts) < 3:
+        print(f"[closed] {rid} -> False (only {len(pts)} pts)")
         return False
 
-    # 2. Four points that form a rectangle: opposite sides ~equal.
-    #    AutoCAD OFFSET often produces this WITHOUT setting the closed flag.
     if len(pts) == 4:
         p0, p1, p2, p3 = pts
         d01 = math.hypot(p1[0] - p0[0], p1[1] - p0[1])
@@ -77,15 +77,23 @@ def _closed(rec):
         if d01 > 100 and d12 > 100:
             if (abs(d01 - d23) < d01 * 0.05
                     and abs(d12 - d30) < d12 * 0.05):
+                print(f"[closed] {rid} -> True (4pt rect "
+                      f"{d01:.0f}/{d12:.0f}/{d23:.0f}/{d30:.0f})")
                 return True
+        print(f"[closed] {rid} -> False (4pt not rect "
+              f"{d01:.0f}/{d12:.0f}/{d23:.0f}/{d30:.0f})")
+        return False
 
-    # 3. First ≈ last within 50 mm — catches near-closed OFFSET polylines
     p0, pn = pts[0], pts[-1]
-    if abs(p0[0] - pn[0]) < 50 and abs(p0[1] - pn[1]) < 50:
+    gap = math.hypot(p0[0] - pn[0], p0[1] - pn[1])
+    if gap < 100:
+        print(f"[closed] {rid} -> True (near-closed, {len(pts)} pts, "
+              f"gap={gap:.0f}mm)")
         return True
 
+    print(f"[closed] {rid} -> False (open, {len(pts)} pts, "
+          f"first={p0}, last={pn}, gap={gap:.0f}mm)")
     return False
-
 # =====================================================================
 # AREA / LENGTH HELPERS
 # =====================================================================
