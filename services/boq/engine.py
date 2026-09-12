@@ -118,14 +118,21 @@ def compute_boq(walls_result, rooms_result, records, params=None):
     ext_len_m = sum(w["geometry"]["length_mm"] for w in walls
                     if w["subtype"] == "external") / 1000.0
     int_len_m = sum(w["geometry"]["length_mm"] for w in walls
-                    if w["subtype"] == "internal"
-                    and (w.get("meta") or {}).get("method") != "polyline_outline") / 1000.0
+                    if w["subtype"] == "internal") / 1000.0
+
+    # Internal wall length EXCLUDING the envelope boundary outline.
+    # Used only for the net-floor subtraction (the envelope outline
+    # is not a partition — it's the building boundary itself).
+    int_len_inside_m = sum(w["geometry"]["length_mm"] for w in walls
+                           if w["subtype"] == "internal"
+                           and (w.get("meta") or {}).get("method")
+                               != "polyline_outline") / 1000.0
 
     env = walls_result.get("envelope", {})
     env_area_m2 = (env.get("area_mm2") or 0.0) / 1e6
 
     ext_footprint_m2 = ext_len_m * ext_t_m
-    int_footprint_m2 = int_len_m * int_t_m
+    int_footprint_m2 = int_len_inside_m * int_t_m
 
     void_area_m2 = 0.0
     stair_area_m2 = 0.0
