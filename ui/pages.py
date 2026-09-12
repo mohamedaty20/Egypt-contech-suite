@@ -1968,8 +1968,9 @@ Provide defect type, root cause analysis, repair protocol, product table (Egypt 
                             for label, val, unit in [
                                 ('Envelope', summary['envelope_area_m2'], 'm²'),
                                 ('Net floor', summary['net_floor_area_m2'], 'm²'),
-                                ('Ext walls', summary['ext_wall_len_m'], 'm'),
-                                ('Int walls', summary['int_wall_len_m'], 'm'),
+                                ('Total walls', summary.get('total_wall_len_m',
+                                                             summary['ext_wall_len_m']
+                                                             + summary['int_wall_len_m']), 'm'),
                                 ('Wet area', summary['wet_area_m2'], 'm²'),
                                 ('Dry area', summary['dry_area_m2'], 'm²'),
                                 ('Doors', summary['door_count'], ''),
