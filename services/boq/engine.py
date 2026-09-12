@@ -177,8 +177,9 @@ def compute_boq(walls_result, rooms_result, records, params=None):
 
     summary = {
         "envelope_area_m2":         round(env_area_m2, 3),
-        "ext_wall_len_m":           round(ext_len_m, 3),
-        "int_wall_len_m":           round(int_len_m, 3),
+        "total_wall_len_m":         round(ext_len_m + int_len_m, 3),
+        "ext_wall_len_m":           round(ext_len_m, 3),   # internal use only
+        "int_wall_len_m":           round(int_len_m, 3),   # internal use only
         "ext_wall_footprint_m2":    round(ext_footprint_m2, 3),
         "int_wall_footprint_m2":    round(int_footprint_m2, 3),
         "stair_area_m2":            round(stair_area_m2, 3),
