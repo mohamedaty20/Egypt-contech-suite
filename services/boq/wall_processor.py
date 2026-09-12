@@ -57,8 +57,34 @@ def _is_arc(rec):
 def _closed(rec):
     g = rec.get("geometry") or {}
     m = rec.get("meta") or {}
-    return bool(g.get("closed") or m.get("closed"))
 
+    # 1. Explicit closed flag from the extractor or from dxf entity
+    if g.get("closed") or m.get("closed"):
+        return True
+
+    pts = g.get("points") or []
+    if len(pts) < 3:
+        return False
+
+    # 2. Four points that form a rectangle: opposite sides ~equal.
+    #    AutoCAD OFFSET often produces this WITHOUT setting the closed flag.
+    if len(pts) == 4:
+        p0, p1, p2, p3 = pts
+        d01 = math.hypot(p1[0] - p0[0], p1[1] - p0[1])
+        d12 = math.hypot(p2[0] - p1[0], p2[1] - p1[1])
+        d23 = math.hypot(p3[0] - p2[0], p3[1] - p2[1])
+        d30 = math.hypot(p0[0] - p3[0], p0[1] - p3[1])
+        if d01 > 100 and d12 > 100:
+            if (abs(d01 - d23) < d01 * 0.05
+                    and abs(d12 - d30) < d12 * 0.05):
+                return True
+
+    # 3. First ≈ last within 50 mm — catches near-closed OFFSET polylines
+    p0, pn = pts[0], pts[-1]
+    if abs(p0[0] - pn[0]) < 50 and abs(p0[1] - pn[1]) < 50:
+        return True
+
+    return False
 
 # =====================================================================
 # AREA / LENGTH HELPERS
