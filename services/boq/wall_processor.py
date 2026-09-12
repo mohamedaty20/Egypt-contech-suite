@@ -5,22 +5,20 @@ Takes raw element records (from extractor_dxf) and produces the FINAL
 wall list, with parallel-line pairs merged, thickness measured, and
 each wall classified as external or internal.
 
+Handles EVERY geometry type on a wall layer:
+  - LINE               (paired or single)
+  - LWPOLYLINE closed  (long thin = wall segment; perimeter = building run)
+  - LWPOLYLINE open    (each segment = one wall run)
+  - POLYLINE           (same as LWPOLYLINE)
+  - CIRCLE             (circumference = wall run, diameter = thickness)
+  - ARC                (arc length = wall run)
+
 Rule (hardcoded, cannot be skipped):
   Every wall drawn as TWO parallel lines must be merged into ONE wall.
   Never count the two sides as two separate walls.
-
-Input:
-  records     — list of dicts from extractor_dxf.extract_elements()
-  ext_thick   — external wall thickness in mm (user input, default 250)
-  int_thick   — internal wall thickness in mm (user input, default 120)
-
-Output:
-  {
-    "walls": [ {wall record}, ... ],
-    "envelope": { "min_x", "min_y", "max_x", "max_y", "w", "h", "area_mm2" },
-    "stats": { "pairs_merged", "singles", "polylines", "skipped", "external_len_m", "internal_len_m" }
-  }
 """
+
+import math
 
 from .geometry import (
     bbox, line_angle_deg, line_midpoint, line_length,
@@ -29,32 +27,85 @@ from .geometry import (
 
 
 # =====================================================================
-# UTILITIES
+# CLASSIFICATION HELPERS
 # =====================================================================
-def _is_wall_line(rec):
-    return (rec["category"] == "wall"
-            and rec["geometry"]["type"] == "line"
-            and len(rec["geometry"]["points"]) == 2)
+def _cat(rec):
+    return (rec.get("category") or "").lower()
 
 
-def _is_wall_polyline(rec):
-    return (rec["category"] == "wall"
-            and rec["geometry"]["type"] == "polyline"
-            and len(rec["geometry"]["points"]) >= 3
-            and rec["geometry"].get("closed"))
+def _is_wall_rec(rec):
+    return _cat(rec) == "wall"
 
 
-def _wall_polyline_as_wall(rec, ext_thick, int_thick):
+def _is_line(rec):
+    return (rec.get("geometry") or {}).get("type") == "line"
+
+
+def _is_polyline(rec):
+    return (rec.get("geometry") or {}).get("type") == "polyline"
+
+
+def _is_circle(rec):
+    return (rec.get("geometry") or {}).get("type") == "circle"
+
+
+def _is_arc(rec):
+    return (rec.get("geometry") or {}).get("type") == "arc"
+
+
+def _closed(rec):
+    return bool((rec.get("geometry") or {}).get("closed"))
+
+
+# =====================================================================
+# AREA / LENGTH HELPERS
+# =====================================================================
+def _polyline_segments(pts, closed=False):
+    """Yield (p1, p2) for each segment of a polyline."""
+    n = len(pts)
+    if n < 2:
+        return
+    for i in range(n - 1):
+        yield pts[i], pts[i + 1]
+    if closed and n >= 3:
+        yield pts[-1], pts[0]
+
+
+def _polyline_sum_length(pts, closed=False):
+    total = 0.0
+    for p1, p2 in _polyline_segments(pts, closed=closed):
+        total += line_length(p1, p2)
+    return total
+
+
+# =====================================================================
+# WALL EXTRACTION FROM ANY ENTITY TYPE
+# =====================================================================
+def _wall_from_line(rec):
+    """LINE on wall layer → single wall candidate."""
+    pts = rec["geometry"].get("points") or []
+    if len(pts) != 2:
+        return None
+    p1, p2 = pts
+    length = rec["geometry"].get("length_mm") or line_length(p1, p2)
+    return {
+        "length_mm":   length,
+        "centerline":  (p1, p2),
+        "kind":        "line",
+        "source_rec":  rec,
+    }
+
+
+def _wall_from_closed_polyline(rec, ext_thick, int_thick):
     """
-    A closed wall polyline is either:
-      (a) a wall drawn as a long thin rectangle — length = max(bbox), width = min(bbox)
-      (b) an entire building outline polyline — treat as ONE wall run with
-          thickness = user input (ext or int) and length = total perimeter.
-
-    Rule: aspect ratio (long/short) >= 3  → case (a)
-          otherwise                       → case (b)
+    Closed polyline on a wall layer:
+      - aspect >= 3 → long thin rectangle = wall segment (thickness = short side)
+      - otherwise   → building / room outline. Perimeter becomes one long
+                      wall run with user-supplied thickness.
     """
-    pts = rec["geometry"]["points"]
+    pts = rec["geometry"].get("points") or []
+    if len(pts) < 3:
+        return None
     minx, miny, maxx, maxy = _bbox(pts)
     bw = maxx - minx
     bh = maxy - miny
@@ -73,67 +124,107 @@ def _wall_polyline_as_wall(rec, ext_thick, int_thick):
         else:
             p1 = (cx, miny); p2 = (cx, maxy)
         return {
-            "length_mm": length,
+            "length_mm":   length,
             "thickness_mm": thickness,
-            "centerline": (p1, p2),
-            "method": "polyline_rect",
-        }
-    else:
-        # Building outline / room outline. Perimeter-based.
-        # We treat it as ONE long run with user-supplied ext thickness.
-        perim = rec["geometry"]["length_mm"] or 0.0
-        return {
-            "length_mm": perim,
-            "thickness_mm": ext_thick,
-            "centerline": (pts[0], pts[-1]) if pts else ((0, 0), (0, 0)),
-            "method": "polyline_outline",
+            "centerline":  (p1, p2),
+            "kind":        "polyline_rect",
+            "source_rec":  rec,
         }
 
-
-def _envelope_from_points(points):
-    minx, miny, maxx, maxy = _bbox(points)
+    # Building outline → total perimeter as one long wall
+    perim = _polyline_sum_length(pts, closed=True)
+    if perim < 100:
+        return None
     return {
-        "min_x": minx, "min_y": miny,
-        "max_x": maxx, "max_y": maxy,
-        "w": maxx - minx, "h": maxy - miny,
-        "area_mm2": (maxx - minx) * (maxy - miny),
+        "length_mm":   perim,
+        "thickness_mm": ext_thick,
+        "centerline":  (pts[0], pts[-1]),
+        "kind":        "polyline_outline",
+        "source_rec":  rec,
     }
 
 
-def _distance_to_envelope_edge(midpoint, env):
-    """Min distance from a point to any of the 4 envelope edges."""
-    x, y = midpoint
-    d_left   = abs(x - env["min_x"])
-    d_right  = abs(x - env["max_x"])
-    d_bottom = abs(y - env["min_y"])
-    d_top    = abs(y - env["max_y"])
-    return min(d_left, d_right, d_bottom, d_top)
-
-
-# =====================================================================
-# PAIR MERGING (the core algorithm)
-# =====================================================================
-def _merge_pairs(wall_lines, ext_thick):
+def _walls_from_open_polyline(rec, thickness_mm):
     """
-    Given wall LINE records, find parallel pairs.
+    Open polyline on a wall layer → each segment is one wall run.
+    Thickness = user-supplied.
+    """
+    pts = rec["geometry"].get("points") or []
+    if len(pts) < 2:
+        return []
+    out = []
+    for p1, p2 in _polyline_segments(pts, closed=False):
+        L = line_length(p1, p2)
+        if L < 50:   # ignore degenerate sub-mm edges
+            continue
+        out.append({
+            "length_mm":   L,
+            "thickness_mm": thickness_mm,
+            "centerline":  (p1, p2),
+            "kind":        "polyline_segment",
+            "source_rec":  rec,
+        })
+    return out
 
-    Returns:
-      merged_walls: list of { length_mm, thickness_mm, centerline, method }
-      leftover_lines: list of wall LINE records that had no pair
+
+def _wall_from_circle(rec):
+    """CIRCLE on wall layer → circumference = wall length, 2r = thickness."""
+    g = rec["geometry"] or {}
+    r = (g.get("width_mm") or 0) / 2.0
+    if r <= 0:
+        meta_r = (rec.get("meta") or {}).get("radius_mm")
+        if meta_r:
+            r = float(meta_r)
+    if r <= 0:
+        return None
+    circumference = 2.0 * math.pi * r
+    center = (g.get("points") or [(0, 0)])[0]
+    return {
+        "length_mm":   circumference,
+        "thickness_mm": 2.0 * r,
+        "centerline":  (center, center),
+        "kind":        "circle",
+        "source_rec":  rec,
+    }
+
+
+def _wall_from_arc(rec):
+    """ARC on wall layer → arc length = wall run."""
+    g = rec["geometry"] or {}
+    L = g.get("length_mm")
+    if not L:
+        return None
+    center = (g.get("points") or [(0, 0)])[0]
+    meta = rec.get("meta") or {}
+    r = float(meta.get("radius_mm") or (g.get("width_mm") or 0) / 2.0 or 0)
+    return {
+        "length_mm":   L,
+        "thickness_mm": max(2.0 * r * 0.1, 120.0),  # heuristic
+        "centerline":  (center, center),
+        "kind":        "arc",
+        "source_rec":  rec,
+    }
+
+
+# =====================================================================
+# PAIR MERGING (works only on LINE candidates)
+# =====================================================================
+def _merge_line_pairs(line_candidates):
+    """
+    Given a list of {'length_mm', 'centerline', ...} from LINE entities,
+    find parallel pairs. Returns (merged, leftover).
     """
     merged = []
     used = set()
 
-    # Bucket by angle
     buckets = {}
-    for i, rec in enumerate(wall_lines):
-        p1, p2 = rec["geometry"]["points"]
+    for i, c in enumerate(line_candidates):
+        p1, p2 = c["centerline"]
         a = line_angle_deg(p1, p2)
         b = angle_bucket(a, bucket_size=5.0)
         buckets.setdefault(b, []).append(i)
 
-    # For each bucket, do O(n^2) pair search
-    for bucket, idxs in buckets.items():
+    for _, idxs in buckets.items():
         n = len(idxs)
         for a_pos in range(n):
             i = idxs[a_pos]
@@ -146,41 +237,60 @@ def _merge_pairs(wall_lines, ext_thick):
                 j = idxs[b_pos]
                 if j in used:
                     continue
-                la = tuple(wall_lines[i]["geometry"]["points"])
-                lb = tuple(wall_lines[j]["geometry"]["points"])
+                la = tuple(line_candidates[i]["centerline"])
+                lb = tuple(line_candidates[j]["centerline"])
                 r = parallel_lines(la, lb)
                 if not r["is_pair"]:
                     continue
-                # Prefer the closest pair (smallest offset within range)
                 if best_offset is None or r["offset"] < best_offset:
                     best_offset = r["offset"]
                     best_j = j
                     best_pair = r
             if best_j is not None:
-                la = tuple(wall_lines[i]["geometry"]["points"])
-                lb = tuple(wall_lines[best_j]["geometry"]["points"])
+                la = tuple(line_candidates[i]["centerline"])
+                lb = tuple(line_candidates[best_j]["centerline"])
                 mid_a = line_midpoint(*la)
                 mid_b = line_midpoint(*lb)
                 center_mid = ((mid_a[0] + mid_b[0]) / 2.0,
                               (mid_a[1] + mid_b[1]) / 2.0)
-                # centerline = midpoint between the two lines, same direction as la
-                ux = (la[1][0] - la[0][0])
-                uy = (la[1][1] - la[0][1])
+                ux = la[1][0] - la[0][0]
+                uy = la[1][1] - la[0][1]
                 L = (ux * ux + uy * uy) ** 0.5 or 1.0
                 ux /= L; uy /= L
                 half = best_pair["length"] / 2.0
                 p1 = (center_mid[0] - ux * half, center_mid[1] - uy * half)
                 p2 = (center_mid[0] + ux * half, center_mid[1] + uy * half)
                 merged.append({
-                    "length_mm": best_pair["length"],
+                    "length_mm":   best_pair["length"],
                     "thickness_mm": best_pair["offset"],
-                    "centerline": (p1, p2),
-                    "method": "pair",
+                    "centerline":  (p1, p2),
+                    "kind":        "pair",
+                    "source_rec":  line_candidates[i]["source_rec"],
                 })
                 used.add(i); used.add(best_j)
 
-    leftover = [wall_lines[i] for i in range(len(wall_lines)) if i not in used]
+    leftover = [line_candidates[i] for i in range(len(line_candidates))
+                if i not in used]
     return merged, leftover
+
+
+# =====================================================================
+# ENVELOPE
+# =====================================================================
+def _envelope_from_points(points):
+    minx, miny, maxx, maxy = _bbox(points)
+    return {
+        "min_x": minx, "min_y": miny,
+        "max_x": maxx, "max_y": maxy,
+        "w": maxx - minx, "h": maxy - miny,
+        "area_mm2": (maxx - minx) * (maxy - miny),
+    }
+
+
+def _distance_to_envelope_edge(midpoint, env):
+    x, y = midpoint
+    return min(abs(x - env["min_x"]), abs(x - env["max_x"]),
+               abs(y - env["min_y"]), abs(y - env["max_y"]))
 
 
 # =====================================================================
@@ -188,20 +298,44 @@ def _merge_pairs(wall_lines, ext_thick):
 # =====================================================================
 def process_walls(records, ext_thick=250.0, int_thick=120.0):
     """
-    Produce the final wall list.
+    Produce the final wall list from ANY combination of entity types.
     """
     ext_thick = float(ext_thick or 250.0)
     int_thick = float(int_thick or 120.0)
 
-    wall_lines = [r for r in records if _is_wall_line(r)]
-    wall_polys = [r for r in records if _is_wall_polyline(r)]
+    wall_recs = [r for r in records if _is_wall_rec(r)]
 
-    # Compute envelope from ALL wall geometry (lines + polylines)
+    # --- Gather every wall candidate regardless of geometry type ---
+    line_candidates = []
+    other_candidates = []
     all_points = []
-    for r in wall_lines:
-        all_points.extend(r["geometry"]["points"])
-    for r in wall_polys:
-        all_points.extend(r["geometry"]["points"])
+
+    for rec in wall_recs:
+        if _is_line(rec):
+            c = _wall_from_line(rec)
+            if c:
+                line_candidates.append(c)
+                all_points.extend(c["centerline"])
+        elif _is_polyline(rec):
+            pts = (rec["geometry"] or {}).get("points") or []
+            all_points.extend(pts)
+            if _closed(rec):
+                c = _wall_from_closed_polyline(rec, ext_thick, int_thick)
+                if c:
+                    other_candidates.append(c)
+            else:
+                for c in _walls_from_open_polyline(rec, ext_thick):
+                    other_candidates.append(c)
+        elif _is_circle(rec):
+            c = _wall_from_circle(rec)
+            if c:
+                other_candidates.append(c)
+                all_points.extend((rec["geometry"] or {}).get("points") or [])
+        elif _is_arc(rec):
+            c = _wall_from_arc(rec)
+            if c:
+                other_candidates.append(c)
+                all_points.extend((rec["geometry"] or {}).get("points") or [])
 
     if not all_points:
         return {
@@ -209,37 +343,31 @@ def process_walls(records, ext_thick=250.0, int_thick=120.0):
             "envelope": {"min_x": 0, "min_y": 0, "max_x": 0, "max_y": 0,
                          "w": 0, "h": 0, "area_mm2": 0},
             "stats": {"pairs_merged": 0, "singles": 0, "polylines": 0,
-                      "skipped": 0, "external_len_m": 0.0, "internal_len_m": 0.0},
+                      "circles": 0, "arcs": 0, "skipped": 0,
+                      "total_wall_len_m": 0.0,
+                      "external_len_m": 0.0, "internal_len_m": 0.0},
         }
 
     env = _envelope_from_points(all_points)
 
-    # Merge pairs
-    merged_from_lines, leftover_lines = _merge_pairs(wall_lines, ext_thick)
+    # --- Merge LINE pairs ---
+    merged_from_lines, leftover_lines = _merge_line_pairs(line_candidates)
 
-    # Process polylines as walls
-    merged_from_polys = []
-    for rec in wall_polys:
-        w = _wall_polyline_as_wall(rec, ext_thick, int_thick)
-        if w:
-            merged_from_polys.append(w)
-
-    # Leftover single lines: thickness = user-supplied (ext by default)
-    merged_from_singles = []
-    for rec in leftover_lines:
-        p1, p2 = rec["geometry"]["points"]
-        length = rec["geometry"]["length_mm"] or line_length(p1, p2)
-        merged_from_singles.append({
-            "length_mm": length,
+    # --- Leftover single lines: wall with user-supplied ext thickness ---
+    singles = []
+    for c in leftover_lines:
+        singles.append({
+            "length_mm":   c["length_mm"],
             "thickness_mm": ext_thick,
-            "centerline": (p1, p2),
-            "method": "single_line",
+            "centerline":  c["centerline"],
+            "kind":        "single_line",
+            "source_rec":  c["source_rec"],
         })
 
-    all_walls = merged_from_lines + merged_from_polys + merged_from_singles
+    # --- Everything combines ---
+    all_walls = merged_from_lines + other_candidates + singles
 
-    # Classify ext vs int by proximity to envelope edge
-    # Threshold: within 1.5 × ext_thick of any envelope edge → external
+    # --- Classify ext vs int by proximity to envelope ---
     prox_threshold = ext_thick * 1.5
     wall_records = []
     ext_len = 0.0
@@ -247,8 +375,12 @@ def process_walls(records, ext_thick=250.0, int_thick=120.0):
 
     for idx, w in enumerate(all_walls):
         p1, p2 = w["centerline"]
-        mid = line_midpoint(p1, p2)
-        d = _distance_to_envelope_edge(mid, env)
+        if p1 == p2:
+            # circle / arc — center only; treat as internal for classification
+            d = prox_threshold + 1.0
+        else:
+            mid = line_midpoint(p1, p2)
+            d = _distance_to_envelope_edge(mid, env)
         subtype = "external" if d <= prox_threshold else "internal"
         if subtype == "external":
             ext_len += w["length_mm"]
@@ -259,7 +391,7 @@ def process_walls(records, ext_thick=250.0, int_thick=120.0):
             "id":        f"wall_{idx+1:04d}",
             "category":  "wall",
             "subtype":   subtype,
-            "layer":     None,           # lost in merge, can be re-attached if needed
+            "layer":     (w["source_rec"] or {}).get("layer"),
             "source":    "dxf",
             "units":     "mm",
             "geometry": {
@@ -271,28 +403,36 @@ def process_walls(records, ext_thick=250.0, int_thick=120.0):
                 "count":      1,
             },
             "text":       None,
-            "confidence": "high" if w["method"] == "pair" else "medium",
+            "confidence": "high" if w["kind"] == "pair" else "medium",
             "meta": {
-                "method":          w["method"],
+                "method":          w["kind"],
                 "distance_to_env": d,
             },
         })
 
+    n_polylines = sum(1 for w in other_candidates if w["kind"].startswith("polyline"))
+    n_circles   = sum(1 for w in other_candidates if w["kind"] == "circle")
+    n_arcs      = sum(1 for w in other_candidates if w["kind"] == "arc")
+
     stats = {
-        "pairs_merged":    len(merged_from_lines),
-        "singles":         len(merged_from_singles),
-        "polylines":       len(merged_from_polys),
-        "skipped":         0,
-        "external_len_m":  round(ext_len / 1000.0, 3),
-        "internal_len_m":  round(int_len / 1000.0, 3),
-        "total_walls":     len(wall_records),
+        "pairs_merged":       len(merged_from_lines),
+        "singles":            len(singles),
+        "polylines":          n_polylines,
+        "circles":            n_circles,
+        "arcs":               n_arcs,
+        "skipped":            0,
+        "total_wall_len_m":   round((ext_len + int_len) / 1000.0, 3),
+        "external_len_m":     round(ext_len / 1000.0, 3),
+        "internal_len_m":     round(int_len / 1000.0, 3),
+        "total_walls":        len(wall_records),
     }
 
     print(f"[wall] envelope: {env['w']:.0f} x {env['h']:.0f} mm  "
           f"area={env['area_mm2']/1e6:.2f} m2")
-    print(f"[wall] pairs merged: {stats['pairs_merged']}  "
-          f"singles: {stats['singles']}  polylines: {stats['polylines']}")
-    print(f"[wall] ext_len = {stats['external_len_m']} m   "
-          f"int_len = {stats['internal_len_m']} m")
+    print(f"[wall] pairs={stats['pairs_merged']}  singles={stats['singles']}  "
+          f"polylines={stats['polylines']}  circles={stats['circles']}  "
+          f"arcs={stats['arcs']}")
+    print(f"[wall] TOTAL wall length = {stats['total_wall_len_m']} m "
+          f"(ext={stats['external_len_m']}, int={stats['internal_len_m']})")
 
     return {"walls": wall_records, "envelope": env, "stats": stats}
