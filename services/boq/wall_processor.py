@@ -55,45 +55,34 @@ def _is_arc(rec):
 
 
 def _closed(rec):
+    """
+    Decide if a polyline should be treated as a closed shape.
+
+    A polyline on a wall layer that encloses >= 0.5 m² is treated as
+    closed. This catches every AutoCAD variant: explicit closed flag,
+    4-point rectangle without flag, near-closed with small gap,
+    duplicate closing point, rounded coordinates, etc.
+    """
     g = rec.get("geometry") or {}
     m = rec.get("meta") or {}
-    pts = g.get("points") or []
-    rid = rec.get("id", "?")
 
     if g.get("closed") or m.get("closed"):
-        print(f"[closed] {rid} -> True (flag)")
         return True
 
+    pts = g.get("points") or []
     if len(pts) < 3:
-        print(f"[closed] {rid} -> False (only {len(pts)} pts)")
         return False
 
-    if len(pts) == 4:
-        p0, p1, p2, p3 = pts
-        d01 = math.hypot(p1[0] - p0[0], p1[1] - p0[1])
-        d12 = math.hypot(p2[0] - p1[0], p2[1] - p1[1])
-        d23 = math.hypot(p3[0] - p2[0], p3[1] - p2[1])
-        d30 = math.hypot(p0[0] - p3[0], p0[1] - p3[1])
-        if d01 > 100 and d12 > 100:
-            if (abs(d01 - d23) < d01 * 0.05
-                    and abs(d12 - d30) < d12 * 0.05):
-                print(f"[closed] {rid} -> True (4pt rect "
-                      f"{d01:.0f}/{d12:.0f}/{d23:.0f}/{d30:.0f})")
-                return True
-        print(f"[closed] {rid} -> False (4pt not rect "
-              f"{d01:.0f}/{d12:.0f}/{d23:.0f}/{d30:.0f})")
-        return False
+    # Shoelace area — works on any polygon, closed or not.
+    n = len(pts)
+    area_mm2 = 0.0
+    for i in range(n):
+        x1, y1 = pts[i]
+        x2, y2 = pts[(i + 1) % n]
+        area_mm2 += x1 * y2 - x2 * y1
+    area_mm2 = abs(area_mm2) / 2.0
 
-    p0, pn = pts[0], pts[-1]
-    gap = math.hypot(p0[0] - pn[0], p0[1] - pn[1])
-    if gap < 100:
-        print(f"[closed] {rid} -> True (near-closed, {len(pts)} pts, "
-              f"gap={gap:.0f}mm)")
-        return True
-
-    print(f"[closed] {rid} -> False (open, {len(pts)} pts, "
-          f"first={p0}, last={pn}, gap={gap:.0f}mm)")
-    return False
+    return area_mm2 >= 500_000  # 0.5 m²
 # =====================================================================
 # AREA / LENGTH HELPERS
 # =====================================================================
