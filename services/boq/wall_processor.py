@@ -311,12 +311,20 @@ def _bbox_nested(inner_bbox, outer_bbox, max_offset=600.0):
     return gap <= max_offset
 
 
-def _dedup_nested_polylines(polyline_walls, max_offset=600.0):
+def _bbox_area(bb):
+    return (bb[2] - bb[0]) * (bb[3] - bb[1])
+
+
+def _dedup_nested_polylines(polyline_walls, max_offset=600.0,
+                            min_area_ratio=0.5):
     """
     For concentric building outlines (outer + inner face of the same wall),
     drop the OUTER and keep the INNER (void-facing).
 
-    For non-nested polylines, both are kept.
+    Only fires when the two polylines are nearly the same size — that is,
+    the smaller's bbox area is at least `min_area_ratio` of the larger's.
+    This prevents a small interior wall from being paired with the
+    apartment envelope.
     """
     kept = []
     dropped = set()
@@ -328,12 +336,24 @@ def _dedup_nested_polylines(polyline_walls, max_offset=600.0):
         if a_bbox is None:
             kept.append(polyline_walls[i])
             continue
+        a_area = _bbox_area(a_bbox)
         for j in range(n):
             if i == j or j in dropped:
                 continue
             b_bbox = polyline_walls[j].get("bbox")
             if b_bbox is None:
                 continue
+            b_area = _bbox_area(b_bbox)
+            if a_area <= 0 or b_area <= 0:
+                continue
+
+            # Only dedupe when they're near-equal in size (two faces
+            # of the SAME wall). A wall inside the apartment is much
+            # smaller than the envelope → skip.
+            area_ratio = min(a_area, b_area) / max(a_area, b_area)
+            if area_ratio < min_area_ratio:
+                continue
+
             if _bbox_nested(a_bbox, b_bbox, max_offset=max_offset):
                 dropped.add(j)
             elif _bbox_nested(b_bbox, a_bbox, max_offset=max_offset):
