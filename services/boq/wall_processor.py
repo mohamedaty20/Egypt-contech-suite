@@ -142,6 +142,7 @@ def _wall_from_closed_polyline(rec, ext_thick, int_thick):
         "centerline":  (pts[0], pts[-1]),
         "kind":        "polyline_outline",
         "source_rec":  rec,
+        "bbox":        (minx, miny, maxx, maxy),
     }
 
 
@@ -276,6 +277,57 @@ def _merge_line_pairs(line_candidates):
                 if i not in used]
     return merged, leftover
 
+
+def _bbox_nested(inner_bbox, outer_bbox, max_offset=600.0):
+    """
+    True if inner_bbox is nested inside outer_bbox with edge gap
+    no greater than max_offset on every side.
+    """
+    ix0, iy0, ix1, iy1 = inner_bbox
+    ox0, oy0, ox1, oy1 = outer_bbox
+    # inner must be strictly inside outer
+    if not (ix0 >= ox0 and iy0 >= oy0 and ix1 <= ox1 and iy1 <= oy1):
+        return False
+    # must be a tight nesting — small gap
+    gap = min(abs(ix0 - ox0), abs(iy0 - oy0), abs(ix1 - ox1), abs(iy1 - oy1))
+    return gap <= max_offset
+
+
+def _dedup_nested_polylines(polyline_walls, max_offset=600.0):
+    """
+    For concentric building outlines (outer + inner face of the same wall),
+    drop the OUTER and keep the INNER (void-facing). This matches the
+    rule: wall length is measured on the face nearest the void.
+
+    For non-nested polylines, both are kept.
+    """
+    kept = []
+    dropped = set()
+    n = len(polyline_walls)
+    for i in range(n):
+        if i in dropped:
+            continue
+        a_bbox = polyline_walls[i].get("bbox")
+        if a_bbox is None:
+            kept.append(polyline_walls[i])
+            continue
+        for j in range(n):
+            if i == j or j in dropped:
+                continue
+            b_bbox = polyline_walls[j].get("bbox")
+            if b_bbox is None:
+                continue
+            if _bbox_nested(a_bbox, b_bbox, max_offset=max_offset):
+                # a is inside b → drop b (outer), keep a (inner)
+                dropped.add(j)
+            elif _bbox_nested(b_bbox, a_bbox, max_offset=max_offset):
+                # b is inside a → drop a (outer), keep b (inner)
+                dropped.add(i)
+                break
+        if i not in dropped:
+            kept.append(polyline_walls[i])
+    return kept
+
 # =====================================================================
 # ENVELOPE
 # =====================================================================
@@ -354,6 +406,20 @@ def process_walls(records, ext_thick=250.0, int_thick=120.0):
 
     # --- Merge LINE pairs ---
     merged_from_lines, leftover_lines = _merge_line_pairs(line_candidates)
+
+    # --- Deduplicate nested polylines: keep the void-facing one ---
+    outlines = [c for c in other_candidates
+                if c.get("kind") == "polyline_outline"]
+    non_outlines = [c for c in other_candidates
+                    if c.get("kind") != "polyline_outline"]
+    if outlines:
+        before = len(outlines)
+        outlines = _dedup_nested_polylines(outlines, max_offset=600.0)
+        dropped = before - len(outlines)
+        if dropped:
+            print(f"[wall] dropped {dropped} nested outline(s) — "
+                  f"kept innermost (void-facing)")
+    other_candidates = non_outlines + outlines
 
     # --- Leftover single lines: wall with user-supplied ext thickness ---
     singles = []
