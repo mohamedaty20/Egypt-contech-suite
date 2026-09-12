@@ -55,7 +55,9 @@ def _is_arc(rec):
 
 
 def _closed(rec):
-    return bool((rec.get("geometry") or {}).get("closed"))
+    g = rec.get("geometry") or {}
+    m = rec.get("meta") or {}
+    return bool(g.get("closed") or m.get("closed"))
 
 
 # =====================================================================
