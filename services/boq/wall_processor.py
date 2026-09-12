@@ -247,32 +247,33 @@ def _merge_line_pairs(line_candidates):
                     best_j = j
                     best_pair = r
             if best_j is not None:
-                la = tuple(line_candidates[i]["centerline"])
-                lb = tuple(line_candidates[best_j]["centerline"])
-                mid_a = line_midpoint(*la)
-                mid_b = line_midpoint(*lb)
-                center_mid = ((mid_a[0] + mid_b[0]) / 2.0,
-                              (mid_a[1] + mid_b[1]) / 2.0)
-                ux = la[1][0] - la[0][0]
-                uy = la[1][1] - la[0][1]
-                L = (ux * ux + uy * uy) ** 0.5 or 1.0
-                ux /= L; uy /= L
-                half = best_pair["length"] / 2.0
-                p1 = (center_mid[0] - ux * half, center_mid[1] - uy * half)
-                p2 = (center_mid[0] + ux * half, center_mid[1] + uy * half)
+                c_i = line_candidates[i]
+                c_j = line_candidates[best_j]
+                # Use the SHORTER of the two parallel lines as the wall
+                # reference face. For concentric building outlines this
+                # is the void-facing (inner) line, which is what the
+                # user wants measured. For ordinary double-line walls
+                # the two lines are near-equal so either works.
+                if c_i["length_mm"] <= c_j["length_mm"]:
+                    ref_line = c_i["centerline"]
+                    ref_len = c_i["length_mm"]
+                else:
+                    ref_line = c_j["centerline"]
+                    ref_len = c_j["length_mm"]
+
                 merged.append({
-                    "length_mm":   best_pair["length"],
+                    "length_mm":    ref_len,
                     "thickness_mm": best_pair["offset"],
-                    "centerline":  (p1, p2),
-                    "kind":        "pair",
-                    "source_rec":  line_candidates[i]["source_rec"],
+                    "centerline":   ref_line,
+                    "kind":         "pair",
+                    "source_rec":   c_i["source_rec"],
                 })
-                used.add(i); used.add(best_j)
+                used.add(i)
+                used.add(best_j)
 
     leftover = [line_candidates[i] for i in range(len(line_candidates))
                 if i not in used]
     return merged, leftover
-
 
 # =====================================================================
 # ENVELOPE
